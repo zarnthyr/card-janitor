@@ -83,6 +83,18 @@ printed, regardless of this setting.
 
 Age uses elapsed 24-hour periods. `first_review` is the earliest review-log entry with a genuine answer rating. Cards without such history do not match. `card_created` uses the creation timestamp embedded in the card ID.
 
+> [!WARNING]
+> `card_created` does not mean "imported into this collection." Imported cards usually
+> retain the source author's card IDs and creation timestamps. A newly imported premade
+> deck may consequently be years old according to this condition and qualify on its
+> first evaluation. Anki does not expose a reliable per-card local-import timestamp.
+
+Use creation-age conditions only for cards whose provenance you understand. Keep the
+policy in `manual` mode and inspect its affected cards before changing it to
+`automatic`. Card Janitor does not attempt to rewrite card IDs. If you use another
+add-on to normalize creation dates, back up the collection first and verify that the
+tool safely updates all related references.
+
 ### Current interval
 
 ```json

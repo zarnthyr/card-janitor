@@ -39,6 +39,14 @@ Each policy has three parts:
 
 First-review age is derived from genuine answer entries in Anki's review log. Cards without first-review history do not qualify for that condition. Card-creation age is available separately.
 
+> [!WARNING]
+> Card-creation age is derived from the timestamp encoded in Anki's card ID. Imported
+> cards commonly retain the original creator's timestamp; it is **not** the date the
+> card was imported into your collection. A creation-age policy can therefore match an
+> entire premade deck immediately. Use this condition only for cards whose provenance
+> you understand, and preview it with **On demand** mode before enabling automatic
+> actions.
+
 ## Policy States
 
 | State     | Behavior                                                               |
@@ -71,6 +79,7 @@ See [config.md](./docs/config.md) for the complete schema and examples.
 
 * Tags belong to notes in Anki, so tagging a qualifying card tags its note and any sibling cards
 * First-review age cannot recover review history that was deleted or omitted during import
+* Anki does not store a reliable per-card timestamp for when a card was imported into the current collection
 * Decks are configured by name, so renamed or missing decks cause the affected policy to fail closed
 
 ## Development

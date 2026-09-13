@@ -182,6 +182,14 @@ class RuleConditionRow(QWidget):
         self.kind.addItem("Card state", "card_state")
         self.kind.addItem("Study status", "study_status")
         self.kind.setMinimumWidth(190)
+        creation_age_index = self.kind.findData("age_card_created")
+        self.kind.setItemData(
+            creation_age_index,
+            "This uses the timestamp encoded in the card ID, not the date the card was "
+            "imported into your collection. Imported cards commonly retain their original "
+            "creator's timestamp and may qualify immediately.",
+            Qt.ItemDataRole.ToolTipRole,
+        )
         self.operator = QLabel("is at least", self)
         self.operator.setMinimumWidth(70)
         self.days = QSpinBox(self)
@@ -230,6 +238,7 @@ class RuleConditionRow(QWidget):
 
     def _update_controls(self, _index: int = 0) -> None:
         kind = self.kind.currentData()
+        self.kind.setToolTip(self.kind.currentData(Qt.ItemDataRole.ToolTipRole) or "")
         uses_choice = kind in {"card_state", "study_status"}
         self.operator.setText("is" if uses_choice else "is at least")
         self.value_stack.setCurrentWidget(self.choice if uses_choice else self.days)
