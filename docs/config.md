@@ -41,7 +41,7 @@ with the single `state` field.
 ```
 
 Keep `state` set to `manual` while testing. **Card Janitor…** evaluates every
-configured policy and shows its scope, rule, actions, and affected-card count.
+configured policy and shows its scope, conditions, actions, and affected-card count.
 Policies in the `manual` or `automatic` state are included by default; disabled
 policies remain available but start unchecked. The checkboxes affect only the
 current run. Change the state to `automatic` to also run a policy on the
@@ -98,10 +98,20 @@ Matches cards whose current Anki interval is at least as large as `days`. New ca
 ```
 
 Matches cards in the selected Anki state: `new`, `learning`, `review`, or
-`relearning`. Combine `new` with card-creation age to remove cards that were
-added but not learned within a desired period.
+`relearning`. This describes the card's current Anki state, not whether it has
+ever been studied.
 
-### Compound rules
+### Study status
+
+```json
+{"type": "study_status", "status": "never_studied"}
+```
+
+`never_studied` matches cards with no genuine answer entry in Anki's review
+log. Unlike the `new` card state, it does not match a previously studied card
+that was later reset to New.
+
+### Combining conditions
 
 ```json
 {
@@ -113,18 +123,19 @@ added but not learned within a desired period.
 }
 ```
 
-Use `any` for OR and `all` for AND. Groups must contain at least one rule.
-Composition is deliberately limited to one flat group: every child must be an
-age, interval, or new-card rule. Nested AND/OR groups are rejected.
+Use `any` for OR and `all` for AND. Groups must contain at least one condition.
+Composition is deliberately limited to one flat group: every child must be a
+single age, interval, card-state, or study-status condition. Nested AND/OR
+groups are rejected.
 
-For example, a stale-new-card rule is:
+For example, the conditions for a stale-new-card policy are:
 
 ```json
 {
   "type": "all",
   "rules": [
     {"type": "age", "days": 30, "from": "card_created"},
-    {"type": "card_state", "state": "new"}
+    {"type": "study_status", "status": "never_studied"}
   ]
 }
 ```

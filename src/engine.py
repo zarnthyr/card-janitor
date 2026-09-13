@@ -18,6 +18,7 @@ from .models import (
     NewRule,
     Policy,
     Rule,
+    StudyStatusRule,
     SuspendAction,
     TagAction,
 )
@@ -64,7 +65,7 @@ class PolicyReport:
     errors: tuple[str, ...] = ()
 
 
-def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:
+def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:  # noqa: PLR0911
     if isinstance(rule, AgeRule):
         timestamp = card.first_review_ms if rule.source == "first_review" else card.created_at_ms
         return timestamp is not None and now_ms - timestamp >= rule.days * MILLIS_PER_DAY
@@ -74,6 +75,8 @@ def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:
         return card.card_type == 0
     if isinstance(rule, CardStateRule):
         return card.card_type == {"new": 0, "learning": 1, "review": 2, "relearning": 3}[rule.state]
+    if isinstance(rule, StudyStatusRule):
+        return card.first_review_ms is None
     if isinstance(rule, AllRule):
         return all(matches_rule(child, card, now_ms) for child in rule.rules)
     if isinstance(rule, AnyRule):

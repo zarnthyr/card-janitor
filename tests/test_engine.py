@@ -18,6 +18,7 @@ from card_janitor.models import (
     Policy,
     Rule,
     Scope,
+    StudyStatusRule,
     SuspendAction,
     TagAction,
 )
@@ -78,6 +79,12 @@ def test_interval_rule_uses_current_interval_without_requiring_revlog() -> None:
 def test_new_rule_uses_card_type_even_when_buried() -> None:
     assert matches_rule(NewRule(), facts(card_type=0, queue=-2), 0)
     assert not matches_rule(NewRule(), facts(card_type=2), 0)
+
+
+def test_never_studied_uses_genuine_review_history() -> None:
+    rule = StudyStatusRule("never_studied")
+    assert matches_rule(rule, facts(card_type=0, first_review_ms=None), 0)
+    assert not matches_rule(rule, facts(card_type=0, first_review_ms=2000), 0)
 
 
 def test_scope_excludes_suspended_and_filtered_by_default() -> None:

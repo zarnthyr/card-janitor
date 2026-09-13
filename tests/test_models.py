@@ -7,6 +7,7 @@ from card_janitor.models import (
     DeleteCardAction,
     MoveAction,
     NewRule,
+    StudyStatusRule,
     parse_config,
     policy_to_dict,
 )
@@ -165,6 +166,12 @@ def test_removed_answer_rules_are_rejected() -> None:
         parsed = parse_config(policy_config(rule={"type": rule_type, "count": 3}))
         assert "unknown rule type" in str(parsed.issues[0])
         assert not parsed.config.policies
+
+
+def test_study_status_rule_parses() -> None:
+    parsed = parse_config(policy_config(rule={"type": "study_status", "status": "never_studied"}))
+    assert not parsed.issues
+    assert parsed.config.policies[0].rule == StudyStatusRule("never_studied")
 
 
 def test_serialized_policy_round_trips() -> None:

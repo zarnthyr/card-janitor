@@ -117,6 +117,15 @@
             "type": {"const": "card_state"},
             "state": {"enum": ["new", "learning", "review", "relearning"]}
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "status"],
+          "properties": {
+            "type": {"const": "study_status"},
+            "status": {"const": "never_studied"}
+          }
         }
       ]
     },

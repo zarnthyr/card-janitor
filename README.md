@@ -34,10 +34,10 @@ Then install `card-janitor.ankiaddon` from Anki's add-ons screen or by double cl
 Each policy has three parts:
 
 * Scope — one or more decks, optionally including subdecks
-* Rule — age, interval, new-card status, or an AND/OR composition
+* Conditions — age, interval, card state, or study status, combined with AND/OR
 * Actions — tag, suspend, move, or delete the qualifying cards
 
-First-review age is derived from genuine answer entries in Anki's review log. Cards without first-review history do not qualify for that rule. Card-creation age is available separately.
+First-review age is derived from genuine answer entries in Anki's review log. Cards without first-review history do not qualify for that condition. Card-creation age is available separately.
 
 ## Policy States
 

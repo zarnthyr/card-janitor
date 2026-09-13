@@ -62,6 +62,7 @@ from .models import (
     PolicyRecord,
     Rule,
     Scope,
+    StudyStatusRule,
     SuspendAction,
     TagAction,
 )
@@ -142,6 +143,8 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
         return "Still new"
     if isinstance(rule, CardStateRule):
         return f"Card state is {rule.state.capitalize()}"
+    if isinstance(rule, StudyStatusRule):
+        return "Study status is Never studied"
     if isinstance(rule, (AllRule, AnyRule)):
         operator = " AND " if isinstance(rule, AllRule) else " OR "
         description = operator.join(_describe_rule(child, nested=True) for child in rule.rules)
@@ -172,25 +175,20 @@ class RuleConditionRow(QWidget):
         self.number_label = QLabel(self)
         self.number_label.setMinimumWidth(20)
         self.kind = QComboBox(self)
-        self.kind.addItem("Age", "age")
+        self.kind.addItem("Age since first review", "age_first_review")
+        self.kind.addItem("Age since creation", "age_card_created")
         self.kind.addItem("Current interval", "interval")
-        self.kind.addItem("Card state", "new")
-        self.kind.setMinimumWidth(160)
+        self.kind.addItem("Card state", "card_state")
+        self.kind.addItem("Study status", "study_status")
+        self.kind.setMinimumWidth(190)
         self.operator = QLabel("is at least", self)
+        self.operator.setMinimumWidth(70)
         self.days = QSpinBox(self)
         self.days.setRange(1, 100000)
         self.days.setSuffix(" days")
-        self.days.setMinimumWidth(110)
-        self.source = QComboBox(self)
-        self.source.addItem("since first review", "first_review")
-        self.source.addItem("since card creation", "card_created")
-        self.source.setMinimumWidth(180)
-        self.state_value = QComboBox(self)
-        self.state_value.addItem("New", "new")
-        self.state_value.addItem("Learning", "learning")
-        self.state_value.addItem("Review", "review")
-        self.state_value.addItem("Relearning", "relearning")
-        self.state_value.setMinimumWidth(296)
+        self.days.setMinimumWidth(220)
+        self.choice = QComboBox(self)
+        self.choice.setMinimumWidth(220)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(80)
         for widget in (
@@ -198,46 +196,60 @@ class RuleConditionRow(QWidget):
             self.kind,
             self.operator,
             self.days,
-            self.source,
-            self.state_value,
+            self.choice,
             self.remove_button,
         ):
             layout.addWidget(widget)
+        selected_choice: str | None = None
         if isinstance(rule, AgeRule):
-            self.kind.setCurrentIndex(self.kind.findData("age"))
+            kind = "age_first_review" if rule.source == "first_review" else "age_card_created"
+            self.kind.setCurrentIndex(self.kind.findData(kind))
             self.days.setValue(rule.days)
-            self.source.setCurrentIndex(self.source.findData(rule.source))
         elif isinstance(rule, IntervalRule):
             self.kind.setCurrentIndex(self.kind.findData("interval"))
             self.days.setValue(rule.days)
         elif isinstance(rule, NewRule):
-            self.kind.setCurrentIndex(self.kind.findData("new"))
-            self.days.setValue(365)
+            self.kind.setCurrentIndex(self.kind.findData("card_state"))
+            selected_choice = "new"
         elif isinstance(rule, CardStateRule):
-            self.kind.setCurrentIndex(self.kind.findData("new"))
-            self.state_value.setCurrentIndex(self.state_value.findData(rule.state))
-            self.days.setValue(365)
+            self.kind.setCurrentIndex(self.kind.findData("card_state"))
+            selected_choice = rule.state
+        elif isinstance(rule, StudyStatusRule):
+            self.kind.setCurrentIndex(self.kind.findData("study_status"))
+            selected_choice = rule.status
         else:
             self.days.setValue(365)
         qconnect(self.kind.currentIndexChanged, self._update_controls)
         self._update_controls()
+        if selected_choice is not None:
+            self.choice.setCurrentIndex(self.choice.findData(selected_choice))
 
     def _update_controls(self, _index: int = 0) -> None:
         kind = self.kind.currentData()
-        is_new = kind == "new"
-        self.operator.setText("is" if is_new else "is at least")
-        self.days.setVisible(not is_new)
-        self.source.setVisible(not is_new)
-        self.source.setEnabled(kind == "age")
-        self.state_value.setVisible(is_new)
+        uses_choice = kind in {"card_state", "study_status"}
+        self.operator.setText("is" if uses_choice else "is at least")
+        self.days.setVisible(not uses_choice)
+        self.choice.setVisible(uses_choice)
+        self.choice.clear()
+        if kind == "card_state":
+            self.choice.addItem("New", "new")
+            self.choice.addItem("Learning", "learning")
+            self.choice.addItem("Review", "review")
+            self.choice.addItem("Relearning", "relearning")
+        elif kind == "study_status":
+            self.choice.addItem("Never studied", "never_studied")
 
-    def rule(self) -> AgeRule | IntervalRule | NewRule | CardStateRule:
+    def rule(self) -> AgeRule | IntervalRule | CardStateRule | StudyStatusRule:
         kind = self.kind.currentData()
-        if kind == "age":
-            return AgeRule(self.days.value(), self.source.currentData())
+        if kind == "age_first_review":
+            return AgeRule(self.days.value(), "first_review")
+        if kind == "age_card_created":
+            return AgeRule(self.days.value(), "card_created")
         if kind == "interval":
             return IntervalRule(self.days.value())
-        return CardStateRule(self.state_value.currentData())
+        if kind == "card_state":
+            return CardStateRule(self.choice.currentData())
+        return StudyStatusRule("never_studied")
 
 
 class PolicyEditorDialog(QDialog):
@@ -522,7 +534,10 @@ def _best_effort_rule(raw: object) -> Rule | None:  # noqa: PLR0911
         simple = tuple(
             child
             for child in children
-            if isinstance(child, (AgeRule, IntervalRule, NewRule, CardStateRule))
+            if isinstance(
+                child,
+                (AgeRule, IntervalRule, NewRule, CardStateRule, StudyStatusRule),
+            )
         )
         if simple:
             return AllRule(simple) if kind == "all" else AnyRule(simple)
@@ -542,6 +557,8 @@ def _best_effort_rule(raw: object) -> Rule | None:  # noqa: PLR0911
         state = raw.get("state")
         if state in {"new", "learning", "review", "relearning"}:
             return CardStateRule(state)
+    if kind == "study_status" and raw.get("status") == "never_studied":
+        return StudyStatusRule("never_studied")
     return None
 
 
@@ -593,7 +610,7 @@ class CardJanitorDialog(QDialog):
 
         self.table = QTableWidget(0, 7, self)
         self.table.setHorizontalHeaderLabels(
-            ("Run", "Policy", "Mode", "Scope", "Rule", "Actions", "Affected")
+            ("Run", "Policy", "Mode", "Scope", "Conditions", "Actions", "Affected")
         )
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -850,7 +867,16 @@ def _applied_message(count: int) -> str:
 
 def _open_cards_in_browser(card_ids: set[int]) -> None:
     node = SearchNode(parsable_text="cid:" + ",".join(str(card_id) for card_id in sorted(card_ids)))
-    aqt.dialogs.open("Browser", mw, search=(node,))
+    browser = aqt.dialogs.open("Browser", mw, search=(node,))
+    dialog = getattr(mw, MANUAL_DIALOG_ATTR, None)
+    if isinstance(dialog, CardJanitorDialog):
+        qconnect(browser.destroyed, lambda _object=None: _restore_dashboard(dialog))
+
+
+def _restore_dashboard(dialog: CardJanitorDialog) -> None:
+    if getattr(mw, MANUAL_DIALOG_ATTR, None) is dialog and dialog.isVisible():
+        dialog.raise_()
+        dialog.activateWindow()
 
 
 def _show_manual_dialog(parsed: ParsedConfig, reports: tuple[PolicyReport, ...]) -> None:
