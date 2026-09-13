@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import sys
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -32,6 +34,8 @@ REQUIRED_PACKAGE_FILES = {
 FORBIDDEN_NAMES = {"package.py"}
 FORBIDDEN_PARTS = {"__pycache__"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo"}
+DEV_ADDON_NAME = "card_retirement"
+DEV_MARKER = ".card-retirement-development-install"
 
 
 def is_forbidden_package_path(path: str | Path) -> bool:
@@ -92,6 +96,81 @@ def validate_package(path: Path = OUTPUT_FILE) -> None:
         print(f"duplicates={sorted(duplicates)}")
         print(f"manifest={manifest!r}")
         raise SystemExit(1)
+
+
+def default_anki_addons_dir() -> Path:
+    override = os.environ.get("CARD_RETIREMENT_ANKI_ADDONS_DIR")
+    if override:
+        return Path(override).expanduser()
+    if sys.platform == "darwin":
+        return Path.home() / "Library/Application Support/Anki2/addons21"
+    if sys.platform == "win32":
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            message = "APPDATA is not set; set CARD_RETIREMENT_ANKI_ADDONS_DIR"
+            raise RuntimeError(message)
+        return Path(appdata) / "Anki2/addons21"
+    return Path.home() / ".local/share/Anki2/addons21"
+
+
+def development_link_sources() -> dict[str, Path]:
+    project_dir = Path(__file__).resolve().parent.parent
+    source_dir = project_dir / "src"
+    links = {path.name: path for path in source_dir.glob("*.py") if path.name != "package.py"}
+    links.update(
+        {
+            "config.schema.json": source_dir / "config.schema.json",
+            "manifest.json": project_dir / "manifest.json",
+            "README.md": project_dir / "README.md",
+            "LICENSE": project_dir / "LICENSE",
+            "config.md": project_dir / "docs/config.md",
+        }
+    )
+    return links
+
+
+def install_development_addon(addons_dir: Path | None = None) -> Path:
+    destination = (addons_dir or default_anki_addons_dir()) / DEV_ADDON_NAME
+    marker = destination / DEV_MARKER
+    if destination.exists() and not marker.is_file():
+        raise RuntimeError(
+            f"Refusing to modify existing non-development addon directory: {destination}"
+        )
+
+    destination.mkdir(parents=True, exist_ok=True)
+    marker.write_text("Managed by the Card Retirement development installer.\n", encoding="utf-8")
+
+    for name, source in development_link_sources().items():
+        target = destination / name
+        if target.is_symlink():
+            if target.resolve() == source.resolve():
+                continue
+            target.unlink()
+        elif target.exists():
+            raise RuntimeError(f"Refusing to replace non-symlink development file: {target}")
+        target.symlink_to(source.resolve())
+
+    config = destination / "config.json"
+    if not config.exists():
+        project_config = Path(__file__).resolve().parent / "config.json"
+        shutil.copy2(project_config, config)
+
+    print(f"Installed development addon at {destination}")
+    return destination
+
+
+def uninstall_development_addon(addons_dir: Path | None = None) -> None:
+    destination = (addons_dir or default_anki_addons_dir()) / DEV_ADDON_NAME
+    marker = destination / DEV_MARKER
+    if not destination.exists():
+        print(f"Development addon is not installed at {destination}")
+        return
+    if not marker.is_file():
+        raise RuntimeError(
+            f"Refusing to remove existing non-development addon directory: {destination}"
+        )
+    shutil.rmtree(destination)
+    print(f"Removed development addon at {destination}")
 
 
 def main() -> None:

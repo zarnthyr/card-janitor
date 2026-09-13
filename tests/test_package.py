@@ -8,9 +8,12 @@ from pathlib import Path
 import pytest
 
 from package import (
+    DEV_ADDON_NAME,
     EXPECTED_MANIFEST,
     REQUIRED_PACKAGE_FILES,
+    install_development_addon,
     is_forbidden_package_path,
+    uninstall_development_addon,
     validate_package,
 )
 
@@ -38,3 +41,21 @@ def test_missing_file_is_rejected(tmp_path: Path) -> None:
 @pytest.mark.parametrize("name", ["../bad.py", "/bad.py", "__pycache__/bad.pyc", "package.py"])
 def test_forbidden_paths(name: str) -> None:
     assert is_forbidden_package_path(name)
+
+
+def test_development_install_preserves_config(tmp_path: Path) -> None:
+    addons_dir = tmp_path / "addons21"
+    destination = install_development_addon(addons_dir)
+
+    assert destination == addons_dir / DEV_ADDON_NAME
+    assert (destination / "addon.py").is_symlink()
+    assert (destination / "manifest.json").is_symlink()
+    assert not (destination / "config.json").is_symlink()
+
+    custom_config = '{"custom": true}\n'
+    (destination / "config.json").write_text(custom_config, encoding="utf-8")
+    install_development_addon(addons_dir)
+    assert (destination / "config.json").read_text(encoding="utf-8") == custom_config
+
+    uninstall_development_addon(addons_dir)
+    assert not destination.exists()

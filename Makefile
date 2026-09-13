@@ -1,4 +1,4 @@
-.PHONY: all build check clean format inspect lint sync test
+.PHONY: all build check clean dev-install dev-uninstall format inspect lint sync test
 
 all: check build
 
@@ -12,6 +12,12 @@ check:
 
 clean:
 	rm -rf build card-retirement.ankiaddon
+
+dev-install:
+	uv run python -c "from package import install_development_addon; install_development_addon()"
+
+dev-uninstall:
+	uv run python -c "from package import uninstall_development_addon; uninstall_development_addon()"
 
 format:
 	uv run ruff format . $(ARGS)
