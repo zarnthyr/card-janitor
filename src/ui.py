@@ -34,6 +34,7 @@ from aqt.qt import (
     QPushButton,
     QSignalBlocker,
     QSpinBox,
+    QStackedWidget,
     Qt,
     QTableWidget,
     QTableWidgetItem,
@@ -189,14 +190,17 @@ class RuleConditionRow(QWidget):
         self.days.setMinimumWidth(220)
         self.choice = QComboBox(self)
         self.choice.setMinimumWidth(220)
+        self.value_stack = QStackedWidget(self)
+        self.value_stack.setMinimumWidth(220)
+        self.value_stack.addWidget(self.days)
+        self.value_stack.addWidget(self.choice)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(80)
         for widget in (
             self.number_label,
             self.kind,
             self.operator,
-            self.days,
-            self.choice,
+            self.value_stack,
             self.remove_button,
         ):
             layout.addWidget(widget)
@@ -228,8 +232,7 @@ class RuleConditionRow(QWidget):
         kind = self.kind.currentData()
         uses_choice = kind in {"card_state", "study_status"}
         self.operator.setText("is" if uses_choice else "is at least")
-        self.days.setVisible(not uses_choice)
-        self.choice.setVisible(uses_choice)
+        self.value_stack.setCurrentWidget(self.choice if uses_choice else self.days)
         self.choice.clear()
         if kind == "card_state":
             self.choice.addItem("New", "new")
