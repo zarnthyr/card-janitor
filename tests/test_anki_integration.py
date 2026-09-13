@@ -1,12 +1,48 @@
 # Copyright (C) 2026 Zarnthyr
 # License: GNU AGPL v3 or later
 
+import inspect
 from pathlib import Path
 
+import pytest
 from anki.collection import Collection
+from aqt.operations import QueryOp
+from card_retirement import ui
 from card_retirement.actions import build_execution_plan, execute_plan
 from card_retirement.evaluator import evaluate_policy
 from card_retirement.models import AgeRule, Policy, Scope, SuspendAction, TagAction
+
+
+def test_query_op_requires_constructor_success_callback() -> None:
+    signature = inspect.signature(QueryOp)
+    success = signature.parameters["success"]
+    assert success.kind is inspect.Parameter.KEYWORD_ONLY
+    assert success.default is inspect.Parameter.empty
+
+
+def test_preview_uses_current_query_op_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeQueryOp:
+        def __init__(self, *, parent: object, op: object, success: object) -> None:
+            self.parent = parent
+            self.op = op
+            self.success = success
+            self.started = False
+            created.append(self)
+
+        def run_in_background(self) -> None:
+            self.started = True
+
+    created: list[FakeQueryOp] = []
+
+    monkeypatch.setattr(ui, "_choose_policy", lambda _title: object())
+    monkeypatch.setattr(ui, "QueryOp", FakeQueryOp)
+
+    ui.preview_policy()
+
+    assert len(created) == 1
+    assert callable(created[0].op)
+    assert callable(created[0].success)
+    assert created[0].started
 
 
 def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:

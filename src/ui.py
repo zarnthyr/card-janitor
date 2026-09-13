@@ -123,8 +123,10 @@ def preview_policy() -> None:
         elif not report.actionable:
             showInfo(text, parent=mw)
 
-    QueryOp(parent=mw, op=lambda col: evaluate_policy(col, policy)).success(
-        on_success
+    QueryOp(
+        parent=mw,
+        op=lambda col: evaluate_policy(col, policy),
+        success=on_success,
     ).run_in_background()
 
 
@@ -181,8 +183,10 @@ def run_policy() -> None:
         if not _show_report_error(report):
             _execute_single_report(report)
 
-    QueryOp(parent=mw, op=lambda col: evaluate_policy(col, policy)).success(
-        on_success
+    QueryOp(
+        parent=mw,
+        op=lambda col: evaluate_policy(col, policy),
+        success=on_success,
     ).run_in_background()
 
 
@@ -307,8 +311,10 @@ def run_automatic_policies(*, ignore_interval: bool = False) -> None:
 
         CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
 
-    QueryOp(parent=mw, op=lambda col: evaluate_policies(col, policies)).success(
-        on_evaluated
+    QueryOp(
+        parent=mw,
+        op=lambda col: evaluate_policies(col, policies),
+        success=on_evaluated,
     ).run_in_background()
 
 
