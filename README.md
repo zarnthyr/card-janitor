@@ -2,7 +2,7 @@
 
 Configurable automatic retirement policies for Anki cards.
 
-Retires cards according to deck scope, study age, current interval, or answer count, with explicit manual, notification, and automatic execution modes.
+Retires cards according to deck scope, study age, current interval, or answer count, either manually after review in Anki's Browser or automatically when a profile opens.
 
 ## Installation
 
@@ -41,13 +41,12 @@ First-review age is derived from genuine answer entries in Anki's review log. Ca
 
 ## Execution Modes
 
-| Mode      | Behavior                                                        |
-| --------- | --------------------------------------------------------------- |
-| Manual    | Only evaluates or runs when selected from the Tools menu        |
-| Notify    | Checks after profile opening and reports cards requiring action |
-| Automatic | Checks after profile opening and applies configured actions     |
+| Mode      | Behavior                                                    |
+| --------- | ----------------------------------------------------------- |
+| Manual    | Does nothing until **Retire Cards…** is selected             |
+| Automatic | Applies configured actions whenever an Anki profile is opened |
 
-Automatic checks are rate-limited and do not use background polling.
+Automatic execution does not use background polling. Its completion notification can be disabled independently.
 
 ## Configuration
 
@@ -57,7 +56,7 @@ Open the JSON settings editor from:
 Tools → Card Retirement → Settings...
 ```
 
-The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy, use **Preview Policy...** to inspect the exact cards in Anki's Browser, and enable notification or automatic execution only when satisfied with the result.
+The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and use **Retire Cards…** to inspect the exact candidates in Anki's Browser before enabling automatic execution.
 
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
 

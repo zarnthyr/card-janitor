@@ -6,8 +6,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
-MAX_AUTOMATIC_CHECK_INTERVAL_HOURS = 8760
-
 
 @dataclass(frozen=True)
 class ConfigIssue:
@@ -84,7 +82,7 @@ class DeleteCardAction:
 
 
 Action: TypeAlias = TagAction | SuspendAction | MoveAction | DeleteCardAction
-PolicyMode: TypeAlias = Literal["manual", "notify", "automatic"]
+PolicyMode: TypeAlias = Literal["manual", "automatic"]
 
 
 @dataclass(frozen=True)
@@ -101,7 +99,7 @@ class Policy:
 @dataclass(frozen=True)
 class AddonConfig:
     config_version: int
-    automatic_check_interval_hours: int
+    notify_after_automatic_retirement: bool
     debug_logging: bool
     policies: tuple[Policy, ...]
 
@@ -204,8 +202,8 @@ def _parse_policy(value: object, index: int) -> Policy:
     name = _required_string(value, "name", path)
     enabled = _bool(value, "enabled", default=True, path=path)
     mode = value.get("mode", "manual")
-    if mode not in {"manual", "notify", "automatic"}:
-        raise ValueError(f"{path}.mode: must be 'manual', 'notify', or 'automatic'")
+    if mode not in {"manual", "automatic"}:
+        raise ValueError(f"{path}.mode: must be 'manual' or 'automatic'")
     actions_value = value.get("actions")
     if not isinstance(actions_value, list) or not actions_value:
         raise ValueError(f"{path}.actions: must be a non-empty array")
@@ -240,12 +238,10 @@ def parse_config(value: object) -> ParsedConfig:
         issues.append(ConfigIssue("config_version", "must be 1"))
         version = 1
 
-    interval = value.get("automatic_check_interval_hours", 20)
-    if not _is_int(interval) or not 1 <= interval <= MAX_AUTOMATIC_CHECK_INTERVAL_HOURS:
-        issues.append(
-            ConfigIssue("automatic_check_interval_hours", "must be an integer from 1 to 8760")
-        )
-        interval = 20
+    notify = value.get("notify_after_automatic_retirement", True)
+    if not isinstance(notify, bool):
+        issues.append(ConfigIssue("notify_after_automatic_retirement", "must be a boolean"))
+        notify = True
 
     debug_logging = value.get("debug_logging", False)
     if not isinstance(debug_logging, bool):
@@ -275,7 +271,7 @@ def parse_config(value: object) -> ParsedConfig:
     return ParsedConfig(
         config=AddonConfig(
             config_version=1,
-            automatic_check_interval_hours=interval,
+            notify_after_automatic_retirement=notify,
             debug_logging=debug_logging,
             policies=tuple(policies),
         ),

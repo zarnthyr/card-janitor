@@ -20,7 +20,7 @@ def test_query_op_requires_constructor_success_callback() -> None:
     assert success.default is inspect.Parameter.empty
 
 
-def test_preview_uses_current_query_op_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_retire_cards_uses_current_query_op_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeQueryOp:
         def __init__(self, *, parent: object, op: object, success: object) -> None:
             self.parent = parent
@@ -34,15 +34,37 @@ def test_preview_uses_current_query_op_constructor(monkeypatch: pytest.MonkeyPat
 
     created: list[FakeQueryOp] = []
 
-    monkeypatch.setattr(ui, "_choose_policy", lambda _title: object())
+    monkeypatch.setattr(ui, "_choose_configuration", lambda _title: object())
     monkeypatch.setattr(ui, "QueryOp", FakeQueryOp)
 
-    ui.preview_policy()
+    ui.retire_cards()
 
     assert len(created) == 1
     assert callable(created[0].op)
     assert callable(created[0].success)
     assert created[0].started
+
+
+@pytest.mark.parametrize(
+    ("notify", "affected", "conflicts", "expected"),
+    [
+        (True, 3, 0, "Card Retirement: 3 cards retired automatically."),
+        (True, 0, 0, ""),
+        (False, 3, 0, ""),
+        (False, 3, 2, "Card Retirement: 2 conflicting cards were skipped."),
+    ],
+)
+def test_automatic_completion_message(
+    notify: bool, affected: int, conflicts: int, expected: str
+) -> None:
+    assert (
+        ui._automatic_completion_message(
+            notify=notify,
+            affected_cards=affected,
+            conflicts=conflicts,
+        )
+        == expected
+    )
 
 
 def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:

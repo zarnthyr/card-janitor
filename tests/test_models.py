@@ -24,7 +24,7 @@ def policy_config(**overrides: object) -> dict:
     policy.update(overrides)
     return {
         "config_version": 1,
-        "automatic_check_interval_hours": 20,
+        "notify_after_automatic_retirement": True,
         "debug_logging": False,
         "policies": [policy],
     }
@@ -91,3 +91,17 @@ def test_debug_logging_must_be_boolean() -> None:
     parsed = parse_config(raw)
     assert str(parsed.issues[0]) == "debug_logging: must be a boolean"
     assert not parsed.config.debug_logging
+
+
+def test_automatic_notification_setting_must_be_boolean() -> None:
+    raw = policy_config()
+    raw["notify_after_automatic_retirement"] = "yes"
+    parsed = parse_config(raw)
+    assert str(parsed.issues[0]) == "notify_after_automatic_retirement: must be a boolean"
+    assert parsed.config.notify_after_automatic_retirement
+
+
+def test_notify_is_not_a_policy_mode() -> None:
+    parsed = parse_config(policy_config(mode="notify"))
+    assert str(parsed.issues[0]) == "policies[0].mode: must be 'manual' or 'automatic'"
+    assert not parsed.config.policies

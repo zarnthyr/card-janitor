@@ -4,7 +4,7 @@
   "additionalProperties": false,
   "required": [
     "config_version",
-    "automatic_check_interval_hours",
+    "notify_after_automatic_retirement",
     "debug_logging",
     "policies"
   ],
@@ -12,10 +12,9 @@
     "config_version": {
       "const": 1
     },
-    "automatic_check_interval_hours": {
-      "type": "integer",
-      "minimum": 1,
-      "maximum": 8760
+    "notify_after_automatic_retirement": {
+      "type": "boolean",
+      "description": "Show a summary when cards are retired automatically"
     },
     "debug_logging": {
       "type": "boolean",
@@ -37,7 +36,7 @@
         "id": {"type": "string", "minLength": 1},
         "name": {"type": "string", "minLength": 1},
         "enabled": {"type": "boolean"},
-        "mode": {"enum": ["manual", "notify", "automatic"]},
+        "mode": {"enum": ["manual", "automatic"]},
         "scope": {"$ref": "#/$defs/scope"},
         "rule": {"$ref": "#/$defs/rule"},
         "actions": {

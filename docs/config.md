@@ -9,7 +9,7 @@ Invalid configuration fails closed: if any validation error is present, no manua
 ```json
 {
   "config_version": 1,
-  "automatic_check_interval_hours": 20,
+  "notify_after_automatic_retirement": true,
   "debug_logging": false,
   "policies": [
     {
@@ -37,7 +37,14 @@ Invalid configuration fails closed: if any validation error is present, no manua
 }
 ```
 
-Keep `mode` set to `manual` while testing. Change it to `notify` for startup reports or `automatic` to perform the configured actions automatically. An automatic deletion policy runs without confirmation.
+Keep `mode` set to `manual` while testing. **Retire Cards…** opens candidates
+in Anki's Browser, where the retirement action can be confirmed. Change the
+mode to `automatic` to perform the configured actions whenever a profile opens.
+An automatic deletion policy runs without confirmation.
+
+Set `notify_after_automatic_retirement` to `false` to suppress successful
+automatic-retirement summaries. No summary is shown when no cards were changed.
+Configuration errors and action conflicts are still reported.
 
 Set `debug_logging` to `true` to print policy evaluation counts and timing to
 the terminal. Configuration errors and unexpected exceptions are always
