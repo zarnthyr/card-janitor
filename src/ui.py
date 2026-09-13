@@ -874,7 +874,7 @@ def _card_count_text(count: int) -> str:
 
 
 def _applied_message(count: int) -> str:
-    return f"Applied policies to {_card_count_text(count)}."
+    return f"Card Janitor cleaned up {_card_count_text(count)}."
 
 
 def _open_cards_in_browser(card_ids: set[int]) -> None:
@@ -987,7 +987,7 @@ def execute_manual_reports(
         message = (
             _applied_message(result.affected_cards)
             if result.affected_cards
-            else "No cards required an action."
+            else "No cards needed cleanup."
         )
         if result.conflicts:
             message += f" {result.conflicts} conflicting cards were skipped."
