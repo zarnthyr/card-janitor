@@ -1,0 +1,30 @@
+.PHONY: all build check clean format inspect lint sync test
+
+all: check build
+
+build:
+	uv run package
+
+check:
+	uv run ruff format --check .
+	uv run ruff check .
+	uv run pytest
+
+clean:
+	rm -rf build card-retirement.ankiaddon
+
+format:
+	uv run ruff format . $(ARGS)
+
+inspect:
+	uv run python -c "from package import validate_package; validate_package()"
+	unzip -l card-retirement.ankiaddon
+
+lint:
+	uv run ruff check . $(ARGS)
+
+sync:
+	uv sync
+
+test:
+	uv run pytest

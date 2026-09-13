@@ -1,0 +1,5 @@
+{
+  "config_version": 1,
+  "automatic_check_interval_hours": 20,
+  "policies": []
+}

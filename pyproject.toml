@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "card-retirement"
+version = "0.0.1"
+description = "Configurable automatic retirement policies for Anki cards"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Zarnthyr" }]
+requires-python = ">=3.10"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "aqt>=26.8",
+    "pytest>=9.0.3",
+    "ruff>=0.15.16",
+]
+
+[project.urls]
+Homepage = "https://github.com/zarnthyr/card-retirement"
+
+[project.scripts]
+package = "package:main"
+
+[tool.uv]
+managed = true
+
+[tool.uv.sources]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+extend-exclude = ["build"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "BLE001",    # Broad exception guards are common around Anki hooks/UI callbacks
+    "C901",      # McCabe complexity
+    "COM812",    # Missing trailing comma
+    "D100",      # Undocumented public module
+    "D101",      # Undocumented public class
+    "D102",      # Undocumented public method
+    "D103",      # Undocumented public function
+    "D104",      # Undocumented public package
+    "D107",      # Undocumented __init__
+    "D203",      # Conflicts with D211
+    "D213",      # Conflicts with D212
+    "E501",      # Line too long
+    "FBT001",    # Boolean positional arguments
+    "PLR0913",   # Too many arguments
+    "PLR0915",   # Too many statements
+    "SLF001",    # Addons commonly patch/access private Anki APIs
+]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"package.py" = ["INP001", "T201"]
+"src/engine.py" = ["EM102", "TRY003"]
+"src/evaluator.py" = ["S608"]
+"src/models.py" = ["EM102", "PERF203", "TRY003", "TRY004", "TRY301"]
+"src/package.py" = ["EM102", "TRY003"]
+"tests/**/*.py" = ["INP001", "PLR2004", "S101"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]

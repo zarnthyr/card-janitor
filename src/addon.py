@@ -1,0 +1,42 @@
+# Copyright (C) 2026 Zarnthyr
+# License: GNU AGPL v3 or later
+
+from __future__ import annotations
+
+import contextlib
+import traceback
+
+from aqt import gui_hooks
+
+from .ui import run_automatic_policies, safe_install_menu
+
+
+def _callback_key(callback: object) -> tuple[object, object]:
+    return (getattr(callback, "__self__", None), getattr(callback, "__func__", callback))
+
+
+def _callbacks(hook: object) -> list[object]:
+    if isinstance(hook, list):
+        return list(hook)
+    values = getattr(hook, "_hooks", None)
+    return list(values) if isinstance(values, list) else []
+
+
+def _replace_hook(hook: object, callback: object) -> None:
+    for existing in _callbacks(hook):
+        if _callback_key(existing) == _callback_key(callback):
+            with contextlib.suppress(ValueError):
+                hook.remove(existing)
+    hook.append(callback)
+
+
+def on_profile_loaded() -> None:
+    try:
+        safe_install_menu()
+        run_automatic_policies()
+    except Exception:
+        traceback.print_exc()
+
+
+def register_addon() -> None:
+    _replace_hook(gui_hooks.profile_did_open, on_profile_loaded)

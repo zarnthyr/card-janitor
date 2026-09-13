@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["config_version", "automatic_check_interval_hours", "policies"],
+  "properties": {
+    "config_version": {
+      "const": 1
+    },
+    "automatic_check_interval_hours": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 8760
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/policy"
+      }
+    }
+  },
+  "$defs": {
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "enabled", "mode", "scope", "rule", "actions"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "name": {"type": "string", "minLength": 1},
+        "enabled": {"type": "boolean"},
+        "mode": {"enum": ["manual", "notify", "automatic"]},
+        "scope": {"$ref": "#/$defs/scope"},
+        "rule": {"$ref": "#/$defs/rule"},
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/action"}
+        }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decks"],
+      "properties": {
+        "decks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "include_subdecks": {"type": "boolean"},
+        "include_suspended": {"type": "boolean"},
+        "include_filtered_decks": {"type": "boolean"}
+      }
+    },
+    "rule": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "days", "from"],
+          "properties": {
+            "type": {"const": "age"},
+            "days": {"type": "integer", "minimum": 1},
+            "from": {"enum": ["first_review", "card_created"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "days"],
+          "properties": {
+            "type": {"const": "interval"},
+            "days": {"type": "integer", "minimum": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "count"],
+          "properties": {
+            "type": {"enum": ["successful_answers", "answer_count"]},
+            "count": {"type": "integer", "minimum": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "rules"],
+          "properties": {
+            "type": {"enum": ["all", "any"]},
+            "rules": {
+              "type": "array",
+              "minItems": 1,
+              "items": {"$ref": "#/$defs/rule"}
+            }
+          }
+        }
+      ]
+    },
+    "action": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "tag"],
+          "properties": {
+            "type": {"const": "tag"},
+            "tag": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {"type": {"enum": ["suspend", "delete_card"]}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "deck"],
+          "properties": {
+            "type": {"const": "move"},
+            "deck": {"type": "string", "minLength": 1}
+          }
+        }
+      ]
+    }
+  }
+}
