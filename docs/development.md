@@ -10,9 +10,9 @@ make inspect
 The project targets Python 3.10+ and uses the Anki 26.08 development packages. Runtime dependencies are limited to APIs bundled with Anki.
 
 For manual testing, install `card-retirement.ankiaddon` in Anki and begin with a
-`manual` policy. Use **Retire Cards…** to review the candidate count and actions,
-inspect them in the Browser, execute the policy, and test undo before trying
-`automatic` mode.
+policy whose state is `manual`. Use **Retire Cards…** to review the policy table,
+inspect qualifying cards in the Browser, execute the policy, and test undo before trying
+the `automatic` state.
 
 ## Linked development installation
 

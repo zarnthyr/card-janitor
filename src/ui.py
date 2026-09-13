@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections import Counter
 from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
@@ -13,12 +14,18 @@ from aqt import mw
 from aqt.addons import ConfigEditor
 from aqt.operations import CollectionOp, QueryOp
 from aqt.qt import (
+    QAbstractItemView,
     QAction,
     QDialog,
     QDialogButtonBox,
+    QHeaderView,
     QLabel,
     QMenu,
     QPushButton,
+    QSignalBlocker,
+    Qt,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     qconnect,
 )
@@ -29,18 +36,32 @@ from .configuration import ADDON_MODULE, load_config, load_raw_config
 from .evaluator import evaluate_policies
 from .log import configure as configure_logging
 from .log import debug, error, exception
-from .models import DeleteCardAction, MoveAction, SuspendAction, TagAction
+from .models import (
+    Action,
+    AgeRule,
+    AllRule,
+    AnyRule,
+    DeleteCardAction,
+    IntervalRule,
+    MoveAction,
+    NewRule,
+    Rule,
+    Scope,
+    SuspendAction,
+    TagAction,
+)
 
 if TYPE_CHECKING:
     from anki.collection import Collection
 
     from .engine import PolicyReport
-    from .models import Action, AutomaticSchedule, ParsedConfig
+    from .models import AutomaticSchedule, ParsedConfig
 
 AutomaticTrigger = Literal["profile_open", "day_change"]
 
 MENU_ATTR = "_card_retirement_menu"
 CONFIG_EDITOR_ATTR = "_card_retirement_config_editor"
+MANUAL_DIALOG_ATTR = "_card_retirement_manual_dialog"
 LAST_AUTOMATIC_DAY_PROFILE_KEY = "card_retirement_last_automatic_day"
 
 
@@ -77,67 +98,229 @@ def _describe_action(action: Action) -> str:
     raise AssertionError(message)
 
 
+def _describe_actions(actions: tuple[Action, ...]) -> str:
+    return " + ".join(_describe_action(action) for action in actions)
+
+
+def _describe_scope(scope: Scope) -> str:
+    decks = ", ".join(scope.decks)
+    return f"{decks} + subdecks" if scope.include_subdecks else decks
+
+
+def _scope_tooltip(scope: Scope) -> str:
+    return "\n".join(
+        (
+            f"Decks: {', '.join(scope.decks)}",
+            f"Include subdecks: {'Yes' if scope.include_subdecks else 'No'}",
+            f"Include suspended cards: {'Yes' if scope.include_suspended else 'No'}",
+            f"Include filtered decks: {'Yes' if scope.include_filtered_decks else 'No'}",
+        )
+    )
+
+
+def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
+    if isinstance(rule, AgeRule):
+        source = "First studied" if rule.source == "first_review" else "Created"
+        return f"{source} ≥ {rule.days} days ago"
+    if isinstance(rule, IntervalRule):
+        return f"Interval ≥ {rule.days} days"
+    if isinstance(rule, NewRule):
+        return "Still new"
+    if isinstance(rule, (AllRule, AnyRule)):
+        operator = " AND " if isinstance(rule, AllRule) else " OR "
+        description = operator.join(_describe_rule(child, nested=True) for child in rule.rules)
+        return f"({description})" if nested else description
+    message = f"unknown retirement rule: {rule!r}"
+    raise AssertionError(message)
+
+
 class ManualRetirementDialog(QDialog):
-    def __init__(
-        self,
-        reports: tuple[PolicyReport, ...],
-        affected_cards: int,
-        conflicts: int,
-    ) -> None:
+    COLUMN_RUN = 0
+    COLUMN_POLICY = 1
+    COLUMN_STATE = 2
+    COLUMN_SCOPE = 3
+    COLUMN_RULE = 4
+    COLUMN_ACTIONS = 5
+    COLUMN_AFFECTED = 6
+
+    def __init__(self, reports: tuple[PolicyReport, ...]) -> None:
         super().__init__(mw)
-        self.choice: Literal["browse", "retire"] | None = None
+        self._reports: tuple[PolicyReport, ...] = ()
         self.setWindowTitle("Retire Cards")
-        self.setMinimumWidth(480)
+        self.resize(1050, 420)
 
         layout = QVBoxLayout(self)
-        summary = QLabel(
-            f"{_card_count_text(affected_cards).capitalize()} would be retired.",
-            self,
-        )
-        layout.addWidget(summary)
+        layout.addWidget(QLabel("Choose which policies to include in this run.", self))
 
-        details: list[str] = []
-        for report in reports:
-            details.append(f"{report.policy.name}: {_card_count_text(len(report.actionable))}")
-            details.extend(f"  • {_describe_action(action)}" for action in report.policy.actions)
-        if conflicts:
-            conflict_subject = _card_count_text(conflicts).capitalize()
-            conflict_verb = "has" if conflicts == 1 else "have"
-            conflict_message = (
-                f"{conflict_subject} {conflict_verb} conflicting actions and would be skipped."
-            )
-            details.extend(
-                (
-                    "",
-                    conflict_message,
-                )
-            )
-        detail_label = QLabel("\n".join(details), self)
-        detail_label.setWordWrap(True)
-        layout.addWidget(detail_label)
+        self.table = QTableWidget(0, 7, self)
+        self.table.setHorizontalHeaderLabels(
+            ("Run", "Policy", "State", "Scope", "Rule", "Actions", "Affected")
+        )
+        self.table.setAlternatingRowColors(True)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.verticalHeader().setVisible(False)
+        header = self.table.horizontalHeader()
+        for column in (self.COLUMN_RUN, self.COLUMN_STATE, self.COLUMN_AFFECTED):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        for column in (
+            self.COLUMN_POLICY,
+            self.COLUMN_SCOPE,
+            self.COLUMN_RULE,
+            self.COLUMN_ACTIONS,
+        ):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        qconnect(self.table.itemChanged, self._on_item_changed)
+        qconnect(self.table.cellDoubleClicked, self._view_policy)
+        layout.addWidget(self.table)
+
+        self.summary = QLabel(self)
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
-        browse_button = buttons.addButton(
-            "View in Browser",
+        self.refresh_button = buttons.addButton(
+            "Refresh",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
-        retire_button = buttons.addButton("Retire", QDialogButtonBox.ButtonRole.AcceptRole)
-        browse_button.setEnabled(any(report.actionable for report in reports))
-        retire_button.setEnabled(affected_cards > 0)
-        if isinstance(retire_button, QPushButton):
-            retire_button.setDefault(True)
-        qconnect(browse_button.clicked, self._browse)
-        qconnect(retire_button.clicked, self._retire)
-        qconnect(buttons.rejected, self.reject)
+        self.view_button = buttons.addButton(
+            "View Included Cards",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.retire_button = buttons.addButton(
+            "Retire",
+            QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        if isinstance(self.retire_button, QPushButton):
+            self.retire_button.setDefault(True)
+        qconnect(self.refresh_button.clicked, self._refresh)
+        qconnect(self.view_button.clicked, self._view_included)
+        qconnect(self.retire_button.clicked, self._retire)
+        qconnect(buttons.rejected, self.close)
         layout.addWidget(buttons)
 
-    def _browse(self) -> None:
-        self.choice = "browse"
-        self.accept()
+        self.set_reports(reports)
+
+    def set_reports(
+        self,
+        reports: tuple[PolicyReport, ...],
+        checked_policy_ids: set[str] | None = None,
+        known_policy_ids: set[str] | None = None,
+    ) -> None:
+        self._reports = reports
+        signal_blocker = QSignalBlocker(self.table)
+        self.table.setRowCount(len(reports))
+        for row, report in enumerate(reports):
+            policy = report.policy
+            use_config_default = checked_policy_ids is None or (
+                known_policy_ids is not None and policy.id not in known_policy_ids
+            )
+            included = (
+                policy.state != "disabled"
+                if use_config_default
+                else policy.id in checked_policy_ids
+            )
+            run_item = QTableWidgetItem()
+            run_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled
+                | Qt.ItemFlag.ItemIsSelectable
+                | Qt.ItemFlag.ItemIsUserCheckable
+            )
+            run_item.setCheckState(Qt.CheckState.Checked if included else Qt.CheckState.Unchecked)
+            self.table.setItem(row, self.COLUMN_RUN, run_item)
+
+            values = (
+                policy.name,
+                policy.state.capitalize(),
+                _describe_scope(policy.scope),
+                _describe_rule(policy.rule),
+                _describe_actions(policy.actions),
+                "Error" if report.errors else str(len(report.actionable)),
+            )
+            for column, value in enumerate(values, start=1):
+                item = QTableWidgetItem(value)
+                self.table.setItem(row, column, item)
+            self.table.item(row, self.COLUMN_POLICY).setToolTip(f"Policy ID: {policy.id}")
+            self.table.item(row, self.COLUMN_SCOPE).setToolTip(_scope_tooltip(policy.scope))
+            if report.errors:
+                error_text = "\n".join(report.errors)
+                self.table.item(row, self.COLUMN_AFFECTED).setToolTip(error_text)
+        del signal_blocker
+        self.table.resizeRowsToContents()
+        if reports:
+            self.table.selectRow(0)
+        self._update_summary()
+
+    def checked_policy_ids(self) -> set[str]:
+        return {
+            report.policy.id
+            for row, report in enumerate(self._reports)
+            if self.table.item(row, self.COLUMN_RUN).checkState() == Qt.CheckState.Checked
+        }
+
+    def policy_ids(self) -> set[str]:
+        return {report.policy.id for report in self._reports}
+
+    def checked_reports(self) -> tuple[PolicyReport, ...]:
+        checked = self.checked_policy_ids()
+        return tuple(report for report in self._reports if report.policy.id in checked)
+
+    def _on_item_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() == self.COLUMN_RUN:
+            self._update_summary()
+
+    def _update_summary(self) -> None:
+        reports = self.checked_reports()
+        if not reports:
+            self.summary.setText("No policies are included in this run.")
+            self.view_button.setEnabled(False)
+            self.retire_button.setEnabled(False)
+            return
+        errors = [error for report in reports for error in report.errors]
+        match_counts = Counter(card.card_id for report in reports for card in report.actionable)
+        candidate_ids = set(match_counts)
+        overlap_count = sum(count > 1 for count in match_counts.values())
+        plan = build_execution_plan(reports)
+        messages = [f"{_card_count_text(plan.card_count).capitalize()} would be retired."]
+        if overlap_count:
+            overlap_verb = "matches" if overlap_count == 1 else "match"
+            messages.append(
+                f"{_card_count_text(overlap_count).capitalize()} {overlap_verb} "
+                "more than one policy."
+            )
+        if plan.conflicted_card_ids:
+            conflict_count = len(plan.conflicted_card_ids)
+            conflict_verb = "has" if conflict_count == 1 else "have"
+            messages.append(
+                f"{_card_count_text(conflict_count).capitalize()} {conflict_verb} "
+                "conflicting actions and would be skipped."
+            )
+        if errors:
+            messages.append(
+                "A checked policy has an error. Uncheck it or fix the configuration before retiring."
+            )
+        self.summary.setText("\n".join(messages))
+        self.view_button.setEnabled(bool(candidate_ids))
+        self.retire_button.setEnabled(plan.card_count > 0 and not errors)
+
+    def _view_included(self) -> None:
+        card_ids = {card.card_id for report in self.checked_reports() for card in report.actionable}
+        if card_ids:
+            _open_cards_in_browser(card_ids)
+
+    def _view_policy(self, row: int, _column: int) -> None:
+        if _column == self.COLUMN_RUN:
+            return
+        card_ids = {card.card_id for card in self._reports[row].actionable}
+        if card_ids:
+            _open_cards_in_browser(card_ids)
+
+    def _refresh(self) -> None:
+        refresh_manual_dialog(self)
 
     def _retire(self) -> None:
-        self.choice = "retire"
-        self.accept()
+        execute_manual_reports(self, self.checked_reports())
 
 
 def _card_count_text(count: int) -> str:
@@ -153,87 +336,102 @@ def _open_cards_in_browser(card_ids: set[int]) -> None:
     aqt.dialogs.open("Browser", mw, search=(node,))
 
 
+def _show_manual_dialog(reports: tuple[PolicyReport, ...]) -> None:
+    dialog = ManualRetirementDialog(reports)
+    setattr(mw, MANUAL_DIALOG_ATTR, dialog)
+
+    def clear_reference(_result: int) -> None:
+        if getattr(mw, MANUAL_DIALOG_ATTR, None) is dialog:
+            setattr(mw, MANUAL_DIALOG_ATTR, None)
+
+    qconnect(dialog.finished, clear_reference)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+
+
 def retire_cards_manually() -> None:
+    existing = getattr(mw, MANUAL_DIALOG_ATTR, None)
+    if isinstance(existing, ManualRetirementDialog) and existing.isVisible():
+        existing.raise_()
+        existing.activateWindow()
+        return
     parsed = _load_for_operation()
     if parsed is None:
         return
-    policies = tuple(
-        policy for policy in parsed.config.policies if policy.enabled and policy.mode == "manual"
-    )
+    policies = parsed.config.policies
     if not policies:
-        showInfo("There are no enabled manual retirement policies.", parent=mw)
+        showInfo("There are no retirement policies configured.", parent=mw)
         return
-
-    def on_evaluated(reports: tuple[PolicyReport, ...]) -> None:
-        errors = [f"{report.policy.name}: {item}" for report in reports for item in report.errors]
-        if errors:
-            showWarning(
-                "Manual retirement could not be evaluated:\n\n"
-                + "\n".join(f"• {item}" for item in errors),
-                parent=mw,
-            )
-            return
-        plan = build_execution_plan(reports)
-        if plan.is_empty and not plan.conflicted_card_ids:
-            showInfo("No cards were eligible for retirement.", parent=mw)
-            return
-        dialog = ManualRetirementDialog(
-            reports,
-            plan.card_count,
-            len(plan.conflicted_card_ids),
-        )
-        dialog.exec()
-        if dialog.choice == "browse":
-            candidate_ids = {card.card_id for report in reports for card in report.actionable}
-            _open_cards_in_browser(candidate_ids)
-            return
-        if dialog.choice != "retire":
-            return
-
-        approved = {
-            report.policy.id: {card.card_id for card in report.actionable} for report in reports
-        }
-
-        def execute_fresh(col: Collection) -> ExecutionResult:
-            fresh_reports = evaluate_policies(col, policies)
-            runtime_errors = [item for report in fresh_reports for item in report.errors]
-            if runtime_errors:
-                raise RuntimeError("; ".join(runtime_errors))
-            filtered = tuple(
-                replace(
-                    report,
-                    actionable=tuple(
-                        card
-                        for card in report.actionable
-                        if card.card_id in approved[report.policy.id]
-                    ),
-                )
-                for report in fresh_reports
-            )
-            return execute_plan(col, build_execution_plan(filtered), "Manual Card Retirement")
-
-        def on_applied(result: ExecutionResult) -> None:
-            debug(
-                "manual retirement complete",
-                affected_cards=result.affected_cards,
-                conflicts=result.conflicts,
-            )
-            message = (
-                _retired_message(result.affected_cards)
-                if result.affected_cards
-                else "No cards were eligible for retirement."
-            )
-            if result.conflicts:
-                message += f" {result.conflicts} conflicting cards were skipped."
-            tooltip(message, parent=mw)
-
-        CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
-
     QueryOp(
         parent=mw,
         op=lambda col: evaluate_policies(col, policies),
-        success=on_evaluated,
+        success=_show_manual_dialog,
     ).run_in_background()
+
+
+def refresh_manual_dialog(dialog: ManualRetirementDialog) -> None:
+    parsed = _load_for_operation(dialog)
+    if parsed is None:
+        return
+    checked = dialog.checked_policy_ids()
+    known = dialog.policy_ids()
+    policies = parsed.config.policies
+    if not policies:
+        dialog.close()
+        showInfo("There are no retirement policies configured.", parent=mw)
+        return
+    QueryOp(
+        parent=dialog,
+        op=lambda col: evaluate_policies(col, policies),
+        success=lambda reports: dialog.set_reports(reports, checked, known),
+    ).run_in_background()
+
+
+def execute_manual_reports(
+    dialog: ManualRetirementDialog,
+    reports: tuple[PolicyReport, ...],
+) -> None:
+    if not reports or any(report.errors for report in reports):
+        return
+    approved = {
+        report.policy.id: {card.card_id for card in report.actionable} for report in reports
+    }
+    policies = tuple(report.policy for report in reports)
+    dialog.close()
+
+    def execute_fresh(col: Collection) -> ExecutionResult:
+        fresh_reports = evaluate_policies(col, policies)
+        runtime_errors = [item for report in fresh_reports for item in report.errors]
+        if runtime_errors:
+            raise RuntimeError("; ".join(runtime_errors))
+        filtered = tuple(
+            replace(
+                report,
+                actionable=tuple(
+                    card for card in report.actionable if card.card_id in approved[report.policy.id]
+                ),
+            )
+            for report in fresh_reports
+        )
+        return execute_plan(col, build_execution_plan(filtered), "Manual Card Retirement")
+
+    def on_applied(result: ExecutionResult) -> None:
+        debug(
+            "manual retirement complete",
+            affected_cards=result.affected_cards,
+            conflicts=result.conflicts,
+        )
+        message = (
+            _retired_message(result.affected_cards)
+            if result.affected_cards
+            else "No cards were eligible for retirement."
+        )
+        if result.conflicts:
+            message += f" {result.conflicts} conflicting cards were skipped."
+        tooltip(message, parent=mw)
+
+    CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
 
 
 def open_settings() -> None:
@@ -282,11 +480,9 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         error("invalid configuration", issues=tuple(str(issue) for issue in parsed.issues))
         showWarning(_issues_text(parsed), parent=mw)
         return
-    policies = tuple(
-        policy for policy in parsed.config.policies if policy.enabled and policy.mode == "automatic"
-    )
+    policies = tuple(policy for policy in parsed.config.policies if policy.state == "automatic")
     if not policies:
-        debug("automatic retirement skipped", reason="no enabled automatic policies")
+        debug("automatic retirement skipped", reason="no automatic policies")
         return
 
     today = int(mw.col.sched.today)

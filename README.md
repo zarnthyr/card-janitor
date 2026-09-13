@@ -39,12 +39,13 @@ Each policy has three parts:
 
 First-review age is derived from genuine answer entries in Anki's review log. Cards without first-review history do not qualify for that rule. Card-creation age is available separately.
 
-## Execution Modes
+## Policy States
 
-| Mode      | Behavior                                                        |
-| --------- | --------------------------------------------------------------- |
-| Manual    | Previews matching cards and waits for approval before retiring   |
-| Automatic | Applies the same policy evaluation on the configured schedule    |
+| State     | Behavior                                                               |
+| --------- | ---------------------------------------------------------------------- |
+| Disabled  | Available in the manual dialog but unchecked and never scheduled       |
+| Manual    | Included in manual runs by default and never scheduled                 |
+| Automatic | Included in manual runs by default and also run on the configured schedule |
 
 Automatic execution can run on profile open, daily, or both. Daily execution uses Anki's day-change hook rather than background polling. Its completion notification can be disabled independently.
 
@@ -58,7 +59,7 @@ Tools → Card Retirement → Settings...
 
 The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and use **Retire Cards…** to preview its results. The preview can open all candidates in Anki's Browser or apply the configured actions after approval.
 
-Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
+Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `state: "automatic"` and runs without confirmation.
 
 See [config.md](./docs/config.md) for the complete schema and examples.
 

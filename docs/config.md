@@ -4,11 +4,14 @@ Card Retirement is configured as JSON through **Tools → Card Retirement → Se
 
 Invalid configuration fails closed: if any validation error is present, no manual or automatic policy runs. Deck names are resolved when a policy is evaluated, and a missing or filtered move destination is an error.
 
+Configuration version 2 replaces the former `enabled` and `mode` policy fields
+with the single `state` field.
+
 ## Mining example
 
 ```json
 {
-  "config_version": 1,
+  "config_version": 2,
   "automatic_schedule": "daily",
   "notify_after_automatic_retirement": true,
   "debug_logging": false,
@@ -16,8 +19,7 @@ Invalid configuration fails closed: if any validation error is present, no manua
     {
       "id": "mining-retirement",
       "name": "Mining retirement",
-      "enabled": true,
-      "mode": "manual",
+      "state": "manual",
       "scope": {
         "decks": ["Mining"],
         "include_subdecks": true,
@@ -38,12 +40,24 @@ Invalid configuration fails closed: if any validation error is present, no manua
 }
 ```
 
-Keep `mode` set to `manual` while testing. **Retire Cards…** evaluates every
-enabled manual policy and previews the cards and actions. From the preview you
-can inspect all candidates in Anki's Browser, cancel, or retire them. Change the
-mode to `automatic` to run the same policy evaluation and actions on the
+Keep `state` set to `manual` while testing. **Retire Cards…** evaluates every
+configured policy and shows its scope, rule, actions, and affected-card count.
+Policies in the `manual` or `automatic` state are included by default; disabled
+policies remain available but start unchecked. The checkboxes affect only the
+current run. Change the state to `automatic` to also run a policy on the
 configured schedule without approval. Retirement is recorded in Anki's undo
 history.
+
+The dialog remains open while you inspect cards. **View Included Cards** opens
+the union from all checked policies; double-click a row to open only that
+policy's cards. **Refresh** recalculates the table. Running an automatic policy
+manually does not alter its next scheduled run.
+
+Policy states are:
+
+- `disabled` — never scheduled and unchecked by default in the retirement dialog
+- `manual` — checked by default in the dialog but never scheduled
+- `automatic` — checked by default in the dialog and also run automatically
 
 `automatic_schedule` supports:
 
@@ -119,7 +133,7 @@ For example, a stale-new-card rule is:
 - `{"type": "move", "deck": "Retired"}` moves the card to an existing normal deck.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
 
-`delete_card` must be the policy's only action. It can use `mode: "automatic"`, but automatic deletion runs without confirmation. Manual deletion is shown in the retirement preview before execution. The shipped configuration contains no policies, and the Mining example uses `mode: "manual"` with tag and suspend actions.
+`delete_card` must be the policy's only action. It can use `state: "automatic"`, but automatic deletion runs without confirmation. Manual deletion is shown in the retirement preview before execution. The shipped configuration contains no policies, and the Mining example uses `state: "manual"` with tag and suspend actions.
 
 ## Scope behavior
 

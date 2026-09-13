@@ -15,15 +15,14 @@ def policy_config(**overrides: object) -> dict:
     policy = {
         "id": "mining",
         "name": "Mining",
-        "enabled": True,
-        "mode": "manual",
+        "state": "manual",
         "scope": {"decks": ["Mining"], "include_subdecks": True},
         "rule": {"type": "age", "days": 365, "from": "first_review"},
         "actions": [{"type": "tag", "tag": "retired"}, {"type": "suspend"}],
     }
     policy.update(overrides)
     return {
-        "config_version": 1,
+        "config_version": 2,
         "automatic_schedule": "daily",
         "notify_after_automatic_retirement": True,
         "debug_logging": False,
@@ -59,9 +58,9 @@ def test_invalid_policy_is_omitted() -> None:
 
 
 def test_automatic_delete_requires_explicit_configuration_but_is_supported() -> None:
-    parsed = parse_config(policy_config(mode="automatic", actions=[{"type": "delete_card"}]))
+    parsed = parse_config(policy_config(state="automatic", actions=[{"type": "delete_card"}]))
     assert not parsed.issues
-    assert parsed.config.policies[0].mode == "automatic"
+    assert parsed.config.policies[0].state == "automatic"
     assert isinstance(parsed.config.policies[0].actions[0], DeleteCardAction)
 
 
@@ -102,9 +101,32 @@ def test_automatic_notification_setting_must_be_boolean() -> None:
     assert parsed.config.notify_after_automatic_retirement
 
 
-def test_notify_is_not_a_policy_mode() -> None:
-    parsed = parse_config(policy_config(mode="notify"))
-    assert str(parsed.issues[0]) == "policies[0].mode: must be 'manual' or 'automatic'"
+def test_policy_state_is_validated() -> None:
+    parsed = parse_config(policy_config(state="notify"))
+    assert str(parsed.issues[0]) == (
+        "policies[0].state: must be 'disabled', 'manual', or 'automatic'"
+    )
+    assert not parsed.config.policies
+
+
+def test_policy_state_defaults_to_manual() -> None:
+    raw = policy_config()
+    del raw["policies"][0]["state"]
+    parsed = parse_config(raw)
+    assert not parsed.issues
+    assert parsed.config.policies[0].state == "manual"
+
+
+def test_old_config_version_fails_closed() -> None:
+    raw = policy_config()
+    raw["config_version"] = 1
+    parsed = parse_config(raw)
+    assert str(parsed.issues[0]) == "config_version: must be 2"
+
+
+def test_legacy_policy_activation_fields_are_rejected() -> None:
+    parsed = parse_config(policy_config(enabled=True, mode="manual"))
+    assert str(parsed.issues[0]) == ("policies[0]: replace 'enabled' and 'mode' with 'state'")
     assert not parsed.config.policies
 
 

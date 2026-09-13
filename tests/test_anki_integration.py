@@ -37,10 +37,10 @@ def test_manual_retirement_uses_current_query_op_constructor(
 
     created: list[FakeQueryOp] = []
 
-    policy = SimpleNamespace(enabled=True, mode="manual")
-    automatic = SimpleNamespace(enabled=True, mode="automatic")
-    disabled = SimpleNamespace(enabled=False, mode="manual")
-    parsed = SimpleNamespace(config=SimpleNamespace(policies=(policy, automatic, disabled)))
+    manual = SimpleNamespace(state="manual")
+    automatic = SimpleNamespace(state="automatic")
+    disabled = SimpleNamespace(state="disabled")
+    parsed = SimpleNamespace(config=SimpleNamespace(policies=(manual, automatic, disabled)))
     evaluated: list[tuple[object, tuple[object, ...]]] = []
     monkeypatch.setattr(ui, "_load_for_operation", lambda: parsed)
     monkeypatch.setattr(
@@ -57,7 +57,7 @@ def test_manual_retirement_uses_current_query_op_constructor(
     assert callable(created[0].success)
     assert created[0].started
     created[0].op("collection")
-    assert evaluated == [("collection", (policy,))]
+    assert evaluated == [("collection", (manual, automatic, disabled))]
 
 
 @pytest.mark.parametrize(
@@ -135,8 +135,7 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         policy = Policy(
             id="mining",
             name="Mining",
-            enabled=True,
-            mode="manual",
+            state="manual",
             scope=Scope(("Mining",)),
             rule=AgeRule(1, "first_review"),
             actions=(TagAction("retired"), SuspendAction()),

@@ -11,7 +11,7 @@ from .models import ParsedConfig, parse_config
 
 ADDON_MODULE = "card_retirement"
 DEFAULT_CONFIG: dict[str, Any] = {
-    "config_version": 1,
+    "config_version": 2,
     "automatic_schedule": "daily",
     "notify_after_automatic_retirement": True,
     "debug_logging": False,

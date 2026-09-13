@@ -1,5 +1,5 @@
 {
-  "config_version": 1,
+  "config_version": 2,
   "automatic_schedule": "daily",
   "notify_after_automatic_retirement": true,
   "debug_logging": false,

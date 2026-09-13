@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
+CONFIG_VERSION = 2
+
 
 @dataclass(frozen=True)
 class ConfigIssue:
@@ -75,7 +77,7 @@ class DeleteCardAction:
 
 
 Action: TypeAlias = TagAction | SuspendAction | MoveAction | DeleteCardAction
-PolicyMode: TypeAlias = Literal["manual", "automatic"]
+PolicyState: TypeAlias = Literal["disabled", "manual", "automatic"]
 AutomaticSchedule: TypeAlias = Literal["profile_open", "daily", "profile_open_and_daily"]
 
 
@@ -83,8 +85,7 @@ AutomaticSchedule: TypeAlias = Literal["profile_open", "daily", "profile_open_an
 class Policy:
     id: str
     name: str
-    enabled: bool
-    mode: PolicyMode
+    state: PolicyState
     scope: Scope
     rule: Rule
     actions: tuple[Action, ...]
@@ -191,12 +192,13 @@ def _parse_policy(value: object, index: int) -> Policy:
     path = f"policies[{index}]"
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
+    if "enabled" in value or "mode" in value:
+        raise ValueError(f"{path}: replace 'enabled' and 'mode' with 'state'")
     policy_id = _required_string(value, "id", path)
     name = _required_string(value, "name", path)
-    enabled = _bool(value, "enabled", default=True, path=path)
-    mode = value.get("mode", "manual")
-    if mode not in {"manual", "automatic"}:
-        raise ValueError(f"{path}.mode: must be 'manual' or 'automatic'")
+    state = value.get("state", "manual")
+    if state not in {"disabled", "manual", "automatic"}:
+        raise ValueError(f"{path}.state: must be 'disabled', 'manual', or 'automatic'")
     actions_value = value.get("actions")
     if not isinstance(actions_value, list) or not actions_value:
         raise ValueError(f"{path}.actions: must be a non-empty array")
@@ -212,8 +214,7 @@ def _parse_policy(value: object, index: int) -> Policy:
     return Policy(
         id=policy_id,
         name=name,
-        enabled=enabled,
-        mode=mode,
+        state=state,
         scope=_parse_scope(value.get("scope"), f"{path}.scope"),
         rule=_parse_rule(value.get("rule"), f"{path}.rule"),
         actions=actions,
@@ -226,10 +227,10 @@ def parse_config(value: object) -> ParsedConfig:
         value = {}
         issues.append(ConfigIssue("config", "must be an object; no policies were loaded"))
 
-    version = value.get("config_version", 1)
-    if not _is_int(version) or version != 1:
-        issues.append(ConfigIssue("config_version", "must be 1"))
-        version = 1
+    version = value.get("config_version", CONFIG_VERSION)
+    if not _is_int(version) or version != CONFIG_VERSION:
+        issues.append(ConfigIssue("config_version", f"must be {CONFIG_VERSION}"))
+        version = CONFIG_VERSION
 
     schedule = value.get("automatic_schedule", "daily")
     if schedule not in {"profile_open", "daily", "profile_open_and_daily"}:
@@ -273,7 +274,7 @@ def parse_config(value: object) -> ParsedConfig:
 
     return ParsedConfig(
         config=AddonConfig(
-            config_version=1,
+            config_version=CONFIG_VERSION,
             automatic_schedule=schedule,
             notify_after_automatic_retirement=notify,
             debug_logging=debug_logging,

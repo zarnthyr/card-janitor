@@ -11,7 +11,7 @@
   ],
   "properties": {
     "config_version": {
-      "const": 1
+      "const": 2
     },
     "automatic_schedule": {
       "enum": ["profile_open", "daily", "profile_open_and_daily"],
@@ -36,12 +36,11 @@
     "policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "enabled", "mode", "scope", "rule", "actions"],
+      "required": ["id", "name", "state", "scope", "rule", "actions"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "name": {"type": "string", "minLength": 1},
-        "enabled": {"type": "boolean"},
-        "mode": {"enum": ["manual", "automatic"]},
+        "state": {"enum": ["disabled", "manual", "automatic"]},
         "scope": {"$ref": "#/$defs/scope"},
         "rule": {"$ref": "#/$defs/rule"},
         "actions": {

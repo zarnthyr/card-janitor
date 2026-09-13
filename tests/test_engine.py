@@ -48,8 +48,7 @@ def policy(
     return Policy(
         id="test",
         name="Test",
-        enabled=True,
-        mode="manual",
+        state="manual",
         scope=scope or Scope(("Mining",)),
         rule=rule or AgeRule(365, "first_review"),
         actions=actions or (SuspendAction(),),
