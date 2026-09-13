@@ -95,7 +95,7 @@ class Policy:
 class AddonConfig:
     config_version: int
     automatic_schedule: AutomaticSchedule
-    notify_after_automatic_retirement: bool
+    notify_after_automatic_run: bool
     debug_logging: bool
     policies: tuple[Policy, ...]
 
@@ -242,9 +242,9 @@ def parse_config(value: object) -> ParsedConfig:
         )
         schedule = "daily"
 
-    notify = value.get("notify_after_automatic_retirement", True)
+    notify = value.get("notify_after_automatic_run", True)
     if not isinstance(notify, bool):
-        issues.append(ConfigIssue("notify_after_automatic_retirement", "must be a boolean"))
+        issues.append(ConfigIssue("notify_after_automatic_run", "must be a boolean"))
         notify = True
 
     debug_logging = value.get("debug_logging", False)
@@ -276,7 +276,7 @@ def parse_config(value: object) -> ParsedConfig:
         config=AddonConfig(
             config_version=CONFIG_VERSION,
             automatic_schedule=schedule,
-            notify_after_automatic_retirement=notify,
+            notify_after_automatic_run=notify,
             debug_logging=debug_logging,
             policies=tuple(policies),
         ),

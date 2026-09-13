@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 from types import ModuleType
 
-PACKAGE_NAME = "card_retirement"
+PACKAGE_NAME = "card_janitor"
 SRC_DIR = Path(__file__).resolve().parents[1] / "src"
 
 package = ModuleType(PACKAGE_NAME)

@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Zarnthyr
 # License: GNU AGPL v3 or later
 
-from card_retirement.engine import (
+from card_janitor.engine import (
     MILLIS_PER_DAY,
     CardFacts,
     ResolvedAction,
@@ -9,7 +9,7 @@ from card_retirement.engine import (
     evaluate_facts,
     matches_rule,
 )
-from card_retirement.models import (
+from card_janitor.models import (
     Action,
     AgeRule,
     AnyRule,

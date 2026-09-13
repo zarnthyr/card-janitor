@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "card-retirement"
+name = "card-janitor"
 version = "0.0.1"
-description = "Configurable automatic retirement policies for Anki cards"
+description = "Configurable policy-based cleanup for Anki cards"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
 license-files = ["LICENSE"]
@@ -21,7 +21,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/zarnthyr/card-retirement"
+Homepage = "https://github.com/zarnthyr/card-janitor"
 
 [project.scripts]
 package = "package:main"

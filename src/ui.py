@@ -20,7 +20,6 @@ from aqt.qt import (
     QDialogButtonBox,
     QHeaderView,
     QLabel,
-    QMenu,
     QPushButton,
     QSignalBlocker,
     Qt,
@@ -59,15 +58,15 @@ if TYPE_CHECKING:
 
 AutomaticTrigger = Literal["profile_open", "day_change"]
 
-MENU_ATTR = "_card_retirement_menu"
-CONFIG_EDITOR_ATTR = "_card_retirement_config_editor"
-MANUAL_DIALOG_ATTR = "_card_retirement_manual_dialog"
-LAST_AUTOMATIC_DAY_PROFILE_KEY = "card_retirement_last_automatic_day"
+MENU_ATTR = "_card_janitor_action"
+CONFIG_EDITOR_ATTR = "_card_janitor_config_editor"
+MANUAL_DIALOG_ATTR = "_card_janitor_dialog"
+LAST_AUTOMATIC_DAY_PROFILE_KEY = "card_janitor_last_automatic_day"
 
 
 def _issues_text(parsed: ParsedConfig) -> str:
     details = "\n".join(f"• {issue}" for issue in parsed.issues)
-    return f"Card Retirement configuration has errors:\n\n{details}\n\nNo cards were retired."
+    return f"Card Janitor configuration has errors:\n\n{details}\n\nNo actions were applied."
 
 
 def _load_configured() -> ParsedConfig:
@@ -94,7 +93,7 @@ def _describe_action(action: Action) -> str:
         return f"Move cards to the {action.deck!r} deck"
     if isinstance(action, DeleteCardAction):
         return "Delete cards and any notes left without cards"
-    message = f"unknown retirement action: {action!r}"
+    message = f"unknown cleanup action: {action!r}"
     raise AssertionError(message)
 
 
@@ -130,11 +129,11 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
         operator = " AND " if isinstance(rule, AllRule) else " OR "
         description = operator.join(_describe_rule(child, nested=True) for child in rule.rules)
         return f"({description})" if nested else description
-    message = f"unknown retirement rule: {rule!r}"
+    message = f"unknown cleanup rule: {rule!r}"
     raise AssertionError(message)
 
 
-class ManualRetirementDialog(QDialog):
+class CardJanitorDialog(QDialog):
     COLUMN_RUN = 0
     COLUMN_POLICY = 1
     COLUMN_STATE = 2
@@ -146,7 +145,7 @@ class ManualRetirementDialog(QDialog):
     def __init__(self, reports: tuple[PolicyReport, ...]) -> None:
         super().__init__(mw)
         self._reports: tuple[PolicyReport, ...] = ()
-        self.setWindowTitle("Retire Cards")
+        self.setWindowTitle("Card Janitor")
         self.resize(1050, 420)
 
         layout = QVBoxLayout(self)
@@ -180,6 +179,10 @@ class ManualRetirementDialog(QDialog):
         layout.addWidget(self.summary)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
+        self.settings_button = buttons.addButton(
+            "Settings…",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
         self.refresh_button = buttons.addButton(
             "Refresh",
             QDialogButtonBox.ButtonRole.ActionRole,
@@ -188,15 +191,16 @@ class ManualRetirementDialog(QDialog):
             "View Included Cards",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
-        self.retire_button = buttons.addButton(
-            "Retire",
+        self.run_button = buttons.addButton(
+            "Run",
             QDialogButtonBox.ButtonRole.AcceptRole,
         )
-        if isinstance(self.retire_button, QPushButton):
-            self.retire_button.setDefault(True)
+        if isinstance(self.run_button, QPushButton):
+            self.run_button.setDefault(True)
+        qconnect(self.settings_button.clicked, open_settings)
         qconnect(self.refresh_button.clicked, self._refresh)
         qconnect(self.view_button.clicked, self._view_included)
-        qconnect(self.retire_button.clicked, self._retire)
+        qconnect(self.run_button.clicked, self._run)
         qconnect(buttons.rejected, self.close)
         layout.addWidget(buttons)
 
@@ -275,14 +279,14 @@ class ManualRetirementDialog(QDialog):
         if not reports:
             self.summary.setText("No policies are included in this run.")
             self.view_button.setEnabled(False)
-            self.retire_button.setEnabled(False)
+            self.run_button.setEnabled(False)
             return
         errors = [error for report in reports for error in report.errors]
         match_counts = Counter(card.card_id for report in reports for card in report.actionable)
         candidate_ids = set(match_counts)
         overlap_count = sum(count > 1 for count in match_counts.values())
         plan = build_execution_plan(reports)
-        messages = [f"{_card_count_text(plan.card_count).capitalize()} would be retired."]
+        messages = [f"{_card_count_text(plan.card_count).capitalize()} would be affected."]
         if overlap_count:
             overlap_verb = "matches" if overlap_count == 1 else "match"
             messages.append(
@@ -298,11 +302,11 @@ class ManualRetirementDialog(QDialog):
             )
         if errors:
             messages.append(
-                "A checked policy has an error. Uncheck it or fix the configuration before retiring."
+                "A checked policy has an error. Uncheck it or fix the configuration before running."
             )
         self.summary.setText("\n".join(messages))
         self.view_button.setEnabled(bool(candidate_ids))
-        self.retire_button.setEnabled(plan.card_count > 0 and not errors)
+        self.run_button.setEnabled(plan.card_count > 0 and not errors)
 
     def _view_included(self) -> None:
         card_ids = {card.card_id for report in self.checked_reports() for card in report.actionable}
@@ -319,7 +323,7 @@ class ManualRetirementDialog(QDialog):
     def _refresh(self) -> None:
         refresh_manual_dialog(self)
 
-    def _retire(self) -> None:
+    def _run(self) -> None:
         execute_manual_reports(self, self.checked_reports())
 
 
@@ -327,8 +331,8 @@ def _card_count_text(count: int) -> str:
     return "1 card" if count == 1 else f"{count} cards"
 
 
-def _retired_message(count: int) -> str:
-    return f"Retired {_card_count_text(count)}."
+def _applied_message(count: int) -> str:
+    return f"Applied policies to {_card_count_text(count)}."
 
 
 def _open_cards_in_browser(card_ids: set[int]) -> None:
@@ -337,7 +341,7 @@ def _open_cards_in_browser(card_ids: set[int]) -> None:
 
 
 def _show_manual_dialog(reports: tuple[PolicyReport, ...]) -> None:
-    dialog = ManualRetirementDialog(reports)
+    dialog = CardJanitorDialog(reports)
     setattr(mw, MANUAL_DIALOG_ATTR, dialog)
 
     def clear_reference(_result: int) -> None:
@@ -350,9 +354,9 @@ def _show_manual_dialog(reports: tuple[PolicyReport, ...]) -> None:
     dialog.activateWindow()
 
 
-def retire_cards_manually() -> None:
+def open_card_janitor() -> None:
     existing = getattr(mw, MANUAL_DIALOG_ATTR, None)
-    if isinstance(existing, ManualRetirementDialog) and existing.isVisible():
+    if isinstance(existing, CardJanitorDialog) and existing.isVisible():
         existing.raise_()
         existing.activateWindow()
         return
@@ -361,7 +365,7 @@ def retire_cards_manually() -> None:
         return
     policies = parsed.config.policies
     if not policies:
-        showInfo("There are no retirement policies configured.", parent=mw)
+        showInfo("There are no cleanup policies configured.", parent=mw)
         return
     QueryOp(
         parent=mw,
@@ -370,7 +374,7 @@ def retire_cards_manually() -> None:
     ).run_in_background()
 
 
-def refresh_manual_dialog(dialog: ManualRetirementDialog) -> None:
+def refresh_manual_dialog(dialog: CardJanitorDialog) -> None:
     parsed = _load_for_operation(dialog)
     if parsed is None:
         return
@@ -379,7 +383,7 @@ def refresh_manual_dialog(dialog: ManualRetirementDialog) -> None:
     policies = parsed.config.policies
     if not policies:
         dialog.close()
-        showInfo("There are no retirement policies configured.", parent=mw)
+        showInfo("There are no cleanup policies configured.", parent=mw)
         return
     QueryOp(
         parent=dialog,
@@ -389,7 +393,7 @@ def refresh_manual_dialog(dialog: ManualRetirementDialog) -> None:
 
 
 def execute_manual_reports(
-    dialog: ManualRetirementDialog,
+    dialog: CardJanitorDialog,
     reports: tuple[PolicyReport, ...],
 ) -> None:
     if not reports or any(report.errors for report in reports):
@@ -414,18 +418,18 @@ def execute_manual_reports(
             )
             for report in fresh_reports
         )
-        return execute_plan(col, build_execution_plan(filtered), "Manual Card Retirement")
+        return execute_plan(col, build_execution_plan(filtered), "Card Janitor: Manual Run")
 
     def on_applied(result: ExecutionResult) -> None:
         debug(
-            "manual retirement complete",
+            "manual run complete",
             affected_cards=result.affected_cards,
             conflicts=result.conflicts,
         )
         message = (
-            _retired_message(result.affected_cards)
+            _applied_message(result.affected_cards)
             if result.affected_cards
-            else "No cards were eligible for retirement."
+            else "No cards required an action."
         )
         if result.conflicts:
             message += f" {result.conflicts} conflicting cards were skipped."
@@ -468,7 +472,7 @@ def _mark_daily_run(schedule: AutomaticSchedule, today: int) -> None:
 def _automatic_completion_message(*, notify: bool, affected_cards: int, conflicts: int) -> str:
     messages: list[str] = []
     if notify and affected_cards:
-        messages.append(_retired_message(affected_cards).removesuffix("."))
+        messages.append(_applied_message(affected_cards).removesuffix("."))
     if conflicts:
         messages.append(f"{conflicts} conflicting cards were skipped")
     return " ".join(f"{message}." for message in messages)
@@ -482,7 +486,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         return
     policies = tuple(policy for policy in parsed.config.policies if policy.state == "automatic")
     if not policies:
-        debug("automatic retirement skipped", reason="no automatic policies")
+        debug("automatic run skipped", reason="no automatic policies")
         return
 
     today = int(mw.col.sched.today)
@@ -495,7 +499,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         last_automatic_day=last_day,
     ):
         debug(
-            "automatic retirement skipped",
+            "automatic run skipped",
             reason="schedule is not due",
             schedule=parsed.config.automatic_schedule,
             trigger=trigger,
@@ -505,7 +509,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         return
 
     debug(
-        "automatic retirement started",
+        "automatic run started",
         policy_count=len(policies),
         schedule=parsed.config.automatic_schedule,
         trigger=trigger,
@@ -514,9 +518,9 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
     def on_evaluated(reports: tuple[PolicyReport, ...]) -> None:
         errors = [f"{report.policy.name}: {item}" for report in reports for item in report.errors]
         if errors:
-            error("automatic retirement evaluation failed", errors=tuple(errors))
+            error("automatic run evaluation failed", errors=tuple(errors))
             tooltip(
-                "Card Retirement: an automatic policy has errors; see Settings.",
+                "Card Janitor: an automatic policy has errors; see Settings.",
                 parent=mw,
             )
             return
@@ -525,8 +529,8 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
             _mark_daily_run(parsed.config.automatic_schedule, today)
             if plan.conflicted_card_ids:
                 tooltip(
-                    f"Card Retirement: {len(plan.conflicted_card_ids)} conflicting cards "
-                    "could not be retired.",
+                    f"Card Janitor: {len(plan.conflicted_card_ids)} conflicting cards "
+                    "were skipped.",
                     parent=mw,
                 )
             return
@@ -551,17 +555,17 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
                 )
                 for report in fresh_reports
             )
-            return execute_plan(col, build_execution_plan(filtered), "Automatic Card Retirement")
+            return execute_plan(col, build_execution_plan(filtered), "Card Janitor: Automatic Run")
 
         def on_applied(result: ExecutionResult) -> None:
             _mark_daily_run(parsed.config.automatic_schedule, today)
             debug(
-                "automatic retirement complete",
+                "automatic run complete",
                 affected_cards=result.affected_cards,
                 conflicts=result.conflicts,
             )
             message = _automatic_completion_message(
-                notify=parsed.config.notify_after_automatic_retirement,
+                notify=parsed.config.notify_after_automatic_run,
                 affected_cards=result.affected_cards,
                 conflicts=result.conflicts,
             )
@@ -581,18 +585,12 @@ def install_menu() -> None:
     existing = getattr(mw, MENU_ATTR, None)
     if existing is not None:
         with contextlib.suppress(RuntimeError):
-            mw.form.menuTools.removeAction(existing.menuAction())
+            mw.form.menuTools.removeAction(existing)
 
-    menu = QMenu("Card Retirement", mw)
-    retire_action = QAction("Retire Cards…", mw)
-    settings_action = QAction("Settings…", mw)
-    qconnect(retire_action.triggered, retire_cards_manually)
-    qconnect(settings_action.triggered, open_settings)
-    menu.addAction(retire_action)
-    menu.addSeparator()
-    menu.addAction(settings_action)
-    mw.form.menuTools.addMenu(menu)
-    setattr(mw, MENU_ATTR, menu)
+    action = QAction("Card Janitor…", mw)
+    qconnect(action.triggered, open_card_janitor)
+    mw.form.menuTools.addAction(action)
+    setattr(mw, MENU_ATTR, action)
 
 
 def safe_install_menu() -> None:

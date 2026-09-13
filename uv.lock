@@ -103,7 +103,7 @@ wheels = [
 ]
 
 [[package]]
-name = "card-retirement"
+name = "card-janitor"
 version = "0.0.1"
 source = { editable = "." }
 

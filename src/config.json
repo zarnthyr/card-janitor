@@ -1,7 +1,7 @@
 {
   "config_version": 2,
   "automatic_schedule": "daily",
-  "notify_after_automatic_retirement": true,
+  "notify_after_automatic_run": true,
   "debug_logging": false,
   "policies": []
 }

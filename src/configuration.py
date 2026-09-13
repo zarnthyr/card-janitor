@@ -9,11 +9,11 @@ from aqt import mw
 
 from .models import ParsedConfig, parse_config
 
-ADDON_MODULE = "card_retirement"
+ADDON_MODULE = "card_janitor"
 DEFAULT_CONFIG: dict[str, Any] = {
     "config_version": 2,
     "automatic_schedule": "daily",
-    "notify_after_automatic_retirement": True,
+    "notify_after_automatic_run": True,
     "debug_logging": False,
     "policies": [],
 }

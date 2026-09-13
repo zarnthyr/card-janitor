@@ -1,15 +1,15 @@
-# Card Retirement
+# Card Janitor
 
-Configurable automatic retirement policies for Anki cards.
+Configurable policy-based cleanup for Anki cards.
 
-Retires cards according to deck scope, study age, current interval, or new-card status, either after manual preview and approval or automatically on a configurable schedule.
+Applies cleanup policies according to deck scope, study age, current interval, or new-card status, either after manual preview and approval or automatically on a configurable schedule.
 
 ## Installation
 
 ### Manual Installation
 
-1. Download `card-retirement.ankiaddon` from the
-   [latest GitHub release](https://github.com/zarnthyr/card-retirement/releases/latest).
+1. Download `card-janitor.ankiaddon` from the
+   [latest GitHub release](https://github.com/zarnthyr/card-janitor/releases/latest).
 2. Double-click the file, or open Anki and choose:
 
 ```text
@@ -21,13 +21,13 @@ Tools → Add-ons → Install from file...
 ### Install From Source
 
 ```bash
-git clone https://github.com/zarnthyr/card-retirement.git
-cd card-retirement
+git clone https://github.com/zarnthyr/card-janitor.git
+cd card-janitor
 uv sync
 make build
 ```
 
-Then install `card-retirement.ankiaddon` from Anki's add-ons screen or by double clicking it.
+Then install `card-janitor.ankiaddon` from Anki's add-ons screen or by double clicking it.
 
 ## Policies
 
@@ -51,13 +51,14 @@ Automatic execution can run on profile open, daily, or both. Daily execution use
 
 ## Configuration
 
-Open the JSON settings editor from:
+Open the dashboard and then its JSON settings editor:
 
 ```text
-Tools → Card Retirement → Settings...
+Tools → Card Janitor…
+Card Janitor → Settings…
 ```
 
-The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and use **Retire Cards…** to preview its results. The preview can open all candidates in Anki's Browser or apply the configured actions after approval.
+The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and open **Card Janitor…** to preview its results. The dashboard can open candidates in Anki's Browser or apply the configured actions after approval.
 
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `state: "automatic"` and runs without confirmation.
 
@@ -86,6 +87,6 @@ See [LICENSE](./LICENSE).
 
 ## Info
 
-Repository: https://github.com/zarnthyr/card-retirement
+Repository: https://github.com/zarnthyr/card-janitor
 
-Issue tracker: https://github.com/zarnthyr/card-retirement/issues
+Issue tracker: https://github.com/zarnthyr/card-janitor/issues

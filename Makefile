@@ -11,7 +11,7 @@ check:
 	uv run pytest
 
 clean:
-	rm -rf build card-retirement.ankiaddon
+	rm -rf build card-janitor.ankiaddon
 
 dev-install:
 	uv run python -c "from package import install_development_addon; install_development_addon()"
@@ -24,7 +24,7 @@ format:
 
 inspect:
 	uv run python -c "from package import validate_package; validate_package()"
-	unzip -l card-retirement.ankiaddon
+	unzip -l card-janitor.ankiaddon
 
 lint:
 	uv run ruff check . $(ARGS)

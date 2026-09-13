@@ -8,10 +8,10 @@ from types import SimpleNamespace
 import pytest
 from anki.collection import Collection
 from aqt.operations import QueryOp
-from card_retirement import ui
-from card_retirement.actions import build_execution_plan, execute_plan
-from card_retirement.evaluator import evaluate_policy
-from card_retirement.models import AgeRule, Policy, Scope, SuspendAction, TagAction
+from card_janitor import ui
+from card_janitor.actions import build_execution_plan, execute_plan
+from card_janitor.evaluator import evaluate_policy
+from card_janitor.models import AgeRule, Policy, Scope, SuspendAction, TagAction
 
 
 def test_query_op_requires_constructor_success_callback() -> None:
@@ -21,7 +21,7 @@ def test_query_op_requires_constructor_success_callback() -> None:
     assert success.default is inspect.Parameter.empty
 
 
-def test_manual_retirement_uses_current_query_op_constructor(
+def test_dashboard_uses_current_query_op_constructor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class FakeQueryOp:
@@ -50,7 +50,7 @@ def test_manual_retirement_uses_current_query_op_constructor(
     )
     monkeypatch.setattr(ui, "QueryOp", FakeQueryOp)
 
-    ui.retire_cards_manually()
+    ui.open_card_janitor()
 
     assert len(created) == 1
     assert callable(created[0].op)
@@ -63,8 +63,8 @@ def test_manual_retirement_uses_current_query_op_constructor(
 @pytest.mark.parametrize(
     ("notify", "affected", "conflicts", "expected"),
     [
-        (True, 1, 0, "Retired 1 card."),
-        (True, 3, 0, "Retired 3 cards."),
+        (True, 1, 0, "Applied policies to 1 card."),
+        (True, 3, 0, "Applied policies to 3 cards."),
         (True, 0, 0, ""),
         (False, 3, 0, ""),
         (False, 3, 2, "2 conflicting cards were skipped."),
@@ -143,7 +143,7 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         report = evaluate_policy(collection, policy, now_ms=first_review + 86_400_000)
         assert [card.card_id for card in report.actionable] == [card_id]
 
-        result = execute_plan(collection, build_execution_plan((report,)), "Retire test card")
+        result = execute_plan(collection, build_execution_plan((report,)), "Clean test card")
         assert result.affected_cards == 1
         assert collection.get_card(card_id).queue == -1
         assert collection.get_note(note.id).has_tag("retired")

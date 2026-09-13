@@ -10,11 +10,11 @@ import sys
 import zipfile
 from pathlib import Path, PurePosixPath
 
-ADDON_NAME = "card-retirement"
+ADDON_NAME = "card-janitor"
 OUTPUT_FILE = Path(f"{ADDON_NAME}.ankiaddon")
 SRC_DIR = Path("src")
 BUILD_DIR = Path("build")
-EXPECTED_MANIFEST = {"name": "Card Retirement", "package": "card_retirement"}
+EXPECTED_MANIFEST = {"name": "Card Janitor", "package": "card_janitor"}
 REQUIRED_PACKAGE_FILES = {
     "LICENSE",
     "README.md",
@@ -35,8 +35,8 @@ REQUIRED_PACKAGE_FILES = {
 FORBIDDEN_NAMES = {"package.py"}
 FORBIDDEN_PARTS = {"__pycache__"}
 FORBIDDEN_SUFFIXES = {".pyc", ".pyo"}
-DEV_ADDON_NAME = "card_retirement"
-DEV_MARKER = ".card-retirement-development-install"
+DEV_ADDON_NAME = "card_janitor"
+DEV_MARKER = ".card-janitor-development-install"
 
 
 def is_forbidden_package_path(path: str | Path) -> bool:
@@ -100,7 +100,7 @@ def validate_package(path: Path = OUTPUT_FILE) -> None:
 
 
 def default_anki_addons_dir() -> Path:
-    override = os.environ.get("CARD_RETIREMENT_ANKI_ADDONS_DIR")
+    override = os.environ.get("CARD_JANITOR_ANKI_ADDONS_DIR")
     if override:
         return Path(override).expanduser()
     if sys.platform == "darwin":
@@ -108,7 +108,7 @@ def default_anki_addons_dir() -> Path:
     if sys.platform == "win32":
         appdata = os.environ.get("APPDATA")
         if not appdata:
-            message = "APPDATA is not set; set CARD_RETIREMENT_ANKI_ADDONS_DIR"
+            message = "APPDATA is not set; set CARD_JANITOR_ANKI_ADDONS_DIR"
             raise RuntimeError(message)
         return Path(appdata) / "Anki2/addons21"
     return Path.home() / ".local/share/Anki2/addons21"
@@ -139,7 +139,7 @@ def install_development_addon(addons_dir: Path | None = None) -> Path:
         )
 
     destination.mkdir(parents=True, exist_ok=True)
-    marker.write_text("Managed by the Card Retirement development installer.\n", encoding="utf-8")
+    marker.write_text("Managed by the Card Janitor development installer.\n", encoding="utf-8")
 
     for name, source in development_link_sources().items():
         target = destination / name

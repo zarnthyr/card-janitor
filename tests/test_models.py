@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Zarnthyr
 # License: GNU AGPL v3 or later
 
-from card_retirement.models import (
+from card_janitor.models import (
     AgeRule,
     AllRule,
     DeleteCardAction,
@@ -24,7 +24,7 @@ def policy_config(**overrides: object) -> dict:
     return {
         "config_version": 2,
         "automatic_schedule": "daily",
-        "notify_after_automatic_retirement": True,
+        "notify_after_automatic_run": True,
         "debug_logging": False,
         "policies": [policy],
     }
@@ -95,10 +95,10 @@ def test_debug_logging_must_be_boolean() -> None:
 
 def test_automatic_notification_setting_must_be_boolean() -> None:
     raw = policy_config()
-    raw["notify_after_automatic_retirement"] = "yes"
+    raw["notify_after_automatic_run"] = "yes"
     parsed = parse_config(raw)
-    assert str(parsed.issues[0]) == "notify_after_automatic_retirement: must be a boolean"
-    assert parsed.config.notify_after_automatic_retirement
+    assert str(parsed.issues[0]) == "notify_after_automatic_run: must be a boolean"
+    assert parsed.config.notify_after_automatic_run
 
 
 def test_policy_state_is_validated() -> None:

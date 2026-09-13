@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import traceback
 
-PREFIX = "[Card Retirement]"
+PREFIX = "[Card Janitor]"
 _debug_logging = False
 
 

@@ -5,7 +5,7 @@
   "required": [
     "config_version",
     "automatic_schedule",
-    "notify_after_automatic_retirement",
+    "notify_after_automatic_run",
     "debug_logging",
     "policies"
   ],
@@ -15,9 +15,9 @@
     },
     "automatic_schedule": {
       "enum": ["profile_open", "daily", "profile_open_and_daily"],
-      "description": "When automatic retirement policies are evaluated"
+      "description": "When automatic cleanup policies are evaluated"
     },
-    "notify_after_automatic_retirement": {
+    "notify_after_automatic_run": {
       "type": "boolean",
       "description": "Show a summary when cards are retired automatically"
     },

@@ -1,6 +1,6 @@
 # Configuration
 
-Card Retirement is configured as JSON through **Tools → Card Retirement → Settings…**.
+Card Janitor is configured as JSON from the **Settings…** button in its dashboard.
 
 Invalid configuration fails closed: if any validation error is present, no manual or automatic policy runs. Deck names are resolved when a policy is evaluated, and a missing or filtered move destination is an error.
 
@@ -13,12 +13,12 @@ with the single `state` field.
 {
   "config_version": 2,
   "automatic_schedule": "daily",
-  "notify_after_automatic_retirement": true,
+  "notify_after_automatic_run": true,
   "debug_logging": false,
   "policies": [
     {
-      "id": "mining-retirement",
-      "name": "Mining retirement",
+      "id": "mining-cleanup",
+      "name": "Mining cleanup",
       "state": "manual",
       "scope": {
         "decks": ["Mining"],
@@ -40,12 +40,12 @@ with the single `state` field.
 }
 ```
 
-Keep `state` set to `manual` while testing. **Retire Cards…** evaluates every
+Keep `state` set to `manual` while testing. **Card Janitor…** evaluates every
 configured policy and shows its scope, rule, actions, and affected-card count.
 Policies in the `manual` or `automatic` state are included by default; disabled
 policies remain available but start unchecked. The checkboxes affect only the
 current run. Change the state to `automatic` to also run a policy on the
-configured schedule without approval. Retirement is recorded in Anki's undo
+configured schedule without approval. Each run is recorded in Anki's undo
 history.
 
 The dialog remains open while you inspect cards. **View Included Cards** opens
@@ -55,7 +55,7 @@ manually does not alter its next scheduled run.
 
 Policy states are:
 
-- `disabled` — never scheduled and unchecked by default in the retirement dialog
+- `disabled` — never scheduled and unchecked by default in the dashboard
 - `manual` — checked by default in the dialog but never scheduled
 - `automatic` — checked by default in the dialog and also run automatically
 
@@ -65,8 +65,8 @@ Policy states are:
 - `daily` — run at most once per Anki day, on profile opening or day change
 - `profile_open_and_daily` — run on every profile opening and day change
 
-Set `notify_after_automatic_retirement` to `false` to suppress successful
-automatic-retirement summaries. No summary is shown when no cards were changed.
+Set `notify_after_automatic_run` to `false` to suppress successful automatic-run
+summaries. No summary is shown when no cards were changed.
 Configuration errors and action conflicts are still reported.
 
 Set `debug_logging` to `true` to print policy evaluation counts and timing to
@@ -98,7 +98,7 @@ Matches cards whose current Anki interval is at least as large as `days`. New ca
 ```
 
 Matches cards whose Anki card type is still new. Combine this with card-creation
-age to retire cards that were added but not learned within a desired period.
+age to remove cards that were added but not learned within a desired period.
 
 ### Compound rules
 
@@ -133,7 +133,7 @@ For example, a stale-new-card rule is:
 - `{"type": "move", "deck": "Retired"}` moves the card to an existing normal deck.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
 
-`delete_card` must be the policy's only action. It can use `state: "automatic"`, but automatic deletion runs without confirmation. Manual deletion is shown in the retirement preview before execution. The shipped configuration contains no policies, and the Mining example uses `state: "manual"` with tag and suspend actions.
+`delete_card` must be the policy's only action. It can use `state: "automatic"`, but automatic deletion runs without confirmation. Manual deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the Mining example uses `state: "manual"` with tag and suspend actions.
 
 ## Scope behavior
 

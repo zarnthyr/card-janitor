@@ -1,9 +1,9 @@
 # Copyright (C) 2026 Zarnthyr
 # License: GNU AGPL v3 or later
 
-from card_retirement.actions import build_execution_plan
-from card_retirement.engine import CardFacts, PolicyReport, ResolvedAction
-from card_retirement.models import (
+from card_janitor.actions import build_execution_plan
+from card_janitor.engine import CardFacts, PolicyReport, ResolvedAction
+from card_janitor.models import (
     IntervalRule,
     MoveAction,
     Policy,
