@@ -49,9 +49,9 @@ configured schedule without approval. Each run is recorded in Anki's undo
 history.
 
 The window remains open while you inspect cards. **View Included Cards** opens
-the union from all checked policies. Double-clicking a row edits that policy;
-**Refresh** recalculates the table. Running an automatic policy manually does
-not alter its next scheduled run.
+the union from all checked policies. Select a row and use **Edit…** to change
+that policy; **Refresh** recalculates the table. Running an automatic policy
+manually does not alter its next scheduled run.
 
 Policy states are:
 
