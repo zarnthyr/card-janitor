@@ -622,7 +622,7 @@ class CardJanitorDialog(QDialog):
 
         self.table = QTableWidget(0, 7, self)
         self.table.setHorizontalHeaderLabels(
-            ("Run", "Policy", "Mode", "Scope", "Conditions", "Actions", "Affected")
+            ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "Affected")
         )
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
