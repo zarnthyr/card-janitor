@@ -169,6 +169,8 @@ class RuleConditionRow(QWidget):
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        self.number_label = QLabel(self)
+        self.number_label.setMinimumWidth(20)
         self.kind = QComboBox(self)
         self.kind.addItem("Age", "age")
         self.kind.addItem("Current interval", "interval")
@@ -192,6 +194,7 @@ class RuleConditionRow(QWidget):
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(80)
         for widget in (
+            self.number_label,
             self.kind,
             self.operator,
             self.days,
@@ -273,7 +276,7 @@ class PolicyEditorDialog(QDialog):
         form.addRow("Mode", self.state)
         layout.addWidget(general_group)
 
-        scope_group = QGroupBox("Source", self)
+        scope_group = QGroupBox("Scope", self)
         scope_layout = QVBoxLayout(scope_group)
         scope_layout.addWidget(QLabel("Apply this policy to one or more decks:", self))
         self.decks = QListWidget(self)
@@ -392,6 +395,7 @@ class PolicyEditorDialog(QDialog):
         self._conditions.append(row)
         self.conditions_layout.addWidget(row)
         qconnect(row.remove_button.clicked, lambda: self._remove_condition(row))
+        self._renumber_conditions()
 
     def _remove_condition(self, row: RuleConditionRow) -> None:
         if len(self._conditions) == 1:
@@ -399,6 +403,11 @@ class PolicyEditorDialog(QDialog):
             return
         self._conditions.remove(row)
         row.deleteLater()
+        self._renumber_conditions()
+
+    def _renumber_conditions(self) -> None:
+        for index, row in enumerate(self._conditions, start=1):
+            row.number_label.setText(f"{index}.")
 
     def _update_action_controls(self, _value: object = None) -> None:
         deleting = self.delete.isChecked()
