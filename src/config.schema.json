@@ -61,8 +61,7 @@
           "items": {"type": "string", "minLength": 1}
         },
         "include_subdecks": {"type": "boolean"},
-        "include_suspended": {"type": "boolean"},
-        "include_filtered_decks": {"type": "boolean"}
+        "include_suspended": {"type": "boolean"}
       }
     },
     "rule": {

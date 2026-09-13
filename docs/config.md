@@ -24,8 +24,7 @@ with the single `state` field.
       "scope": {
         "decks": ["Mining"],
         "include_subdecks": true,
-        "include_suspended": false,
-        "include_filtered_decks": false
+        "include_suspended": false
       },
       "rule": {
         "type": "age",
@@ -140,7 +139,7 @@ For example, a stale-new-card rule is:
 
 ## Scope behavior
 
-`decks` must contain one or more exact deck names. `include_subdecks` includes all descendants of each named deck. Suspended cards and cards temporarily in filtered decks are excluded by default. Buried cards remain eligible because burial is temporary.
+`decks` must contain one or more exact deck names. `include_subdecks` includes all descendants of each named deck. Suspended cards are excluded by default. Buried cards remain eligible because burial is temporary.
 
 ## Overlapping policies
 

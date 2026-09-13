@@ -113,7 +113,7 @@ def evaluate_facts(
             continue
         if not policy.scope.include_suspended and card.queue == SUSPENDED_QUEUE:
             continue
-        if not policy.scope.include_filtered_decks and card.is_filtered:
+        if card.is_filtered:
             continue
         in_scope.append(card)
 

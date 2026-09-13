@@ -72,7 +72,6 @@ See [config.md](./docs/config.md) for the complete schema and examples.
 * Tags belong to notes in Anki, so tagging a qualifying card tags its note and any sibling cards
 * First-review age cannot recover review history that was deleted or omitted during import
 * Decks are configured by name, so renamed or missing decks cause the affected policy to fail closed
-* Cards temporarily in filtered decks are excluded by default
 
 ## Development
 

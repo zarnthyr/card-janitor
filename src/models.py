@@ -24,7 +24,6 @@ class Scope:
     decks: tuple[str, ...]
     include_subdecks: bool = True
     include_suspended: bool = False
-    include_filtered_decks: bool = False
 
 
 @dataclass(frozen=True)
@@ -207,7 +206,6 @@ def _parse_scope(value: object, path: str) -> Scope:
         decks=normalized,
         include_subdecks=_bool(value, "include_subdecks", default=True, path=path),
         include_suspended=_bool(value, "include_suspended", default=False, path=path),
-        include_filtered_decks=_bool(value, "include_filtered_decks", default=False, path=path),
     )
 
 
@@ -348,7 +346,6 @@ def policy_to_dict(policy: Policy) -> dict[str, Any]:
             "decks": list(policy.scope.decks),
             "include_subdecks": policy.scope.include_subdecks,
             "include_suspended": policy.scope.include_suspended,
-            "include_filtered_decks": policy.scope.include_filtered_decks,
         },
         "rule": rule_to_dict(policy.rule),
         "actions": [action_to_dict(action) for action in policy.actions],

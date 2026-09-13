@@ -22,11 +22,13 @@ from aqt.qt import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
-    QPlainTextEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QSignalBlocker,
     QSpinBox,
@@ -123,7 +125,6 @@ def _scope_tooltip(scope: Scope) -> str:
             f"Decks: {', '.join(scope.decks)}",
             f"Include subdecks: {'Yes' if scope.include_subdecks else 'No'}",
             f"Include suspended cards: {'Yes' if scope.include_suspended else 'No'}",
-            f"Include filtered decks: {'Yes' if scope.include_filtered_decks else 'No'}",
         )
     )
 
@@ -172,13 +173,17 @@ class RuleConditionRow(QWidget):
         self.kind.addItem("Age", "age")
         self.kind.addItem("Current interval", "interval")
         self.kind.addItem("Still new", "new")
+        self.kind.setMinimumWidth(160)
         self.days = QSpinBox(self)
         self.days.setRange(1, 100000)
         self.days.setSuffix(" days")
+        self.days.setMinimumWidth(110)
         self.source = QComboBox(self)
         self.source.addItem("since first review", "first_review")
         self.source.addItem("since card creation", "card_created")
+        self.source.setMinimumWidth(180)
         self.remove_button = QPushButton("Remove", self)
+        self.remove_button.setMinimumWidth(80)
         for widget in (self.kind, self.days, self.source, self.remove_button):
             layout.addWidget(widget)
         if isinstance(rule, AgeRule):
@@ -198,8 +203,8 @@ class RuleConditionRow(QWidget):
 
     def _update_controls(self, _index: int = 0) -> None:
         kind = self.kind.currentData()
-        self.days.setVisible(kind != "new")
-        self.source.setVisible(kind == "age")
+        self.days.setEnabled(kind != "new")
+        self.source.setEnabled(kind == "age")
 
     def rule(self) -> AgeRule | IntervalRule | NewRule:
         kind = self.kind.currentData()
@@ -221,9 +226,19 @@ class PolicyEditorDialog(QDialog):
         self.resize(650, 680)
         raw = record.raw if record is not None and isinstance(record.raw, dict) else {}
         policy = record.policy if record is not None else None
+        deck_names = [
+            item.name
+            for item in mw.col.decks.all_names_and_ids(
+                skip_empty_default=True,
+                include_filtered=False,
+            )
+        ]
 
         layout = QVBoxLayout(self)
-        form = QFormLayout()
+        layout.setSpacing(12)
+        general_group = QGroupBox("General", self)
+        form = QFormLayout(general_group)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.name = QLineEdit(policy.name if policy else _raw_string(raw, "name"), self)
         form.addRow("Name", self.name)
         self.state = QComboBox(self)
@@ -234,16 +249,25 @@ class PolicyEditorDialog(QDialog):
         index = self.state.findData(state)
         self.state.setCurrentIndex(index if index >= 0 else self.state.findData("manual"))
         form.addRow("Use", self.state)
-        self.decks = QPlainTextEdit(self)
-        self.decks.setPlaceholderText("One deck name per line")
-        self.decks.setMaximumHeight(90)
+        layout.addWidget(general_group)
+
+        scope_group = QGroupBox("Decks", self)
+        scope_layout = QVBoxLayout(scope_group)
+        scope_layout.addWidget(QLabel("Apply this policy to one or more decks:", self))
+        self.decks = QListWidget(self)
+        self.decks.setAlternatingRowColors(True)
+        self.decks.setMinimumHeight(130)
         raw_scope = raw.get("scope") if isinstance(raw.get("scope"), dict) else {}
         deck_values = policy.scope.decks if policy else _raw_string_list(raw_scope, "decks")
-        self.decks.setPlainText("\n".join(deck_values))
-        form.addRow("Decks", self.decks)
+        for deck_name in (*deck_names, *(name for name in deck_values if name not in deck_names)):
+            item = QListWidgetItem(deck_name, self.decks)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(
+                Qt.CheckState.Checked if deck_name in deck_values else Qt.CheckState.Unchecked
+            )
+        scope_layout.addWidget(self.decks)
         self.include_subdecks = QCheckBox("Include subdecks", self)
         self.include_suspended = QCheckBox("Include already suspended cards", self)
-        self.include_filtered = QCheckBox("Include cards in filtered decks", self)
         self.include_subdecks.setChecked(
             policy.scope.include_subdecks
             if policy
@@ -254,20 +278,12 @@ class PolicyEditorDialog(QDialog):
             if policy
             else _raw_bool(raw_scope, "include_suspended", default=False)
         )
-        self.include_filtered.setChecked(
-            policy.scope.include_filtered_decks
-            if policy
-            else _raw_bool(raw_scope, "include_filtered_decks", default=False)
-        )
-        scope_options = QWidget(self)
-        scope_layout = QVBoxLayout(scope_options)
-        scope_layout.setContentsMargins(0, 0, 0, 0)
-        for checkbox in (self.include_subdecks, self.include_suspended, self.include_filtered):
+        for checkbox in (self.include_subdecks, self.include_suspended):
             scope_layout.addWidget(checkbox)
-        form.addRow("Scope options", scope_options)
-        layout.addLayout(form)
+        layout.addWidget(scope_group)
 
-        layout.addWidget(QLabel("Conditions", self))
+        conditions_group = QGroupBox("Conditions", self)
+        conditions_group_layout = QVBoxLayout(conditions_group)
         match_row = QHBoxLayout()
         match_row.addWidget(QLabel("Match", self))
         self.match = QComboBox(self)
@@ -277,9 +293,9 @@ class PolicyEditorDialog(QDialog):
         match_row.addStretch()
         self.add_condition_button = QPushButton("Add Condition", self)
         match_row.addWidget(self.add_condition_button)
-        layout.addLayout(match_row)
+        conditions_group_layout.addLayout(match_row)
         self.conditions_layout = QVBoxLayout()
-        layout.addLayout(self.conditions_layout)
+        conditions_group_layout.addLayout(self.conditions_layout)
         source_rule = policy.rule if policy else _best_effort_rule(raw.get("rule"))
         if isinstance(source_rule, (AllRule, AnyRule)):
             self.match.setCurrentIndex(
@@ -291,15 +307,19 @@ class PolicyEditorDialog(QDialog):
         for rule in rules:
             self._add_condition(rule)
         qconnect(self.add_condition_button.clicked, lambda: self._add_condition(None))
+        layout.addWidget(conditions_group)
 
-        layout.addWidget(QLabel("Actions", self))
+        actions_group = QGroupBox("Actions", self)
+        actions_group_layout = QVBoxLayout(actions_group)
         actions_form = QFormLayout()
         source_actions = policy.actions if policy else _best_effort_actions(raw.get("actions"))
         self.tag_enabled = QCheckBox("Add tag", self)
         self.tag = QLineEdit(self)
         self.suspend = QCheckBox("Suspend cards", self)
         self.move_enabled = QCheckBox("Move to deck", self)
-        self.move_deck = QLineEdit(self)
+        self.move_deck = QComboBox(self)
+        self.move_deck.setEditable(True)
+        self.move_deck.addItems(deck_names)
         self.delete = QCheckBox("Delete cards (and notes left without cards)", self)
         for action in source_actions:
             if isinstance(action, TagAction):
@@ -309,20 +329,21 @@ class PolicyEditorDialog(QDialog):
                 self.suspend.setChecked(True)
             elif isinstance(action, MoveAction):
                 self.move_enabled.setChecked(True)
-                self.move_deck.setText(action.deck)
+                self.move_deck.setCurrentText(action.deck)
             elif isinstance(action, DeleteCardAction):
                 self.delete.setChecked(True)
         actions_form.addRow(self.tag_enabled, self.tag)
         actions_form.addRow(self.suspend)
         actions_form.addRow(self.move_enabled, self.move_deck)
         actions_form.addRow(self.delete)
-        layout.addLayout(actions_form)
+        actions_group_layout.addLayout(actions_form)
         self.delete_warning = QLabel(
             "Automatic deletion is destructive. Anki undo is available only until later changes replace it.",
             self,
         )
         self.delete_warning.setWordWrap(True)
-        layout.addWidget(self.delete_warning)
+        actions_group_layout.addWidget(self.delete_warning)
+        layout.addWidget(actions_group)
         qconnect(self.delete.toggled, self._update_action_controls)
         qconnect(self.state.currentIndexChanged, self._update_action_controls)
         qconnect(self.tag_enabled.toggled, self._update_action_controls)
@@ -361,9 +382,9 @@ class PolicyEditorDialog(QDialog):
     def _accept(self) -> None:  # noqa: PLR0912
         name = self.name.text().strip()
         decks = tuple(
-            dict.fromkeys(
-                line.strip() for line in self.decks.toPlainText().splitlines() if line.strip()
-            )
+            self.decks.item(index).text()
+            for index in range(self.decks.count())
+            if self.decks.item(index).checkState() == Qt.CheckState.Checked
         )
         if not name:
             showWarning("Enter a policy name.", parent=self)
@@ -392,7 +413,7 @@ class PolicyEditorDialog(QDialog):
             if self.suspend.isChecked():
                 actions.append(SuspendAction())
             if self.move_enabled.isChecked():
-                deck = self.move_deck.text().strip()
+                deck = self.move_deck.currentText().strip()
                 if not deck:
                     showWarning("Enter a destination deck or disable the move action.", parent=self)
                     return
@@ -424,7 +445,6 @@ class PolicyEditorDialog(QDialog):
                 decks=decks,
                 include_subdecks=self.include_subdecks.isChecked(),
                 include_suspended=self.include_suspended.isChecked(),
-                include_filtered_decks=self.include_filtered.isChecked(),
             ),
             rule=rule,
             actions=tuple(actions),
@@ -508,7 +528,6 @@ class CardJanitorDialog(QDialog):
         super().__init__(mw)
         self._rows: tuple[DashboardRow, ...] = ()
         self._parsed = parsed
-        self.setWindowFlag(Qt.WindowType.Tool)
         self.setWindowTitle("Card Janitor")
         self.resize(1050, 420)
 
