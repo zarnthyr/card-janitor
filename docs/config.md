@@ -1,46 +1,50 @@
 # Configuration
 
-Policies can be added and edited in the Card Janitor window. The **Advanced Settings…**
-button opens the underlying JSON for add-on-wide options and advanced editing.
+Add and edit policies in the Card Janitor window. Use **Advanced Settings** to
+edit add-on-wide options or the underlying JSON directly.
 
-Invalid configuration fails closed: if any validation error is present, no manual or automatic policy runs. Invalid policy entries remain visible in the manager and can be repaired with **Edit…**. Invalid add-on-wide settings are shown in the manager and can be repaired through **Advanced Settings…**. Deck names are resolved when a policy is evaluated, and a missing or filtered move destination is an error.
+Invalid configuration fails closed: no on-demand or automatic cleanup runs
+while a validation error is present. Invalid policies remain visible in Card
+Janitor and can be repaired with **Edit**. Invalid add-on-wide settings can be
+repaired through **Advanced Settings**.
+
+Deck names are resolved when a policy is evaluated. A missing or filtered move
+destination is an error.
 
 Configuration version 2 replaces the former `enabled` and `mode` policy fields
 with the single `state` field.
 
 ## Mining example
 
-```json
-{
-  "config_version": 2,
-  "automatic_schedule": "daily",
-  "notify_after_automatic_run": true,
-  "debug_logging": false,
-  "policies": [
     {
-      "id": "mining-cleanup",
-      "name": "Mining cleanup",
-      "state": "manual",
-      "scope": {
-        "decks": ["Mining"],
-        "include_subdecks": true,
-        "include_suspended": false
-      },
-      "rule": {
-        "type": "age",
-        "days": 365,
-        "from": "first_review"
-      },
-      "actions": [
-        {"type": "tag", "tag": "retired"},
-        {"type": "suspend"}
+      "config_version": 2,
+      "automatic_schedule": "daily",
+      "notify_after_automatic_run": true,
+      "debug_logging": false,
+      "policies": [
+        {
+          "id": "mining-cleanup",
+          "name": "Mining cleanup",
+          "state": "manual",
+          "scope": {
+            "decks": ["Mining"],
+            "include_subdecks": true,
+            "include_suspended": false
+          },
+          "rule": {
+            "type": "age",
+            "days": 365,
+            "from": "first_review"
+          },
+          "actions": [
+            {"type": "tag", "tag": "retired"},
+            {"type": "suspend"}
+          ]
+        }
       ]
     }
-  ]
-}
-```
 
-Keep `state` set to `manual` while testing. **Card Janitor…** evaluates every
+Keep `state` set to `manual` while testing. **Card Janitor** evaluates every
 configured policy and shows its scope, conditions, actions, and affected-card count.
 Policies in the `manual` or `automatic` state are included by default; disabled
 policies remain available but start unchecked. The checkboxes affect only the
@@ -49,7 +53,7 @@ configured schedule without approval. Each run is recorded in Anki's undo
 history.
 
 The window remains open while you inspect cards. **Browse** opens
-the union from all checked policies. Select a row and use **Edit…** to change
+the union from all checked policies. Select a row and use **Edit** to change
 that policy; **Refresh** recalculates the table. Running an automatic policy
 manually does not alter its next scheduled run.
 
@@ -73,18 +77,15 @@ Set `debug_logging` to `true` to print policy evaluation counts and timing to
 the terminal. Configuration errors and unexpected exceptions are always
 printed, regardless of this setting.
 
-## Rules
+## Conditions
 
 ### Age
 
-```json
-{"type": "age", "days": 365, "from": "first_review"}
-```
+    {"type": "age", "days": 365, "from": "first_review"}
 
 Age uses elapsed 24-hour periods. `first_review` is the earliest review-log entry with a genuine answer rating. Cards without such history do not match. `card_created` uses the creation timestamp embedded in the card ID.
 
-> [!WARNING]
-> `card_created` does not mean "imported into this collection." Imported cards usually
+> **Warning:** `card_created` does not mean "imported into this collection." Imported cards usually
 > retain the source author's card IDs and creation timestamps. A newly imported premade
 > deck may consequently be years old according to this condition and qualify on its
 > first evaluation. Anki does not expose a reliable per-card local-import timestamp.
@@ -97,17 +98,13 @@ tool safely updates all related references.
 
 ### Current interval
 
-```json
-{"type": "interval", "days": 180}
-```
+    {"type": "interval", "days": 180}
 
 Matches cards whose current Anki interval is at least as large as `days`. New cards normally have an interval of zero and do not match.
 
 ### Card state
 
-```json
-{"type": "card_state", "state": "new"}
-```
+    {"type": "card_state", "state": "new"}
 
 Matches cards in the selected Anki state: `new`, `learning`, `review`, or
 `relearning`. This describes the card's current Anki state, not whether it has
@@ -115,9 +112,7 @@ ever been studied.
 
 ### Study status
 
-```json
-{"type": "study_status", "status": "never_studied"}
-```
+    {"type": "study_status", "status": "never_studied"}
 
 `never_studied` matches cards with no genuine answer entry in Anki's review
 log. Unlike the `new` card state, it does not match a previously studied card
@@ -125,15 +120,13 @@ that was later reset to New.
 
 ### Combining conditions
 
-```json
-{
-  "type": "any",
-  "rules": [
-    {"type": "age", "days": 365, "from": "first_review"},
-    {"type": "interval", "days": 180}
-  ]
-}
-```
+    {
+      "type": "any",
+      "rules": [
+        {"type": "age", "days": 365, "from": "first_review"},
+        {"type": "interval", "days": 180}
+      ]
+    }
 
 Use `any` for OR and `all` for AND. Groups must contain at least one condition.
 Composition is deliberately limited to one flat group: every child must be a
@@ -142,15 +135,13 @@ groups are rejected.
 
 For example, the conditions for a stale-new-card policy are:
 
-```json
-{
-  "type": "all",
-  "rules": [
-    {"type": "age", "days": 30, "from": "card_created"},
-    {"type": "study_status", "status": "never_studied"}
-  ]
-}
-```
+    {
+      "type": "all",
+      "rules": [
+        {"type": "age", "days": 30, "from": "card_created"},
+        {"type": "study_status", "status": "never_studied"}
+      ]
+    }
 
 ## Actions
 
