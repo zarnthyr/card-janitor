@@ -612,7 +612,7 @@ class CardJanitorDialog(QDialog):
 
         layout = QVBoxLayout(self)
         intro = QHBoxLayout()
-        intro.addWidget(QLabel("Choose which policies to include in this run.", self))
+        intro.addWidget(QLabel("Choose which policies to run.", self))
         intro.addStretch()
         self.add_button = QPushButton("Add…", self)
         self.edit_button = QPushButton("Edit…", self)
@@ -649,9 +649,9 @@ class CardJanitorDialog(QDialog):
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
         self.settings_button = buttons.addButton(
-            "Settings…",
+            "Advanced Settings…",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
         self.refresh_button = buttons.addButton(
@@ -663,7 +663,7 @@ class CardJanitorDialog(QDialog):
             QDialogButtonBox.ButtonRole.ActionRole,
         )
         self.run_button = buttons.addButton(
-            "Run",
+            "Clean Up",
             QDialogButtonBox.ButtonRole.AcceptRole,
         )
         if isinstance(self.run_button, QPushButton):
@@ -1078,7 +1078,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         if errors:
             error("automatic run evaluation failed", errors=tuple(errors))
             tooltip(
-                "Card Janitor: an automatic policy has errors; see Settings.",
+                "Card Janitor: an automatic policy has errors; see Advanced Settings.",
                 parent=mw,
             )
             return

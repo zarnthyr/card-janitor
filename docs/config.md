@@ -1,9 +1,9 @@
 # Configuration
 
-Policies can be added and edited in the Card Janitor window. The **Settings…**
+Policies can be added and edited in the Card Janitor window. The **Advanced Settings…**
 button opens the underlying JSON for add-on-wide options and advanced editing.
 
-Invalid configuration fails closed: if any validation error is present, no manual or automatic policy runs. Invalid policy entries remain visible in the manager and can be repaired with **Edit…**. Invalid add-on-wide settings are shown in the manager and can be repaired through **Settings…**. Deck names are resolved when a policy is evaluated, and a missing or filtered move destination is an error.
+Invalid configuration fails closed: if any validation error is present, no manual or automatic policy runs. Invalid policy entries remain visible in the manager and can be repaired with **Edit…**. Invalid add-on-wide settings are shown in the manager and can be repaired through **Advanced Settings…**. Deck names are resolved when a policy is evaluated, and a missing or filtered move destination is an error.
 
 Configuration version 2 replaces the former `enabled` and `mode` policy fields
 with the single `state` field.
