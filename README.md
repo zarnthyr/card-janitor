@@ -2,7 +2,7 @@
 
 Configurable automatic retirement policies for Anki cards.
 
-Retires cards according to deck scope, study age, current interval, or answer count, either manually after review in Anki's Browser or automatically when a profile opens.
+Retires cards according to deck scope, study age, current interval, or new-card status, either manually through Anki's Browser or automatically on a configurable schedule.
 
 ## Installation
 
@@ -34,7 +34,7 @@ Then install `card-retirement.ankiaddon` from Anki's add-ons screen or by double
 Each policy has three parts:
 
 * Scope — one or more decks, optionally including subdecks
-* Rule — age, interval, answer count, or an AND/OR composition
+* Rule — age, interval, new-card status, or an AND/OR composition
 * Actions — tag, suspend, move, or delete the qualifying cards
 
 First-review age is derived from genuine answer entries in Anki's review log. Cards without first-review history do not qualify for that rule. Card-creation age is available separately.
@@ -43,10 +43,10 @@ First-review age is derived from genuine answer entries in Anki's review log. Ca
 
 | Mode      | Behavior                                                    |
 | --------- | ----------------------------------------------------------- |
-| Manual    | Does nothing until **Retire Cards…** is selected             |
-| Automatic | Applies configured actions whenever an Anki profile is opened |
+| Manual    | Does nothing until cards are explicitly selected and retired |
+| Automatic | Applies configured actions on the configured schedule        |
 
-Automatic execution does not use background polling. Its completion notification can be disabled independently.
+Automatic execution can run on profile open, daily, or both. Daily execution uses Anki's day-change hook rather than background polling. Its completion notification can be disabled independently.
 
 ## Configuration
 
@@ -56,7 +56,7 @@ Open the JSON settings editor from:
 Tools → Card Retirement → Settings...
 ```
 
-The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and use **Retire Cards…** to inspect the exact candidates in Anki's Browser before enabling automatic execution.
+The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and use **Find Cards to Retire…** to inspect and select candidates in Anki's Browser. Retire the selection from Browser's Cards menu before enabling automatic execution.
 
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
 

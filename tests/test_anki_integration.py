@@ -9,7 +9,7 @@ from anki.collection import Collection
 from aqt.operations import QueryOp
 from card_retirement import ui
 from card_retirement.actions import build_execution_plan, execute_plan
-from card_retirement.evaluator import evaluate_policy
+from card_retirement.evaluator import evaluate_policy, evaluate_selected_cards
 from card_retirement.models import AgeRule, Policy, Scope, SuspendAction, TagAction
 
 
@@ -20,7 +20,7 @@ def test_query_op_requires_constructor_success_callback() -> None:
     assert success.default is inspect.Parameter.empty
 
 
-def test_retire_cards_uses_current_query_op_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_find_cards_uses_current_query_op_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeQueryOp:
         def __init__(self, *, parent: object, op: object, success: object) -> None:
             self.parent = parent
@@ -34,10 +34,10 @@ def test_retire_cards_uses_current_query_op_constructor(monkeypatch: pytest.Monk
 
     created: list[FakeQueryOp] = []
 
-    monkeypatch.setattr(ui, "_choose_configuration", lambda _title: object())
+    monkeypatch.setattr(ui, "_choose_configuration", lambda *_args: object())
     monkeypatch.setattr(ui, "QueryOp", FakeQueryOp)
 
-    ui.retire_cards()
+    ui.find_cards_to_retire()
 
     assert len(created) == 1
     assert callable(created[0].op)
@@ -48,10 +48,11 @@ def test_retire_cards_uses_current_query_op_constructor(monkeypatch: pytest.Monk
 @pytest.mark.parametrize(
     ("notify", "affected", "conflicts", "expected"),
     [
-        (True, 3, 0, "Card Retirement: 3 cards retired automatically."),
+        (True, 1, 0, "Retired 1 card."),
+        (True, 3, 0, "Retired 3 cards."),
         (True, 0, 0, ""),
         (False, 3, 0, ""),
-        (False, 3, 2, "Card Retirement: 2 conflicting cards were skipped."),
+        (False, 3, 2, "2 conflicting cards were skipped."),
     ],
 )
 def test_automatic_completion_message(
@@ -64,6 +65,30 @@ def test_automatic_completion_message(
             conflicts=conflicts,
         )
         == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("schedule", "trigger", "last_day", "expected"),
+    [
+        ("profile_open", "profile_open", None, True),
+        ("profile_open", "day_change", None, False),
+        ("daily", "profile_open", 9, True),
+        ("daily", "profile_open", 10, False),
+        ("daily", "day_change", 9, True),
+        ("profile_open_and_daily", "profile_open", 10, True),
+        ("profile_open_and_daily", "day_change", 10, True),
+    ],
+)
+def test_automatic_schedule(schedule: str, trigger: str, last_day: object, expected: bool) -> None:
+    assert (
+        ui.automatic_run_is_due(
+            schedule,
+            trigger,
+            today=10,
+            last_automatic_day=last_day,
+        )
+        is expected
     )
 
 
@@ -103,7 +128,21 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         )
         report = evaluate_policy(collection, policy, now_ms=first_review + 86_400_000)
         assert [card.card_id for card in report.actionable] == [card_id]
-        assert report.qualifying[0].successful_answers == 1
+
+        selected = evaluate_selected_cards(collection, policy, {card_id})
+        assert [card.card_id for card in selected.actionable] == [card_id]
+
+        manual_override = Policy(
+            id="manual-override",
+            name="Manual override",
+            enabled=True,
+            mode="manual",
+            scope=Scope(("Missing",)),
+            rule=AgeRule(999_999, "card_created"),
+            actions=(SuspendAction(),),
+        )
+        selected = evaluate_selected_cards(collection, manual_override, {card_id})
+        assert [card.card_id for card in selected.actionable] == [card_id]
 
         result = execute_plan(collection, build_execution_plan((report,)), "Retire test card")
         assert result.affected_cards == 1

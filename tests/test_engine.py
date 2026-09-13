@@ -14,6 +14,7 @@ from card_retirement.models import (
     AgeRule,
     AnyRule,
     IntervalRule,
+    NewRule,
     Policy,
     Rule,
     Scope,
@@ -29,11 +30,10 @@ def facts(**overrides: object) -> CardFacts:
         "deck_id": 1,
         "original_deck_id": 0,
         "queue": 2,
+        "card_type": 2,
         "interval": 100,
-        "answer_count": 8,
         "created_at_ms": 1000,
         "first_review_ms": 2000,
-        "successful_answers": 6,
         "tags": frozenset(),
     }
     values.update(overrides)
@@ -74,6 +74,11 @@ def test_any_rule_matches_either_child() -> None:
 
 def test_interval_rule_uses_current_interval_without_requiring_revlog() -> None:
     assert matches_rule(IntervalRule(180), facts(interval=180, first_review_ms=None), 0)
+
+
+def test_new_rule_uses_card_type_even_when_buried() -> None:
+    assert matches_rule(NewRule(), facts(card_type=0, queue=-2), 0)
+    assert not matches_rule(NewRule(), facts(card_type=2), 0)
 
 
 def test_scope_excludes_suspended_and_filtered_by_default() -> None:

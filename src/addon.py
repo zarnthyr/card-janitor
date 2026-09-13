@@ -38,12 +38,20 @@ def _replace_hook(hook: object, callback: object) -> None:
 def on_profile_loaded() -> None:
     try:
         safe_install_menu()
-        run_automatic_policies()
+        run_automatic_policies(trigger="profile_open")
     except Exception:
         exception("profile-open callback failed")
 
 
+def on_day_changed() -> None:
+    try:
+        run_automatic_policies(trigger="day_change")
+    except Exception:
+        exception("day-change callback failed")
+
+
 def register_addon() -> None:
     _replace_hook(gui_hooks.profile_did_open, on_profile_loaded)
+    _replace_hook(gui_hooks.day_did_change, on_day_changed)
     _replace_hook(gui_hooks.browser_menus_did_init, install_browser_menu)
     _replace_hook(gui_hooks.browser_will_show_context_menu, add_browser_context_action)

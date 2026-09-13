@@ -14,7 +14,7 @@ from card_retirement.models import (
 
 
 def card(card_id: int = 1) -> CardFacts:
-    return CardFacts(card_id, 10, 1, 0, 2, 100, 4, 1000, 2000, 3, frozenset())
+    return CardFacts(card_id, 10, 1, 0, 2, 2, 100, 1000, 2000, frozenset())
 
 
 def report(actions: tuple[ResolvedAction, ...], value: CardFacts | None = None) -> PolicyReport:

@@ -4,6 +4,7 @@
   "additionalProperties": false,
   "required": [
     "config_version",
+    "automatic_schedule",
     "notify_after_automatic_retirement",
     "debug_logging",
     "policies"
@@ -11,6 +12,10 @@
   "properties": {
     "config_version": {
       "const": 1
+    },
+    "automatic_schedule": {
+      "enum": ["profile_open", "daily", "profile_open_and_daily"],
+      "description": "When automatic retirement configurations are evaluated"
     },
     "notify_after_automatic_retirement": {
       "type": "boolean",
@@ -85,10 +90,9 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "count"],
+          "required": ["type"],
           "properties": {
-            "type": {"enum": ["successful_answers", "answer_count"]},
-            "count": {"type": "integer", "minimum": 1}
+            "type": {"const": "new"}
           }
         },
         {

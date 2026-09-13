@@ -9,6 +9,7 @@ Invalid configuration fails closed: if any validation error is present, no manua
 ```json
 {
   "config_version": 1,
+  "automatic_schedule": "daily",
   "notify_after_automatic_retirement": true,
   "debug_logging": false,
   "policies": [
@@ -37,10 +38,18 @@ Invalid configuration fails closed: if any validation error is present, no manua
 }
 ```
 
-Keep `mode` set to `manual` while testing. **Retire Cards…** opens candidates
-in Anki's Browser, where the retirement action can be confirmed. Change the
-mode to `automatic` to perform the configured actions whenever a profile opens.
-An automatic deletion policy runs without confirmation.
+Keep `mode` set to `manual` while testing. **Find Cards to Retire…** opens and
+selects candidates in Anki's Browser. **Cards → Retire Selected Cards…** applies
+the configured actions to the selection without reapplying the policy's scope
+or rule. Change the mode to `automatic` to apply scope, rule, and actions on the
+configured schedule. Like Anki's own Browser deletion, retirement does not ask
+for confirmation and is recorded in Anki's undo history.
+
+`automatic_schedule` supports:
+
+- `profile_open` — run whenever the profile opens
+- `daily` — run at most once per Anki day, on profile opening or day change
+- `profile_open_and_daily` — run on every profile opening and day change
 
 Set `notify_after_automatic_retirement` to `false` to suppress successful
 automatic-retirement summaries. No summary is shown when no cards were changed.
@@ -68,21 +77,14 @@ Age uses elapsed 24-hour periods. `first_review` is the earliest review-log entr
 
 Matches cards whose current Anki interval is at least as large as `days`. New cards normally have an interval of zero and do not match.
 
-### Successful answers
+### New cards
 
 ```json
-{"type": "successful_answers", "count": 10}
+{"type": "new"}
 ```
 
-Counts genuine Hard, Good, and Easy answers in learning, review, relearning, and filtered-deck study. Manual scheduling entries are excluded.
-
-### Answer count
-
-```json
-{"type": "answer_count", "count": 10}
-```
-
-Uses Anki's current card repetition counter. Unlike review-log history, this counter can be reset by some scheduling operations.
+Matches cards whose Anki card type is still new. Combine this with card-creation
+age to retire cards that were added but not learned within a desired period.
 
 ### Compound rules
 
@@ -97,6 +99,18 @@ Uses Anki's current card repetition counter. Unlike review-log history, this cou
 ```
 
 Use `any` for OR and `all` for AND. Groups must contain at least one rule.
+
+For example, a stale-new-card rule is:
+
+```json
+{
+  "type": "all",
+  "rules": [
+    {"type": "age", "days": 30, "from": "card_created"},
+    {"type": "new"}
+  ]
+}
+```
 
 ## Actions
 

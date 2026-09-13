@@ -6,7 +6,7 @@ from card_retirement.models import (
     AllRule,
     DeleteCardAction,
     MoveAction,
-    SuccessfulAnswersRule,
+    NewRule,
     parse_config,
 )
 
@@ -24,6 +24,7 @@ def policy_config(**overrides: object) -> dict:
     policy.update(overrides)
     return {
         "config_version": 1,
+        "automatic_schedule": "daily",
         "notify_after_automatic_retirement": True,
         "debug_logging": False,
         "policies": [policy],
@@ -36,7 +37,7 @@ def test_parses_nested_policy() -> None:
             "type": "all",
             "rules": [
                 {"type": "age", "days": 365, "from": "first_review"},
-                {"type": "successful_answers", "count": 5},
+                {"type": "new"},
             ],
         }
     )
@@ -46,7 +47,7 @@ def test_parses_nested_policy() -> None:
     assert isinstance(rule, AllRule)
     assert rule.rules == (
         AgeRule(days=365, source="first_review"),
-        SuccessfulAnswersRule(count=5),
+        NewRule(),
     )
 
 
@@ -105,3 +106,18 @@ def test_notify_is_not_a_policy_mode() -> None:
     parsed = parse_config(policy_config(mode="notify"))
     assert str(parsed.issues[0]) == "policies[0].mode: must be 'manual' or 'automatic'"
     assert not parsed.config.policies
+
+
+def test_automatic_schedule_is_validated() -> None:
+    raw = policy_config()
+    raw["automatic_schedule"] = "hourly"
+    parsed = parse_config(raw)
+    assert str(parsed.issues[0]).startswith("automatic_schedule:")
+    assert parsed.config.automatic_schedule == "daily"
+
+
+def test_removed_answer_rules_are_rejected() -> None:
+    for rule_type in ("answer_count", "successful_answers"):
+        parsed = parse_config(policy_config(rule={"type": rule_type, "count": 3}))
+        assert "unknown rule type" in str(parsed.issues[0])
+        assert not parsed.config.policies

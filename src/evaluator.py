@@ -6,7 +6,13 @@ from __future__ import annotations
 from time import perf_counter
 from typing import TYPE_CHECKING
 
-from .engine import CardFacts, PolicyReport, ResolvedAction, evaluate_facts
+from .engine import (
+    CardFacts,
+    PolicyReport,
+    ResolvedAction,
+    action_is_satisfied,
+    evaluate_facts,
+)
 from .log import debug
 from .models import MoveAction, Policy
 
@@ -50,11 +56,11 @@ def _resolve_actions(
     return tuple(resolved), errors
 
 
-def _load_facts(col: Collection, deck_ids: set[int]) -> list[CardFacts]:
-    if not deck_ids:
+def _load_facts_where(col: Collection, column: str, values: set[int]) -> list[CardFacts]:
+    if not values:
         return []
-    placeholders = ",".join("?" for _ in deck_ids)
-    ordered_ids = sorted(deck_ids)
+    placeholders = ",".join("?" for _ in values)
+    ordered_values = sorted(values)
     rows = col.db.all(
         f"""
 select
@@ -63,18 +69,17 @@ select
     c.did,
     c.odid,
     c.queue,
+    c.type,
     c.ivl,
-    c.reps,
     n.tags,
-    min(case when r.ease between 1 and 4 then r.id end) as first_review,
-    sum(case when r.ease between 2 and 4 then 1 else 0 end) as successful_answers
+    min(case when r.ease between 1 and 4 then r.id end) as first_review
 from cards c
 join notes n on n.id = c.nid
 left join revlog r on r.cid = c.id
-where (case when c.odid != 0 then c.odid else c.did end) in ({placeholders})
+where {column} in ({placeholders})
 group by c.id
 """,
-        *ordered_ids,
+        *ordered_values,
     )
     return [
         CardFacts(
@@ -83,15 +88,26 @@ group by c.id
             deck_id=int(row[2]),
             original_deck_id=int(row[3]),
             queue=int(row[4]),
-            interval=int(row[5]),
-            answer_count=int(row[6]),
+            card_type=int(row[5]),
+            interval=int(row[6]),
             tags=frozenset(tag.casefold() for tag in str(row[7]).split()),
             created_at_ms=int(row[0]),
             first_review_ms=int(row[8]) if row[8] is not None else None,
-            successful_answers=int(row[9] or 0),
         )
         for row in rows
     ]
+
+
+def _load_deck_facts(col: Collection, deck_ids: set[int]) -> list[CardFacts]:
+    return _load_facts_where(
+        col,
+        "(case when c.odid != 0 then c.odid else c.did end)",
+        deck_ids,
+    )
+
+
+def _load_selected_facts(col: Collection, card_ids: set[int]) -> list[CardFacts]:
+    return _load_facts_where(col, "c.id", card_ids)
 
 
 def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = None) -> PolicyReport:
@@ -115,7 +131,7 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
             elapsed_ms=round((perf_counter() - started) * 1000, 2),
         )
         return report
-    facts = _load_facts(col, deck_ids)
+    facts = _load_deck_facts(col, deck_ids)
     report = evaluate_facts(
         policy,
         facts,
@@ -131,6 +147,29 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
         qualifying_cards=len(report.qualifying),
         actionable_cards=len(report.actionable),
         missing_first_review=report.missing_first_review,
+        elapsed_ms=round((perf_counter() - started) * 1000, 2),
+    )
+    return report
+
+
+def evaluate_selected_cards(col: Collection, policy: Policy, card_ids: set[int]) -> PolicyReport:
+    started = perf_counter()
+    resolved_actions, errors = _resolve_actions(col, policy)
+    if errors:
+        return PolicyReport(policy, (), (), 0, resolved_actions, tuple(errors))
+    facts = tuple(_load_selected_facts(col, card_ids))
+    actionable = tuple(
+        card
+        for card in facts
+        if any(not action_is_satisfied(action, card) for action in resolved_actions)
+    )
+    report = PolicyReport(policy, facts, actionable, 0, resolved_actions)
+    debug(
+        "selected cards evaluated",
+        configuration_id=policy.id,
+        selected_cards=len(card_ids),
+        existing_cards=len(facts),
+        actionable_cards=len(actionable),
         elapsed_ms=round((perf_counter() - started) * 1000, 2),
     )
     return report

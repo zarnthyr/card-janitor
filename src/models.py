@@ -37,13 +37,8 @@ class IntervalRule:
 
 
 @dataclass(frozen=True)
-class SuccessfulAnswersRule:
-    count: int
-
-
-@dataclass(frozen=True)
-class AnswerCountRule:
-    count: int
+class NewRule:
+    pass
 
 
 @dataclass(frozen=True)
@@ -56,9 +51,7 @@ class AnyRule:
     rules: tuple[Rule, ...]
 
 
-Rule: TypeAlias = (
-    AgeRule | IntervalRule | SuccessfulAnswersRule | AnswerCountRule | AllRule | AnyRule
-)
+Rule: TypeAlias = AgeRule | IntervalRule | NewRule | AllRule | AnyRule
 
 
 @dataclass(frozen=True)
@@ -83,6 +76,7 @@ class DeleteCardAction:
 
 Action: TypeAlias = TagAction | SuspendAction | MoveAction | DeleteCardAction
 PolicyMode: TypeAlias = Literal["manual", "automatic"]
+AutomaticSchedule: TypeAlias = Literal["profile_open", "daily", "profile_open_and_daily"]
 
 
 @dataclass(frozen=True)
@@ -99,6 +93,7 @@ class Policy:
 @dataclass(frozen=True)
 class AddonConfig:
     config_version: int
+    automatic_schedule: AutomaticSchedule
     notify_after_automatic_retirement: bool
     debug_logging: bool
     policies: tuple[Policy, ...]
@@ -147,10 +142,8 @@ def _parse_rule(value: object, path: str) -> Rule:
         return AgeRule(days=days, source=source)
     if rule_type == "interval":
         return IntervalRule(days=_positive_int(value, "days", path))
-    if rule_type == "successful_answers":
-        return SuccessfulAnswersRule(count=_positive_int(value, "count", path))
-    if rule_type == "answer_count":
-        return AnswerCountRule(count=_positive_int(value, "count", path))
+    if rule_type == "new":
+        return NewRule()
     if rule_type in {"all", "any"}:
         children = value.get("rules")
         if not isinstance(children, list) or not children:
@@ -238,6 +231,16 @@ def parse_config(value: object) -> ParsedConfig:
         issues.append(ConfigIssue("config_version", "must be 1"))
         version = 1
 
+    schedule = value.get("automatic_schedule", "daily")
+    if schedule not in {"profile_open", "daily", "profile_open_and_daily"}:
+        issues.append(
+            ConfigIssue(
+                "automatic_schedule",
+                "must be 'profile_open', 'daily', or 'profile_open_and_daily'",
+            )
+        )
+        schedule = "daily"
+
     notify = value.get("notify_after_automatic_retirement", True)
     if not isinstance(notify, bool):
         issues.append(ConfigIssue("notify_after_automatic_retirement", "must be a boolean"))
@@ -271,6 +274,7 @@ def parse_config(value: object) -> ParsedConfig:
     return ParsedConfig(
         config=AddonConfig(
             config_version=1,
+            automatic_schedule=schedule,
             notify_after_automatic_retirement=notify,
             debug_logging=debug_logging,
             policies=tuple(policies),

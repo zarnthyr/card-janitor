@@ -10,14 +10,13 @@ from .models import (
     Action,
     AgeRule,
     AllRule,
-    AnswerCountRule,
     AnyRule,
     DeleteCardAction,
     IntervalRule,
     MoveAction,
+    NewRule,
     Policy,
     Rule,
-    SuccessfulAnswersRule,
     SuspendAction,
     TagAction,
 )
@@ -33,11 +32,10 @@ class CardFacts:
     deck_id: int
     original_deck_id: int
     queue: int
+    card_type: int
     interval: int
-    answer_count: int
     created_at_ms: int
     first_review_ms: int | None
-    successful_answers: int
     tags: frozenset[str]
 
     @property
@@ -71,10 +69,8 @@ def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:
         return timestamp is not None and now_ms - timestamp >= rule.days * MILLIS_PER_DAY
     if isinstance(rule, IntervalRule):
         return card.interval >= rule.days
-    if isinstance(rule, SuccessfulAnswersRule):
-        return card.successful_answers >= rule.count
-    if isinstance(rule, AnswerCountRule):
-        return card.answer_count >= rule.count
+    if isinstance(rule, NewRule):
+        return card.card_type == 0
     if isinstance(rule, AllRule):
         return all(matches_rule(child, card, now_ms) for child in rule.rules)
     if isinstance(rule, AnyRule):
