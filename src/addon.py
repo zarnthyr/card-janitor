@@ -8,7 +8,7 @@ import contextlib
 from aqt import gui_hooks
 
 from .log import exception
-from .ui import run_automatic_policies, safe_install_menu
+from .ui import close_card_janitor, run_automatic_policies, safe_install_menu
 
 
 def _callback_key(callback: object) -> tuple[object, object]:
@@ -48,3 +48,4 @@ def on_day_changed() -> None:
 def register_addon() -> None:
     _replace_hook(gui_hooks.profile_did_open, on_profile_loaded)
     _replace_hook(gui_hooks.day_did_change, on_day_changed)
+    _replace_hook(gui_hooks.profile_will_close, close_card_janitor)

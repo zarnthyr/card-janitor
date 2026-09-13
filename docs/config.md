@@ -1,8 +1,9 @@
 # Configuration
 
-Card Janitor is configured as JSON from the **Settings…** button in its dashboard.
+Policies can be added and edited in the Card Janitor window. The **Settings…**
+button opens the underlying JSON for add-on-wide options and advanced editing.
 
-Invalid configuration fails closed: if any validation error is present, no manual or automatic policy runs. Deck names are resolved when a policy is evaluated, and a missing or filtered move destination is an error.
+Invalid configuration fails closed: if any validation error is present, no manual or automatic policy runs. Invalid policy entries remain visible in the manager and can be repaired with **Edit…**. Invalid add-on-wide settings are shown in the manager and can be repaired through **Settings…**. Deck names are resolved when a policy is evaluated, and a missing or filtered move destination is an error.
 
 Configuration version 2 replaces the former `enabled` and `mode` policy fields
 with the single `state` field.
@@ -48,10 +49,10 @@ current run. Change the state to `automatic` to also run a policy on the
 configured schedule without approval. Each run is recorded in Anki's undo
 history.
 
-The dialog remains open while you inspect cards. **View Included Cards** opens
-the union from all checked policies; double-click a row to open only that
-policy's cards. **Refresh** recalculates the table. Running an automatic policy
-manually does not alter its next scheduled run.
+The window remains open while you inspect cards. **View Included Cards** opens
+the union from all checked policies. Double-clicking a row edits that policy;
+**Refresh** recalculates the table. Running an automatic policy manually does
+not alter its next scheduled run.
 
 Policy states are:
 
@@ -113,6 +114,8 @@ age to remove cards that were added but not learned within a desired period.
 ```
 
 Use `any` for OR and `all` for AND. Groups must contain at least one rule.
+Composition is deliberately limited to one flat group: every child must be an
+age, interval, or new-card rule. Nested AND/OR groups are rejected.
 
 For example, a stale-new-card rule is:
 

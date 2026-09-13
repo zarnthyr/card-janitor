@@ -104,6 +104,19 @@ class AddonConfig:
 class ParsedConfig:
     config: AddonConfig
     issues: tuple[ConfigIssue, ...]
+    policy_records: tuple[PolicyRecord, ...]
+
+
+@dataclass(frozen=True)
+class PolicyRecord:
+    index: int
+    raw: object
+    policy: Policy | None
+    issues: tuple[ConfigIssue, ...]
+
+    @property
+    def key(self) -> str:
+        return self.policy.id if self.policy is not None else f"invalid:{self.index}"
 
 
 def _is_int(value: object) -> bool:
@@ -131,7 +144,7 @@ def _positive_int(data: dict[str, Any], key: str, path: str) -> int:
     return value
 
 
-def _parse_rule(value: object, path: str) -> Rule:
+def _parse_simple_rule(value: object, path: str) -> AgeRule | IntervalRule | NewRule:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     rule_type = value.get("type")
@@ -146,14 +159,24 @@ def _parse_rule(value: object, path: str) -> Rule:
     if rule_type == "new":
         return NewRule()
     if rule_type in {"all", "any"}:
+        raise ValueError(f"{path}.type: compound rules cannot be nested")
+    raise ValueError(f"{path}.type: unknown rule type {rule_type!r}")
+
+
+def _parse_rule(value: object, path: str) -> Rule:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: must be an object")
+    rule_type = value.get("type")
+    if rule_type in {"all", "any"}:
         children = value.get("rules")
         if not isinstance(children, list) or not children:
             raise ValueError(f"{path}.rules: must be a non-empty array")
         rules = tuple(
-            _parse_rule(child, f"{path}.rules[{index}]") for index, child in enumerate(children)
+            _parse_simple_rule(child, f"{path}.rules[{index}]")
+            for index, child in enumerate(children)
         )
         return AllRule(rules) if rule_type == "all" else AnyRule(rules)
-    raise ValueError(f"{path}.type: unknown rule type {rule_type!r}")
+    return _parse_simple_rule(value, path)
 
 
 def _parse_action(value: object, path: str) -> Action:
@@ -188,7 +211,7 @@ def _parse_scope(value: object, path: str) -> Scope:
     )
 
 
-def _parse_policy(value: object, index: int) -> Policy:
+def parse_policy(value: object, index: int = 0) -> Policy:
     path = f"policies[{index}]"
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
@@ -258,19 +281,23 @@ def parse_config(value: object) -> ParsedConfig:
         raw_policies = []
 
     policies: list[Policy] = []
+    records: list[PolicyRecord] = []
     ids: set[str] = set()
     for index, raw_policy in enumerate(raw_policies):
         try:
-            policy = _parse_policy(raw_policy, index)
+            policy = parse_policy(raw_policy, index)
             normalized_id = policy.id.casefold()
             if normalized_id in ids:
                 raise ValueError(f"policies[{index}].id: duplicate policy id {policy.id!r}")
             ids.add(normalized_id)
             policies.append(policy)
+            records.append(PolicyRecord(index, raw_policy, policy, ()))
         except ValueError as error:
             message = str(error)
             issue_path, separator, detail = message.partition(": ")
-            issues.append(ConfigIssue(issue_path, detail if separator else message))
+            issue = ConfigIssue(issue_path, detail if separator else message)
+            issues.append(issue)
+            records.append(PolicyRecord(index, raw_policy, None, (issue,)))
 
     return ParsedConfig(
         config=AddonConfig(
@@ -281,4 +308,48 @@ def parse_config(value: object) -> ParsedConfig:
             policies=tuple(policies),
         ),
         issues=tuple(issues),
+        policy_records=tuple(records),
     )
+
+
+def rule_to_dict(rule: Rule) -> dict[str, Any]:
+    if isinstance(rule, AgeRule):
+        return {"type": "age", "days": rule.days, "from": rule.source}
+    if isinstance(rule, IntervalRule):
+        return {"type": "interval", "days": rule.days}
+    if isinstance(rule, NewRule):
+        return {"type": "new"}
+    if isinstance(rule, (AllRule, AnyRule)):
+        return {
+            "type": "all" if isinstance(rule, AllRule) else "any",
+            "rules": [rule_to_dict(child) for child in rule.rules],
+        }
+    raise AssertionError(f"unknown rule: {rule!r}")
+
+
+def action_to_dict(action: Action) -> dict[str, Any]:
+    if isinstance(action, TagAction):
+        return {"type": "tag", "tag": action.tag}
+    if isinstance(action, SuspendAction):
+        return {"type": "suspend"}
+    if isinstance(action, MoveAction):
+        return {"type": "move", "deck": action.deck}
+    if isinstance(action, DeleteCardAction):
+        return {"type": "delete_card"}
+    raise AssertionError(f"unknown action: {action!r}")
+
+
+def policy_to_dict(policy: Policy) -> dict[str, Any]:
+    return {
+        "id": policy.id,
+        "name": policy.name,
+        "state": policy.state,
+        "scope": {
+            "decks": list(policy.scope.decks),
+            "include_subdecks": policy.scope.include_subdecks,
+            "include_suspended": policy.scope.include_suspended,
+            "include_filtered_decks": policy.scope.include_filtered_decks,
+        },
+        "rule": rule_to_dict(policy.rule),
+        "actions": [action_to_dict(action) for action in policy.actions],
+    }

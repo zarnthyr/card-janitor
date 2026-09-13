@@ -42,7 +42,8 @@ def test_dashboard_uses_current_query_op_constructor(
     disabled = SimpleNamespace(state="disabled")
     parsed = SimpleNamespace(config=SimpleNamespace(policies=(manual, automatic, disabled)))
     evaluated: list[tuple[object, tuple[object, ...]]] = []
-    monkeypatch.setattr(ui, "_load_for_operation", lambda: parsed)
+    monkeypatch.setattr(ui, "mw", SimpleNamespace(col="current collection"))
+    monkeypatch.setattr(ui, "_load_configured", lambda: parsed)
     monkeypatch.setattr(
         ui,
         "evaluate_policies",

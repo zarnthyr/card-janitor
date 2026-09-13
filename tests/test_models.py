@@ -8,6 +8,7 @@ from card_janitor.models import (
     MoveAction,
     NewRule,
     parse_config,
+    policy_to_dict,
 )
 
 
@@ -30,7 +31,7 @@ def policy_config(**overrides: object) -> dict:
     }
 
 
-def test_parses_nested_policy() -> None:
+def test_parses_flat_compound_policy() -> None:
     raw = policy_config(
         rule={
             "type": "all",
@@ -48,6 +49,27 @@ def test_parses_nested_policy() -> None:
         AgeRule(days=365, source="first_review"),
         NewRule(),
     )
+
+
+def test_rejects_nested_compound_policy() -> None:
+    raw = policy_config(
+        rule={
+            "type": "all",
+            "rules": [
+                {
+                    "type": "any",
+                    "rules": [
+                        {"type": "new"},
+                        {"type": "interval", "days": 180},
+                    ],
+                }
+            ],
+        }
+    )
+    parsed = parse_config(raw)
+    assert "compound rules cannot be nested" in str(parsed.issues[0])
+    assert parsed.policy_records[0].policy is None
+    assert parsed.policy_records[0].raw is raw["policies"][0]
 
 
 def test_invalid_policy_is_omitted() -> None:
@@ -143,3 +165,11 @@ def test_removed_answer_rules_are_rejected() -> None:
         parsed = parse_config(policy_config(rule={"type": rule_type, "count": 3}))
         assert "unknown rule type" in str(parsed.issues[0])
         assert not parsed.config.policies
+
+
+def test_serialized_policy_round_trips() -> None:
+    parsed = parse_config(policy_config())
+    policy = parsed.config.policies[0]
+    round_tripped = parse_config({**policy_config(), "policies": [policy_to_dict(policy)]})
+    assert not round_tripped.issues
+    assert round_tripped.config.policies == (policy,)
