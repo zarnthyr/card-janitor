@@ -622,7 +622,7 @@ class CardJanitorDialog(QDialog):
 
         self.table = QTableWidget(0, 7, self)
         self.table.setHorizontalHeaderLabels(
-            ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "Affected")
+            ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "Cards")
         )
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -799,7 +799,7 @@ class CardJanitorDialog(QDialog):
         candidate_ids = set(match_counts)
         overlap_count = sum(count > 1 for count in match_counts.values())
         plan = build_execution_plan(reports)
-        messages = [f"{_card_count_text(plan.card_count).capitalize()} would be affected."]
+        messages = [f"{_card_count_text(plan.card_count).capitalize()} would be cleaned up."]
         if overlap_count:
             overlap_verb = "matches" if overlap_count == 1 else "match"
             messages.append(

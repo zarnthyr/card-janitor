@@ -45,7 +45,8 @@ with the single `state` field.
     }
 
 Keep `state` set to `manual` while testing. **Card Janitor** evaluates every
-configured policy and shows its scope, conditions, actions, and affected-card count.
+configured policy and shows its scope, conditions, actions, and the number of
+cards it would clean up.
 Policies in the `manual` or `automatic` state are included by default; disabled
 policies remain available but start unchecked. The checkboxes affect only the
 current run. Change the state to `automatic` to also run a policy on the
