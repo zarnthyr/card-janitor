@@ -38,12 +38,12 @@ Invalid configuration fails closed: if any validation error is present, no manua
 }
 ```
 
-Keep `mode` set to `manual` while testing. **Find Cards to Retire…** filters
-Anki's Browser to the candidates. Select all or a subset, then use **Cards →
-Retire Selected Cards** to apply the configured actions without reapplying the
-policy's scope or rule. Change the mode to `automatic` to apply scope, rule, and
-actions on the configured schedule. Like Anki's own Browser deletion,
-retirement does not ask for confirmation and is recorded in Anki's undo history.
+Keep `mode` set to `manual` while testing. **Retire Cards…** evaluates every
+enabled manual policy and previews the cards and actions. From the preview you
+can inspect all candidates in Anki's Browser, cancel, or retire them. Change the
+mode to `automatic` to run the same policy evaluation and actions on the
+configured schedule without approval. Retirement is recorded in Anki's undo
+history.
 
 `automatic_schedule` supports:
 
@@ -119,7 +119,7 @@ For example, a stale-new-card rule is:
 - `{"type": "move", "deck": "Retired"}` moves the card to an existing normal deck.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
 
-`delete_card` must be the policy's only action. It can use `mode: "automatic"`, but automatic deletion runs without confirmation. The shipped configuration contains no policies, and the Mining example uses `mode: "manual"` with tag and suspend actions.
+`delete_card` must be the policy's only action. It can use `mode: "automatic"`, but automatic deletion runs without confirmation. Manual deletion is shown in the retirement preview before execution. The shipped configuration contains no policies, and the Mining example uses `mode: "manual"` with tag and suspend actions.
 
 ## Scope behavior
 
@@ -127,4 +127,4 @@ For example, a stale-new-card rule is:
 
 ## Overlapping policies
 
-Compatible actions are merged and deduplicated during automatic execution. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
+Compatible actions are merged and deduplicated during manual and automatic execution. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.

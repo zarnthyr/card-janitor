@@ -2,7 +2,7 @@
 
 Configurable automatic retirement policies for Anki cards.
 
-Retires cards according to deck scope, study age, current interval, or new-card status, either manually through Anki's Browser or automatically on a configurable schedule.
+Retires cards according to deck scope, study age, current interval, or new-card status, either after manual preview and approval or automatically on a configurable schedule.
 
 ## Installation
 
@@ -41,10 +41,10 @@ First-review age is derived from genuine answer entries in Anki's review log. Ca
 
 ## Execution Modes
 
-| Mode      | Behavior                                                    |
-| --------- | ----------------------------------------------------------- |
-| Manual    | Does nothing until cards are explicitly selected and retired |
-| Automatic | Applies configured actions on the configured schedule        |
+| Mode      | Behavior                                                        |
+| --------- | --------------------------------------------------------------- |
+| Manual    | Previews matching cards and waits for approval before retiring   |
+| Automatic | Applies the same policy evaluation on the configured schedule    |
 
 Automatic execution can run on profile open, daily, or both. Daily execution uses Anki's day-change hook rather than background polling. Its completion notification can be disabled independently.
 
@@ -56,7 +56,7 @@ Open the JSON settings editor from:
 Tools → Card Retirement → Settings...
 ```
 
-The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and use **Find Cards to Retire…** to inspect and select candidates in Anki's Browser. Retire the selection from Browser's Cards menu before enabling automatic execution.
+The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and use **Retire Cards…** to preview its results. The preview can open all candidates in Anki's Browser or apply the configured actions after approval.
 
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
 

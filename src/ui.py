@@ -12,28 +12,35 @@ from anki.collection import SearchNode
 from aqt import mw
 from aqt.addons import ConfigEditor
 from aqt.operations import CollectionOp, QueryOp
-from aqt.qt import QAction, QDialog, QInputDialog, QMenu, qconnect
+from aqt.qt import (
+    QAction,
+    QDialog,
+    QDialogButtonBox,
+    QLabel,
+    QMenu,
+    QPushButton,
+    QVBoxLayout,
+    qconnect,
+)
 from aqt.utils import showInfo, showWarning, tooltip
 
 from .actions import ExecutionResult, build_execution_plan, execute_plan
 from .configuration import ADDON_MODULE, load_config, load_raw_config
-from .evaluator import evaluate_policies, evaluate_policy, evaluate_selected_cards
+from .evaluator import evaluate_policies
 from .log import configure as configure_logging
 from .log import debug, error, exception
+from .models import DeleteCardAction, MoveAction, SuspendAction, TagAction
 
 if TYPE_CHECKING:
     from anki.collection import Collection
-    from aqt.browser import Browser
 
     from .engine import PolicyReport
-    from .models import AutomaticSchedule, ParsedConfig, Policy
+    from .models import Action, AutomaticSchedule, ParsedConfig
 
 AutomaticTrigger = Literal["profile_open", "day_change"]
 
 MENU_ATTR = "_card_retirement_menu"
 CONFIG_EDITOR_ATTR = "_card_retirement_config_editor"
-BROWSER_RETIRE_ACTION_ATTR = "_card_retirement_retire_action"
-BROWSER_CONFIGURATION_ATTR = "_card_retirement_configuration_id"
 LAST_AUTOMATIC_DAY_PROFILE_KEY = "card_retirement_last_automatic_day"
 
 
@@ -57,51 +64,80 @@ def _load_for_operation(parent: object = mw) -> ParsedConfig | None:
     return parsed
 
 
-def _choose_configuration(title: str, parent: object = mw) -> Policy | None:
-    parsed = _load_for_operation(parent)
-    if parsed is None:
-        return None
-    policies = [policy for policy in parsed.config.policies if policy.enabled]
-    if not policies:
-        showInfo("There are no enabled retirement configurations.", parent=parent)
-        return None
-    if len(policies) == 1:
-        return policies[0]
-    labels = [policy.name for policy in policies]
-    selected, accepted = QInputDialog.getItem(
-        parent,
-        title,
-        "Retirement configuration:",
-        labels,
-        current=0,
-        editable=False,
-    )
-    if not accepted:
-        return None
-    return policies[labels.index(selected)]
+def _describe_action(action: Action) -> str:
+    if isinstance(action, TagAction):
+        return f"Add the tag {action.tag!r} to notes"
+    if isinstance(action, SuspendAction):
+        return "Suspend cards"
+    if isinstance(action, MoveAction):
+        return f"Move cards to the {action.deck!r} deck"
+    if isinstance(action, DeleteCardAction):
+        return "Delete cards and any notes left without cards"
+    message = f"unknown retirement action: {action!r}"
+    raise AssertionError(message)
 
 
-def _configuration_for_browser(browser: Browser) -> Policy | None:
-    configuration_id = getattr(browser, BROWSER_CONFIGURATION_ATTR, None)
-    if isinstance(configuration_id, str):
-        parsed = _load_for_operation(browser)
-        if parsed is None:
-            return None
-        for policy in parsed.config.policies:
-            if policy.enabled and policy.id == configuration_id:
-                return policy
-    return _choose_configuration("Retire Selected Cards", browser)
+class ManualRetirementDialog(QDialog):
+    def __init__(
+        self,
+        reports: tuple[PolicyReport, ...],
+        affected_cards: int,
+        conflicts: int,
+    ) -> None:
+        super().__init__(mw)
+        self.choice: Literal["browse", "retire"] | None = None
+        self.setWindowTitle("Retire Cards")
+        self.setMinimumWidth(480)
 
+        layout = QVBoxLayout(self)
+        summary = QLabel(
+            f"{_card_count_text(affected_cards).capitalize()} would be retired.",
+            self,
+        )
+        layout.addWidget(summary)
 
-def _show_report_error(report: PolicyReport, parent: object = mw) -> bool:
-    if not report.errors:
-        return False
-    details = "\n".join(f"• {item}" for item in report.errors)
-    showWarning(
-        f"Retirement configuration {report.policy.name!r} cannot be evaluated:\n\n{details}",
-        parent=parent,
-    )
-    return True
+        details: list[str] = []
+        for report in reports:
+            details.append(f"{report.policy.name}: {_card_count_text(len(report.actionable))}")
+            details.extend(f"  • {_describe_action(action)}" for action in report.policy.actions)
+        if conflicts:
+            conflict_subject = _card_count_text(conflicts).capitalize()
+            conflict_verb = "has" if conflicts == 1 else "have"
+            conflict_message = (
+                f"{conflict_subject} {conflict_verb} conflicting actions and would be skipped."
+            )
+            details.extend(
+                (
+                    "",
+                    conflict_message,
+                )
+            )
+        detail_label = QLabel("\n".join(details), self)
+        detail_label.setWordWrap(True)
+        layout.addWidget(detail_label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel, parent=self)
+        browse_button = buttons.addButton(
+            "View in Browser",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        retire_button = buttons.addButton("Retire", QDialogButtonBox.ButtonRole.AcceptRole)
+        browse_button.setEnabled(any(report.actionable for report in reports))
+        retire_button.setEnabled(affected_cards > 0)
+        if isinstance(retire_button, QPushButton):
+            retire_button.setDefault(True)
+        qconnect(browse_button.clicked, self._browse)
+        qconnect(retire_button.clicked, self._retire)
+        qconnect(buttons.rejected, self.reject)
+        layout.addWidget(buttons)
+
+    def _browse(self) -> None:
+        self.choice = "browse"
+        self.accept()
+
+    def _retire(self) -> None:
+        self.choice = "retire"
+        self.accept()
 
 
 def _card_count_text(count: int) -> str:
@@ -112,103 +148,92 @@ def _retired_message(count: int) -> str:
     return f"Retired {_card_count_text(count)}."
 
 
-def _open_cards_in_browser(report: PolicyReport) -> None:
-    card_ids = [card.card_id for card in report.actionable]
-    node = SearchNode(parsable_text="cid:" + ",".join(str(card_id) for card_id in card_ids))
-    browser = aqt.dialogs.open("Browser", mw, search=(node,))
-    setattr(browser, BROWSER_CONFIGURATION_ATTR, report.policy.id)
+def _open_cards_in_browser(card_ids: set[int]) -> None:
+    node = SearchNode(parsable_text="cid:" + ",".join(str(card_id) for card_id in sorted(card_ids)))
+    aqt.dialogs.open("Browser", mw, search=(node,))
 
 
-def find_cards_to_retire(browser: Browser | None = None) -> None:
-    parent = browser or mw
-    policy = _choose_configuration("Find Cards to Retire", parent)
-    if policy is None:
+def retire_cards_manually() -> None:
+    parsed = _load_for_operation()
+    if parsed is None:
+        return
+    policies = tuple(
+        policy for policy in parsed.config.policies if policy.enabled and policy.mode == "manual"
+    )
+    if not policies:
+        showInfo("There are no enabled manual retirement policies.", parent=mw)
         return
 
-    def on_success(report: PolicyReport) -> None:
-        if _show_report_error(report, parent):
+    def on_evaluated(reports: tuple[PolicyReport, ...]) -> None:
+        errors = [f"{report.policy.name}: {item}" for report in reports for item in report.errors]
+        if errors:
+            showWarning(
+                "Manual retirement could not be evaluated:\n\n"
+                + "\n".join(f"• {item}" for item in errors),
+                parent=mw,
+            )
             return
-        if not report.actionable:
-            showInfo("No cards were eligible for retirement.", parent=parent)
+        plan = build_execution_plan(reports)
+        if plan.is_empty and not plan.conflicted_card_ids:
+            showInfo("No cards were eligible for retirement.", parent=mw)
             return
-        _open_cards_in_browser(report)
+        dialog = ManualRetirementDialog(
+            reports,
+            plan.card_count,
+            len(plan.conflicted_card_ids),
+        )
+        dialog.exec()
+        if dialog.choice == "browse":
+            candidate_ids = {card.card_id for report in reports for card in report.actionable}
+            _open_cards_in_browser(candidate_ids)
+            return
+        if dialog.choice != "retire":
+            return
+
+        approved = {
+            report.policy.id: {card.card_id for card in report.actionable} for report in reports
+        }
+
+        def execute_fresh(col: Collection) -> ExecutionResult:
+            fresh_reports = evaluate_policies(col, policies)
+            runtime_errors = [item for report in fresh_reports for item in report.errors]
+            if runtime_errors:
+                raise RuntimeError("; ".join(runtime_errors))
+            filtered = tuple(
+                replace(
+                    report,
+                    actionable=tuple(
+                        card
+                        for card in report.actionable
+                        if card.card_id in approved[report.policy.id]
+                    ),
+                )
+                for report in fresh_reports
+            )
+            return execute_plan(col, build_execution_plan(filtered), "Manual Card Retirement")
+
+        def on_applied(result: ExecutionResult) -> None:
+            debug(
+                "manual retirement complete",
+                affected_cards=result.affected_cards,
+                conflicts=result.conflicts,
+            )
+            message = (
+                _retired_message(result.affected_cards)
+                if result.affected_cards
+                else "No cards were eligible for retirement."
+            )
+            if result.conflicts:
+                message += f" {result.conflicts} conflicting cards were skipped."
+            tooltip(message, parent=mw)
+
+        CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
 
     QueryOp(
-        parent=parent,
-        op=lambda col: evaluate_policy(col, policy),
-        success=on_success,
+        parent=mw,
+        op=lambda col: evaluate_policies(col, policies),
+        success=on_evaluated,
     ).run_in_background()
-
-
-def _execute_selected_report(browser: Browser, report: PolicyReport) -> None:
-    selected_ids = {card.card_id for card in report.actionable}
-
-    def execute_fresh(col: Collection) -> ExecutionResult:
-        fresh = evaluate_selected_cards(col, report.policy, selected_ids)
-        if fresh.errors:
-            raise RuntimeError("; ".join(fresh.errors))
-        return execute_plan(
-            col,
-            build_execution_plan((fresh,)),
-            f"Card Retirement: {report.policy.name}",
-        )
-
-    def on_success(result: ExecutionResult) -> None:
-        debug(
-            "manual retirement complete",
-            configuration_id=report.policy.id,
-            affected_cards=result.affected_cards,
-            conflicts=result.conflicts,
-        )
-        browser.onCardList()
-        message = _retired_message(result.affected_cards)
-        if result.conflicts:
-            message += f" {result.conflicts} conflicting cards were skipped."
-        tooltip(message, parent=browser)
-
-    CollectionOp(parent=browser, op=execute_fresh).success(on_success).run_in_background()
-
-
-def retire_selected_cards(browser: Browser) -> None:
-    card_ids = {int(card_id) for card_id in browser.selected_cards()}
-    if not card_ids:
-        showInfo("No cards are selected.", parent=browser)
-        return
-    policy = _configuration_for_browser(browser)
-    if policy is None:
-        return
-
-    def on_success(report: PolicyReport) -> None:
-        if _show_report_error(report, browser):
-            return
-        if not report.actionable:
-            showInfo("The selected cards are already retired.", parent=browser)
-            return
-        _execute_selected_report(browser, report)
-
-    QueryOp(
-        parent=browser,
-        op=lambda col: evaluate_selected_cards(col, policy, card_ids),
-        success=on_success,
-    ).run_in_background()
-
-
-def install_browser_menu(browser: Browser) -> None:
-    if isinstance(getattr(browser, BROWSER_RETIRE_ACTION_ATTR, None), QAction):
-        return
-    retire_action = QAction("Retire Selected Cards", browser)
-    qconnect(retire_action.triggered, lambda: retire_selected_cards(browser))
-    browser.form.menu_Cards.addSeparator()
-    browser.form.menu_Cards.addAction(retire_action)
-    setattr(browser, BROWSER_RETIRE_ACTION_ATTR, retire_action)
-
-
-def add_browser_context_action(browser: Browser, menu: QMenu) -> None:
-    if isinstance(getattr(browser, BROWSER_RETIRE_ACTION_ATTR, None), QAction):
-        action = QAction("Retire", menu)
-        qconnect(action.triggered, lambda: retire_selected_cards(browser))
-        menu.addSeparator()
-        menu.addAction(action)
 
 
 def open_settings() -> None:
@@ -261,7 +286,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         policy for policy in parsed.config.policies if policy.enabled and policy.mode == "automatic"
     )
     if not policies:
-        debug("automatic retirement skipped", reason="no enabled automatic configurations")
+        debug("automatic retirement skipped", reason="no enabled automatic policies")
         return
 
     today = int(mw.col.sched.today)
@@ -285,7 +310,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
 
     debug(
         "automatic retirement started",
-        configuration_count=len(policies),
+        policy_count=len(policies),
         schedule=parsed.config.automatic_schedule,
         trigger=trigger,
     )
@@ -295,7 +320,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         if errors:
             error("automatic retirement evaluation failed", errors=tuple(errors))
             tooltip(
-                "Card Retirement: an automatic configuration has errors; see Settings.",
+                "Card Retirement: an automatic policy has errors; see Settings.",
                 parent=mw,
             )
             return
@@ -363,11 +388,11 @@ def install_menu() -> None:
             mw.form.menuTools.removeAction(existing.menuAction())
 
     menu = QMenu("Card Retirement", mw)
-    find_action = QAction("Find Cards to Retire…", mw)
+    retire_action = QAction("Retire Cards…", mw)
     settings_action = QAction("Settings…", mw)
-    qconnect(find_action.triggered, find_cards_to_retire)
+    qconnect(retire_action.triggered, retire_cards_manually)
     qconnect(settings_action.triggered, open_settings)
-    menu.addAction(find_action)
+    menu.addAction(retire_action)
     menu.addSeparator()
     menu.addAction(settings_action)
     mw.form.menuTools.addMenu(menu)

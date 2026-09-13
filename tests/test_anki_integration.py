@@ -3,13 +3,14 @@
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from anki.collection import Collection
 from aqt.operations import QueryOp
 from card_retirement import ui
 from card_retirement.actions import build_execution_plan, execute_plan
-from card_retirement.evaluator import evaluate_policy, evaluate_selected_cards
+from card_retirement.evaluator import evaluate_policy
 from card_retirement.models import AgeRule, Policy, Scope, SuspendAction, TagAction
 
 
@@ -20,7 +21,9 @@ def test_query_op_requires_constructor_success_callback() -> None:
     assert success.default is inspect.Parameter.empty
 
 
-def test_find_cards_uses_current_query_op_constructor(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_manual_retirement_uses_current_query_op_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     class FakeQueryOp:
         def __init__(self, *, parent: object, op: object, success: object) -> None:
             self.parent = parent
@@ -34,15 +37,27 @@ def test_find_cards_uses_current_query_op_constructor(monkeypatch: pytest.Monkey
 
     created: list[FakeQueryOp] = []
 
-    monkeypatch.setattr(ui, "_choose_configuration", lambda *_args: object())
+    policy = SimpleNamespace(enabled=True, mode="manual")
+    automatic = SimpleNamespace(enabled=True, mode="automatic")
+    disabled = SimpleNamespace(enabled=False, mode="manual")
+    parsed = SimpleNamespace(config=SimpleNamespace(policies=(policy, automatic, disabled)))
+    evaluated: list[tuple[object, tuple[object, ...]]] = []
+    monkeypatch.setattr(ui, "_load_for_operation", lambda: parsed)
+    monkeypatch.setattr(
+        ui,
+        "evaluate_policies",
+        lambda col, policies: evaluated.append((col, policies)) or (),
+    )
     monkeypatch.setattr(ui, "QueryOp", FakeQueryOp)
 
-    ui.find_cards_to_retire()
+    ui.retire_cards_manually()
 
     assert len(created) == 1
     assert callable(created[0].op)
     assert callable(created[0].success)
     assert created[0].started
+    created[0].op("collection")
+    assert evaluated == [("collection", (policy,))]
 
 
 @pytest.mark.parametrize(
@@ -128,21 +143,6 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         )
         report = evaluate_policy(collection, policy, now_ms=first_review + 86_400_000)
         assert [card.card_id for card in report.actionable] == [card_id]
-
-        selected = evaluate_selected_cards(collection, policy, {card_id})
-        assert [card.card_id for card in selected.actionable] == [card_id]
-
-        manual_override = Policy(
-            id="manual-override",
-            name="Manual override",
-            enabled=True,
-            mode="manual",
-            scope=Scope(("Missing",)),
-            rule=AgeRule(999_999, "card_created"),
-            actions=(SuspendAction(),),
-        )
-        selected = evaluate_selected_cards(collection, manual_override, {card_id})
-        assert [card.card_id for card in selected.actionable] == [card_id]
 
         result = execute_plan(collection, build_execution_plan((report,)), "Retire test card")
         assert result.affected_cards == 1

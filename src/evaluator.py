@@ -10,7 +10,6 @@ from .engine import (
     CardFacts,
     PolicyReport,
     ResolvedAction,
-    action_is_satisfied,
     evaluate_facts,
 )
 from .log import debug
@@ -106,10 +105,6 @@ def _load_deck_facts(col: Collection, deck_ids: set[int]) -> list[CardFacts]:
     )
 
 
-def _load_selected_facts(col: Collection, card_ids: set[int]) -> list[CardFacts]:
-    return _load_facts_where(col, "c.id", card_ids)
-
-
 def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = None) -> PolicyReport:
     started = perf_counter()
     deck_ids, errors = _resolve_deck_ids(col, policy)
@@ -147,29 +142,6 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
         qualifying_cards=len(report.qualifying),
         actionable_cards=len(report.actionable),
         missing_first_review=report.missing_first_review,
-        elapsed_ms=round((perf_counter() - started) * 1000, 2),
-    )
-    return report
-
-
-def evaluate_selected_cards(col: Collection, policy: Policy, card_ids: set[int]) -> PolicyReport:
-    started = perf_counter()
-    resolved_actions, errors = _resolve_actions(col, policy)
-    if errors:
-        return PolicyReport(policy, (), (), 0, resolved_actions, tuple(errors))
-    facts = tuple(_load_selected_facts(col, card_ids))
-    actionable = tuple(
-        card
-        for card in facts
-        if any(not action_is_satisfied(action, card) for action in resolved_actions)
-    )
-    report = PolicyReport(policy, facts, actionable, 0, resolved_actions)
-    debug(
-        "selected cards evaluated",
-        configuration_id=policy.id,
-        selected_cards=len(card_ids),
-        existing_cards=len(facts),
-        actionable_cards=len(actionable),
         elapsed_ms=round((perf_counter() - started) * 1000, 2),
     )
     return report
