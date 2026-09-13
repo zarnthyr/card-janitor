@@ -659,7 +659,7 @@ class CardJanitorDialog(QDialog):
             QDialogButtonBox.ButtonRole.ActionRole,
         )
         self.view_button = buttons.addButton(
-            "View Included Cards",
+            "Browse",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
         self.run_button = buttons.addButton(

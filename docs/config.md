@@ -48,7 +48,7 @@ current run. Change the state to `automatic` to also run a policy on the
 configured schedule without approval. Each run is recorded in Anki's undo
 history.
 
-The window remains open while you inspect cards. **View Included Cards** opens
+The window remains open while you inspect cards. **Browse** opens
 the union from all checked policies. Select a row and use **Edit…** to change
 that policy; **Refresh** recalculates the table. Running an automatic policy
 manually does not alter its next scheduled run.
