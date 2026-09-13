@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import contextlib
 import time
-import traceback
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -20,6 +19,8 @@ from aqt.utils import askUser, showInfo, showWarning, tooltip
 from .actions import ExecutionResult, build_execution_plan, execute_plan
 from .configuration import ADDON_MODULE, load_config, load_raw_config
 from .evaluator import evaluate_policies, evaluate_policy
+from .log import configure as configure_logging
+from .log import debug, error, exception
 from .models import DeleteCardAction, Policy
 
 if TYPE_CHECKING:
@@ -38,9 +39,16 @@ def _issues_text(parsed: ParsedConfig) -> str:
     return f"Card Retirement configuration has errors:\n\n{details}\n\nNo policy was run."
 
 
-def _load_for_operation() -> ParsedConfig | None:
+def _load_configured() -> ParsedConfig:
     parsed = load_config()
+    configure_logging(debug_logging=parsed.config.debug_logging)
+    return parsed
+
+
+def _load_for_operation() -> ParsedConfig | None:
+    parsed = _load_configured()
     if parsed.issues:
+        error("invalid configuration", issues=tuple(str(issue) for issue in parsed.issues))
         showWarning(_issues_text(parsed), parent=mw)
         return None
     return parsed
@@ -137,6 +145,12 @@ def _execute_single_report(report: PolicyReport) -> None:
         return
 
     def on_success(result: ExecutionResult) -> None:
+        debug(
+            "manual actions applied",
+            policy_id=report.policy.id,
+            affected_cards=result.affected_cards,
+            conflicts=result.conflicts,
+        )
         message = f"Card Retirement acted on {result.affected_cards} cards."
         if result.conflicts:
             message += f" {result.conflicts} conflicting cards were skipped."
@@ -198,14 +212,16 @@ def _automatic_summary(
 
 
 def run_automatic_policies(*, ignore_interval: bool = False) -> None:
-    parsed = load_config()
+    parsed = _load_configured()
     if parsed.issues:
-        tooltip("Card Retirement: configuration errors; automatic check skipped.", parent=mw)
+        error("invalid configuration", issues=tuple(str(issue) for issue in parsed.issues))
+        showWarning(_issues_text(parsed), parent=mw)
         return
     policies = tuple(
         policy for policy in parsed.config.policies if policy.enabled and policy.mode != "manual"
     )
     if not policies:
+        debug("automatic check skipped", reason="no enabled notify or automatic policies")
         if ignore_interval:
             showInfo("There are no enabled automatic retirement policies.", parent=mw)
         return
@@ -219,13 +235,22 @@ def run_automatic_policies(*, ignore_interval: bool = False) -> None:
         and isinstance(last_check, (int, float))
         and now - last_check < minimum_seconds
     ):
+        debug(
+            "automatic check skipped",
+            reason="check interval has not elapsed",
+            minimum_seconds=minimum_seconds,
+            elapsed_seconds=round(now - last_check, 2),
+        )
         return
+
+    debug("automatic check started", policy_count=len(policies))
 
     def on_evaluated(reports: tuple[PolicyReport, ...]) -> None:
         if profile is not None:
             profile[LAST_CHECK_PROFILE_KEY] = now
         errors = [f"{report.policy.name}: {error}" for report in reports for error in report.errors]
         if errors:
+            error("automatic policy evaluation failed", errors=tuple(errors))
             tooltip(
                 "Card Retirement: a policy has runtime errors; see Tools → Preview Policy.",
                 parent=mw,
@@ -242,6 +267,11 @@ def run_automatic_policies(*, ignore_interval: bool = False) -> None:
             return
 
         def on_applied(result: ExecutionResult) -> None:
+            debug(
+                "automatic actions applied",
+                affected_cards=result.affected_cards,
+                conflicts=result.conflicts,
+            )
             summary = _automatic_summary(
                 reports,
                 applied=result.affected_cards,
@@ -311,4 +341,4 @@ def safe_install_menu() -> None:
     try:
         install_menu()
     except Exception:
-        traceback.print_exc()
+        exception("failed to install Tools menu")

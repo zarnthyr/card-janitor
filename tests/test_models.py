@@ -25,6 +25,7 @@ def policy_config(**overrides: object) -> dict:
     return {
         "config_version": 1,
         "automatic_check_interval_hours": 20,
+        "debug_logging": False,
         "policies": [policy],
     }
 
@@ -82,3 +83,11 @@ def test_duplicate_policy_id_is_rejected() -> None:
     parsed = parse_config(raw)
     assert len(parsed.config.policies) == 1
     assert "duplicate" in str(parsed.issues[0])
+
+
+def test_debug_logging_must_be_boolean() -> None:
+    raw = policy_config()
+    raw["debug_logging"] = "yes"
+    parsed = parse_config(raw)
+    assert str(parsed.issues[0]) == "debug_logging: must be a boolean"
+    assert not parsed.config.debug_logging

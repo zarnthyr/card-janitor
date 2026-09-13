@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import contextlib
-import traceback
 
 from aqt import gui_hooks
 
+from .log import exception
 from .ui import run_automatic_policies, safe_install_menu
 
 
@@ -35,7 +35,7 @@ def on_profile_loaded() -> None:
         safe_install_menu()
         run_automatic_policies()
     except Exception:
-        traceback.print_exc()
+        exception("profile-open callback failed")
 
 
 def register_addon() -> None:

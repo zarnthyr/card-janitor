@@ -27,6 +27,7 @@ REQUIRED_PACKAGE_FILES = {
     "configuration.py",
     "engine.py",
     "evaluator.py",
+    "log.py",
     "manifest.json",
     "models.py",
     "ui.py",

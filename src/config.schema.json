@@ -2,7 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["config_version", "automatic_check_interval_hours", "policies"],
+  "required": [
+    "config_version",
+    "automatic_check_interval_hours",
+    "debug_logging",
+    "policies"
+  ],
   "properties": {
     "config_version": {
       "const": 1
@@ -11,6 +16,10 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 8760
+    },
+    "debug_logging": {
+      "type": "boolean",
+      "description": "Print policy evaluation diagnostics to the terminal"
     },
     "policies": {
       "type": "array",

@@ -102,6 +102,7 @@ class Policy:
 class AddonConfig:
     config_version: int
     automatic_check_interval_hours: int
+    debug_logging: bool
     policies: tuple[Policy, ...]
 
 
@@ -246,6 +247,11 @@ def parse_config(value: object) -> ParsedConfig:
         )
         interval = 20
 
+    debug_logging = value.get("debug_logging", False)
+    if not isinstance(debug_logging, bool):
+        issues.append(ConfigIssue("debug_logging", "must be a boolean"))
+        debug_logging = False
+
     raw_policies = value.get("policies", [])
     if not isinstance(raw_policies, list):
         issues.append(ConfigIssue("policies", "must be an array; no policies were loaded"))
@@ -270,6 +276,7 @@ def parse_config(value: object) -> ParsedConfig:
         config=AddonConfig(
             config_version=1,
             automatic_check_interval_hours=interval,
+            debug_logging=debug_logging,
             policies=tuple(policies),
         ),
         issues=tuple(issues),

@@ -10,6 +10,7 @@ Invalid configuration fails closed: if any validation error is present, no manua
 {
   "config_version": 1,
   "automatic_check_interval_hours": 20,
+  "debug_logging": false,
   "policies": [
     {
       "id": "mining-retirement",
@@ -37,6 +38,10 @@ Invalid configuration fails closed: if any validation error is present, no manua
 ```
 
 Keep `mode` set to `manual` while testing. Change it to `notify` for startup reports or `automatic` to perform the configured actions automatically. An automatic deletion policy runs without confirmation.
+
+Set `debug_logging` to `true` to print policy evaluation counts and timing to
+the terminal. Configuration errors and unexpected exceptions are always
+printed, regardless of this setting.
 
 ## Rules
 

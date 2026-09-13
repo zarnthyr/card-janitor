@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+from time import perf_counter
 from typing import TYPE_CHECKING
 
 from .engine import CardFacts, PolicyReport, ResolvedAction, evaluate_facts
+from .log import debug
 from .models import MoveAction, Policy
 
 if TYPE_CHECKING:
@@ -93,11 +95,12 @@ group by c.id
 
 
 def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = None) -> PolicyReport:
+    started = perf_counter()
     deck_ids, errors = _resolve_deck_ids(col, policy)
     resolved_actions, action_errors = _resolve_actions(col, policy)
     errors.extend(action_errors)
     if errors:
-        return PolicyReport(
+        report = PolicyReport(
             policy=policy,
             qualifying=(),
             actionable=(),
@@ -105,14 +108,32 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
             resolved_actions=resolved_actions,
             errors=tuple(errors),
         )
+        debug(
+            "policy evaluation failed",
+            policy_id=policy.id,
+            errors=report.errors,
+            elapsed_ms=round((perf_counter() - started) * 1000, 2),
+        )
+        return report
     facts = _load_facts(col, deck_ids)
-    return evaluate_facts(
+    report = evaluate_facts(
         policy,
         facts,
         deck_ids,
         resolved_actions,
         now_ms=now_ms,
     )
+    debug(
+        "policy evaluated",
+        policy_id=policy.id,
+        deck_count=len(deck_ids),
+        loaded_cards=len(facts),
+        qualifying_cards=len(report.qualifying),
+        actionable_cards=len(report.actionable),
+        missing_first_review=report.missing_first_review,
+        elapsed_ms=round((perf_counter() - started) * 1000, 2),
+    )
+    return report
 
 
 def evaluate_policies(col: Collection, policies: tuple[Policy, ...]) -> tuple[PolicyReport, ...]:

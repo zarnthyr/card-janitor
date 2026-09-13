@@ -13,6 +13,7 @@ ADDON_MODULE = "card_retirement"
 DEFAULT_CONFIG: dict[str, Any] = {
     "config_version": 1,
     "automatic_check_interval_hours": 20,
+    "debug_logging": False,
     "policies": [],
 }
 
