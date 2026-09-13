@@ -32,7 +32,6 @@ AutomaticTrigger = Literal["profile_open", "day_change"]
 
 MENU_ATTR = "_card_retirement_menu"
 CONFIG_EDITOR_ATTR = "_card_retirement_config_editor"
-BROWSER_FIND_ACTION_ATTR = "_card_retirement_find_action"
 BROWSER_RETIRE_ACTION_ATTR = "_card_retirement_retire_action"
 BROWSER_CONFIGURATION_ATTR = "_card_retirement_configuration_id"
 LAST_AUTOMATIC_DAY_PROFILE_KEY = "card_retirement_last_automatic_day"
@@ -113,13 +112,11 @@ def _retired_message(count: int) -> str:
     return f"Retired {_card_count_text(count)}."
 
 
-def _open_and_select_cards(report: PolicyReport) -> None:
+def _open_cards_in_browser(report: PolicyReport) -> None:
     card_ids = [card.card_id for card in report.actionable]
     node = SearchNode(parsable_text="cid:" + ",".join(str(card_id) for card_id in card_ids))
     browser = aqt.dialogs.open("Browser", mw, search=(node,))
     setattr(browser, BROWSER_CONFIGURATION_ATTR, report.policy.id)
-    browser.table.select_all()
-    browser.onCardList()
 
 
 def find_cards_to_retire(browser: Browser | None = None) -> None:
@@ -134,7 +131,7 @@ def find_cards_to_retire(browser: Browser | None = None) -> None:
         if not report.actionable:
             showInfo("No cards were eligible for retirement.", parent=parent)
             return
-        _open_and_select_cards(report)
+        _open_cards_in_browser(report)
 
     QueryOp(
         parent=parent,
@@ -197,22 +194,19 @@ def retire_selected_cards(browser: Browser) -> None:
 
 
 def install_browser_menu(browser: Browser) -> None:
-    if isinstance(getattr(browser, BROWSER_FIND_ACTION_ATTR, None), QAction):
+    if isinstance(getattr(browser, BROWSER_RETIRE_ACTION_ATTR, None), QAction):
         return
-    find_action = QAction("Find Cards to Retire…", browser)
-    retire_action = QAction("Retire Selected Cards…", browser)
-    qconnect(find_action.triggered, lambda: find_cards_to_retire(browser))
+    retire_action = QAction("Retire Selected Cards", browser)
     qconnect(retire_action.triggered, lambda: retire_selected_cards(browser))
     browser.form.menu_Cards.addSeparator()
-    browser.form.menu_Cards.addAction(find_action)
     browser.form.menu_Cards.addAction(retire_action)
-    setattr(browser, BROWSER_FIND_ACTION_ATTR, find_action)
     setattr(browser, BROWSER_RETIRE_ACTION_ATTR, retire_action)
 
 
 def add_browser_context_action(browser: Browser, menu: QMenu) -> None:
-    action = getattr(browser, BROWSER_RETIRE_ACTION_ATTR, None)
-    if isinstance(action, QAction):
+    if isinstance(getattr(browser, BROWSER_RETIRE_ACTION_ATTR, None), QAction):
+        action = QAction("Retire", menu)
+        qconnect(action.triggered, lambda: retire_selected_cards(browser))
         menu.addSeparator()
         menu.addAction(action)
 

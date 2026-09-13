@@ -38,12 +38,12 @@ Invalid configuration fails closed: if any validation error is present, no manua
 }
 ```
 
-Keep `mode` set to `manual` while testing. **Find Cards to Retire…** opens and
-selects candidates in Anki's Browser. **Cards → Retire Selected Cards…** applies
-the configured actions to the selection without reapplying the policy's scope
-or rule. Change the mode to `automatic` to apply scope, rule, and actions on the
-configured schedule. Like Anki's own Browser deletion, retirement does not ask
-for confirmation and is recorded in Anki's undo history.
+Keep `mode` set to `manual` while testing. **Find Cards to Retire…** filters
+Anki's Browser to the candidates. Select all or a subset, then use **Cards →
+Retire Selected Cards** to apply the configured actions without reapplying the
+policy's scope or rule. Change the mode to `automatic` to apply scope, rule, and
+actions on the configured schedule. Like Anki's own Browser deletion,
+retirement does not ask for confirmation and is recorded in Anki's undo history.
 
 `automatic_schedule` supports:
 
