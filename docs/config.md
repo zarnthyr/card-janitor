@@ -91,14 +91,15 @@ Age uses elapsed 24-hour periods. `first_review` is the earliest review-log entr
 
 Matches cards whose current Anki interval is at least as large as `days`. New cards normally have an interval of zero and do not match.
 
-### New cards
+### Card state
 
 ```json
-{"type": "new"}
+{"type": "card_state", "state": "new"}
 ```
 
-Matches cards whose Anki card type is still new. Combine this with card-creation
-age to remove cards that were added but not learned within a desired period.
+Matches cards in the selected Anki state: `new`, `learning`, `review`, or
+`relearning`. Combine `new` with card-creation age to remove cards that were
+added but not learned within a desired period.
 
 ### Compound rules
 
@@ -123,7 +124,7 @@ For example, a stale-new-card rule is:
   "type": "all",
   "rules": [
     {"type": "age", "days": 30, "from": "card_created"},
-    {"type": "new"}
+    {"type": "card_state", "state": "new"}
   ]
 }
 ```

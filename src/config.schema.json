@@ -108,6 +108,15 @@
           "additionalProperties": false,
           "required": ["type"],
           "properties": {"type": {"const": "new"}}
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "state"],
+          "properties": {
+            "type": {"const": "card_state"},
+            "state": {"enum": ["new", "learning", "review", "relearning"]}
+          }
         }
       ]
     },

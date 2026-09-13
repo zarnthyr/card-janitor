@@ -23,6 +23,7 @@ from aqt.qt import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -52,6 +53,7 @@ from .models import (
     AgeRule,
     AllRule,
     AnyRule,
+    CardStateRule,
     DeleteCardAction,
     IntervalRule,
     MoveAction,
@@ -138,6 +140,8 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
         return f"Interval ≥ {rule.days} days"
     if isinstance(rule, NewRule):
         return "Still new"
+    if isinstance(rule, CardStateRule):
+        return f"Card state is {rule.state.capitalize()}"
     if isinstance(rule, (AllRule, AnyRule)):
         operator = " AND " if isinstance(rule, AllRule) else " OR "
         description = operator.join(_describe_rule(child, nested=True) for child in rule.rules)
@@ -150,7 +154,7 @@ def _configured_use(state: str, _schedule: AutomaticSchedule) -> str:
     if state == "disabled":
         return "Off"
     if state == "manual":
-        return "On request"
+        return "On demand"
     return "Automatic"
 
 
@@ -179,7 +183,11 @@ class RuleConditionRow(QWidget):
         self.source.addItem("since first review", "first_review")
         self.source.addItem("since card creation", "card_created")
         self.source.setMinimumWidth(180)
-        self.state_value = QLabel("New", self)
+        self.state_value = QComboBox(self)
+        self.state_value.addItem("New", "new")
+        self.state_value.addItem("Learning", "learning")
+        self.state_value.addItem("Review", "review")
+        self.state_value.addItem("Relearning", "relearning")
         self.state_value.setMinimumWidth(296)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(80)
@@ -202,6 +210,10 @@ class RuleConditionRow(QWidget):
         elif isinstance(rule, NewRule):
             self.kind.setCurrentIndex(self.kind.findData("new"))
             self.days.setValue(365)
+        elif isinstance(rule, CardStateRule):
+            self.kind.setCurrentIndex(self.kind.findData("new"))
+            self.state_value.setCurrentIndex(self.state_value.findData(rule.state))
+            self.days.setValue(365)
         else:
             self.days.setValue(365)
         qconnect(self.kind.currentIndexChanged, self._update_controls)
@@ -216,13 +228,13 @@ class RuleConditionRow(QWidget):
         self.source.setEnabled(kind == "age")
         self.state_value.setVisible(is_new)
 
-    def rule(self) -> AgeRule | IntervalRule | NewRule:
+    def rule(self) -> AgeRule | IntervalRule | NewRule | CardStateRule:
         kind = self.kind.currentData()
         if kind == "age":
             return AgeRule(self.days.value(), self.source.currentData())
         if kind == "interval":
             return IntervalRule(self.days.value())
-        return NewRule()
+        return CardStateRule(self.state_value.currentData())
 
 
 class PolicyEditorDialog(QDialog):
@@ -253,7 +265,7 @@ class PolicyEditorDialog(QDialog):
         form.addRow("Name", self.name)
         self.state = QComboBox(self)
         self.state.addItem("Off", "disabled")
-        self.state.addItem("On request", "manual")
+        self.state.addItem("On demand", "manual")
         self.state.addItem("Automatic", "automatic")
         state = policy.state if policy else raw.get("state", "manual")
         index = self.state.findData(state)
@@ -276,14 +288,11 @@ class PolicyEditorDialog(QDialog):
                 Qt.CheckState.Checked if deck_name in deck_values else Qt.CheckState.Unchecked
             )
         scope_layout.addWidget(self.decks)
-        deck_help = QLabel(
-            "Checked decks are the starting points. When Include subdecks is enabled, "
-            "their child decks are included even though they are not checked separately.",
-            self,
-        )
-        deck_help.setWordWrap(True)
-        scope_layout.addWidget(deck_help)
         self.include_subdecks = QCheckBox("Include subdecks", self)
+        self.include_subdecks.setToolTip(
+            "Include every child of each checked deck, even when those child decks are not "
+            "checked separately in the list."
+        )
         self.include_suspended = QCheckBox("Include suspended cards", self)
         self.include_subdecks.setChecked(
             policy.scope.include_subdecks
@@ -328,7 +337,10 @@ class PolicyEditorDialog(QDialog):
 
         actions_group = QGroupBox("Actions", self)
         actions_group_layout = QVBoxLayout(actions_group)
-        actions_form = QFormLayout()
+        actions_grid = QGridLayout()
+        actions_grid.setHorizontalSpacing(16)
+        actions_grid.setVerticalSpacing(8)
+        actions_grid.setColumnStretch(1, 1)
         source_actions = policy.actions if policy else _best_effort_actions(raw.get("actions"))
         self.tag_enabled = QCheckBox("Add tags", self)
         self.tag = QLineEdit(self)
@@ -338,7 +350,7 @@ class PolicyEditorDialog(QDialog):
         self.move_deck = QComboBox(self)
         self.move_deck.setEditable(True)
         self.move_deck.addItems(deck_names)
-        self.delete = QCheckBox("Delete cards (and notes left without cards)", self)
+        self.delete = QCheckBox("Delete cards", self)
         tags = [action.tag for action in source_actions if isinstance(action, TagAction)]
         if tags:
             self.tag_enabled.setChecked(True)
@@ -353,11 +365,13 @@ class PolicyEditorDialog(QDialog):
                 self.move_deck.setCurrentText(action.deck)
             elif isinstance(action, DeleteCardAction):
                 self.delete.setChecked(True)
-        actions_form.addRow(self.tag_enabled, self.tag)
-        actions_form.addRow(self.suspend)
-        actions_form.addRow(self.move_enabled, self.move_deck)
-        actions_form.addRow(self.delete)
-        actions_group_layout.addLayout(actions_form)
+        actions_grid.addWidget(self.tag_enabled, 0, 0)
+        actions_grid.addWidget(self.tag, 0, 1)
+        actions_grid.addWidget(self.suspend, 1, 0)
+        actions_grid.addWidget(self.move_enabled, 2, 0)
+        actions_grid.addWidget(self.move_deck, 2, 1)
+        actions_grid.addWidget(self.delete, 3, 0)
+        actions_group_layout.addLayout(actions_grid)
         layout.addWidget(actions_group)
         qconnect(self.delete.toggled, self._update_action_controls)
         qconnect(self.state.currentIndexChanged, self._update_action_controls)
@@ -490,14 +504,16 @@ def _raw_bool(raw: object, key: str, *, default: bool) -> bool:
     return value if isinstance(value, bool) else default
 
 
-def _best_effort_rule(raw: object) -> Rule | None:
+def _best_effort_rule(raw: object) -> Rule | None:  # noqa: PLR0911
     if not isinstance(raw, dict):
         return None
     kind = raw.get("type")
     if kind in {"all", "any"} and isinstance(raw.get("rules"), list):
         children = tuple(filter(None, (_best_effort_rule(child) for child in raw["rules"])))
         simple = tuple(
-            child for child in children if isinstance(child, (AgeRule, IntervalRule, NewRule))
+            child
+            for child in children
+            if isinstance(child, (AgeRule, IntervalRule, NewRule, CardStateRule))
         )
         if simple:
             return AllRule(simple) if kind == "all" else AnyRule(simple)
@@ -513,6 +529,10 @@ def _best_effort_rule(raw: object) -> Rule | None:
         return IntervalRule(days)
     if kind == "new":
         return NewRule()
+    if kind == "card_state":
+        state = raw.get("state")
+        if state in {"new", "learning", "review", "relearning"}:
+            return CardStateRule(state)
     return None
 
 

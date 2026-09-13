@@ -11,6 +11,7 @@ from .models import (
     AgeRule,
     AllRule,
     AnyRule,
+    CardStateRule,
     DeleteCardAction,
     IntervalRule,
     MoveAction,
@@ -71,6 +72,8 @@ def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:
         return card.interval >= rule.days
     if isinstance(rule, NewRule):
         return card.card_type == 0
+    if isinstance(rule, CardStateRule):
+        return card.card_type == {"new": 0, "learning": 1, "review": 2, "relearning": 3}[rule.state]
     if isinstance(rule, AllRule):
         return all(matches_rule(child, card, now_ms) for child in rule.rules)
     if isinstance(rule, AnyRule):

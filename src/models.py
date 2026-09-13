@@ -43,6 +43,11 @@ class NewRule:
 
 
 @dataclass(frozen=True)
+class CardStateRule:
+    state: Literal["new", "learning", "review", "relearning"]
+
+
+@dataclass(frozen=True)
 class AllRule:
     rules: tuple[Rule, ...]
 
@@ -52,7 +57,7 @@ class AnyRule:
     rules: tuple[Rule, ...]
 
 
-Rule: TypeAlias = AgeRule | IntervalRule | NewRule | AllRule | AnyRule
+Rule: TypeAlias = AgeRule | IntervalRule | NewRule | CardStateRule | AllRule | AnyRule
 
 
 @dataclass(frozen=True)
@@ -143,7 +148,9 @@ def _positive_int(data: dict[str, Any], key: str, path: str) -> int:
     return value
 
 
-def _parse_simple_rule(value: object, path: str) -> AgeRule | IntervalRule | NewRule:
+def _parse_simple_rule(
+    value: object, path: str
+) -> AgeRule | IntervalRule | NewRule | CardStateRule:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     rule_type = value.get("type")
@@ -157,6 +164,11 @@ def _parse_simple_rule(value: object, path: str) -> AgeRule | IntervalRule | New
         return IntervalRule(days=_positive_int(value, "days", path))
     if rule_type == "new":
         return NewRule()
+    if rule_type == "card_state":
+        state = value.get("state")
+        if state not in {"new", "learning", "review", "relearning"}:
+            raise ValueError(f"{path}.state: must be 'new', 'learning', 'review', or 'relearning'")
+        return CardStateRule(state)
     if rule_type in {"all", "any"}:
         raise ValueError(f"{path}.type: compound rules cannot be nested")
     raise ValueError(f"{path}.type: unknown rule type {rule_type!r}")
@@ -317,6 +329,8 @@ def rule_to_dict(rule: Rule) -> dict[str, Any]:
         return {"type": "interval", "days": rule.days}
     if isinstance(rule, NewRule):
         return {"type": "new"}
+    if isinstance(rule, CardStateRule):
+        return {"type": "card_state", "state": rule.state}
     if isinstance(rule, (AllRule, AnyRule)):
         return {
             "type": "all" if isinstance(rule, AllRule) else "any",
