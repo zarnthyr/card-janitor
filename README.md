@@ -4,14 +4,14 @@ Configurable policy-based cleanup for Anki cards.
 
 Applies cleanup policies according to deck scope, age, interval, card state, or review history, either on demand or automatically once per day.
 
-![Card Janitor policy manager](./assets/banner.png)
-
 > [!WARNING]
 > Card Janitor can make destructive collection changes, including permanently
 > deleting cards. Back up your collection before use. Begin with **On demand**
 > mode, inspect matching cards with **Browse**, and verify Anki's undo behavior
 > before enabling automatic cleanup. You use this add-on at your own risk; its
 > author accepts no responsibility or liability for collection damage or data loss.
+
+![Card Janitor policy manager](./assets/banner.png)
 
 ## Installation
 
@@ -47,6 +47,14 @@ Each policy has three parts:
 * Actions — tag, suspend, move, or delete the qualifying cards
 
 ### Conditions
+
+> [!WARNING]
+> Card-creation age is derived from the timestamp encoded in Anki's card ID. Imported
+> cards commonly retain the original creator's timestamp; it is **not** the date the
+> card was imported into your collection. A creation-age policy can therefore match an
+> entire premade deck immediately. Use this condition only for cards whose provenance
+> you understand, and preview it with **On demand** mode before enabling automatic
+> actions.
 
 | Condition | What it matches | Important detail |
 | --- | --- | --- |
@@ -87,14 +95,6 @@ Card Janitor can, for example:
 Use **Browse** in the policy manager to inspect the cards a policy currently
 matches before running it.
 
-> [!WARNING]
-> Card-creation age is derived from the timestamp encoded in Anki's card ID. Imported
-> cards commonly retain the original creator's timestamp; it is **not** the date the
-> card was imported into your collection. A creation-age policy can therefore match an
-> entire premade deck immediately. Use this condition only for cards whose provenance
-> you understand, and preview it with **On demand** mode before enabling automatic
-> actions.
-
 ## Policy Modes
 
 | Mode       | Behavior                                                    |
@@ -119,6 +119,11 @@ Policies can be created and repaired in the manager. **Settings…** controls
 notifications and debug logging. Its **Edit JSON…** button
 opens the underlying configuration for advanced editing.
 
+Policy definitions and settings are shared across Anki profiles. Automatic
+cleanup is tracked separately for each profile and runs against the decks in
+the profile being opened. Verify every Automatic policy's deck scope before
+using Card Janitor with another profile.
+
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
 
 See [config.md](./docs/config.md) for the complete schema and examples.
@@ -129,6 +134,7 @@ See [config.md](./docs/config.md) for the complete schema and examples.
 * First-review age cannot recover review history that was deleted or omitted during import
 * Anki does not store a reliable per-card timestamp for when a card was imported into the current collection
 * Decks are configured by name, so renamed or missing decks cause that policy to fail closed
+* Policies and settings are shared across Anki profiles
 
 ## Development
 

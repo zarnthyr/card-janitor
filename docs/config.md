@@ -7,7 +7,7 @@ configuration directly.
 If any setting or policy is invalid, Card Janitor will not run cleanup until
 the problem is fixed. Invalid policies remain visible in Card Janitor and can
 be repaired with **Edit**. Invalid add-on-wide settings can be repaired through
-**Settings** or **Edit JSON**.
+**Settings** when the field is available there, or through **Edit JSON**.
 
 Deck names are resolved when a policy is evaluated. A missing or filtered move
 destination is an error.
@@ -162,6 +162,15 @@ to greater than, at least, exactly, at most, and less than.
 ## Scope behavior
 
 `decks` must contain one or more exact deck names. `include_subdecks` includes all descendants of each named deck. Suspended cards are excluded by default. Buried cards remain eligible because burial is temporary.
+
+## Multiple profiles
+
+Anki stores add-on configuration outside individual profiles, so policy
+definitions and settings are shared across every profile. The daily automatic
+run marker is stored per profile: opening a second profile can run the same
+Automatic policies against decks with matching names in that profile. Verify
+policy scopes before enabling Automatic mode in a multi-profile setup. A deck
+that does not exist in the current profile is reported as a policy error.
 
 ## Overlapping policies
 
