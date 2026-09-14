@@ -42,7 +42,6 @@ class IntervalRule:
 @dataclass(frozen=True)
 class CardStateRule:
     states: tuple[CardState, ...]
-    operator: MembershipOperator
 
 
 @dataclass(frozen=True)
@@ -86,7 +85,6 @@ class DeleteCardAction:
 Action: TypeAlias = TagAction | SuspendAction | MoveAction | DeleteCardAction
 PolicyState: TypeAlias = Literal["disabled", "manual", "automatic"]
 NumericOperator: TypeAlias = Literal["gt", "gte", "eq", "lte", "lt"]
-MembershipOperator: TypeAlias = Literal["in", "not_in"]
 CardState: TypeAlias = Literal["new", "learning", "review", "relearning"]
 
 
@@ -184,10 +182,7 @@ def _parse_simple_rule(
                 f"{path}.states: must be a non-empty array containing 'new', 'learning', "
                 "'review', or 'relearning'"
             )
-        operator = value.get("operator")
-        if operator not in {"in", "not_in"}:
-            raise ValueError(f"{path}.operator: must be 'in' or 'not_in'")
-        return CardStateRule(tuple(dict.fromkeys(states)), operator)
+        return CardStateRule(tuple(dict.fromkeys(states)))
     if rule_type == "review_history":
         operator = value.get("operator")
         if operator not in {"exists", "not_exists"}:
@@ -347,7 +342,6 @@ def rule_to_dict(rule: Rule) -> dict[str, Any]:
         return {
             "type": "card_state",
             "states": list(rule.states),
-            "operator": rule.operator,
         }
     if isinstance(rule, ReviewHistoryRule):
         return {"type": "review_history", "operator": rule.operator}

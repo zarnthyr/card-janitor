@@ -91,8 +91,7 @@ def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:  # noqa: PLR
         state = {0: "new", 1: "learning", 2: "review", 3: "relearning"}.get(card.card_type)
         if state is None:
             return False
-        included = state in rule.states
-        return included if rule.operator == "in" else not included
+        return state in rule.states
     if isinstance(rule, ReviewHistoryRule):
         exists = card.first_review_ms is not None
         return exists if rule.operator == "exists" else not exists

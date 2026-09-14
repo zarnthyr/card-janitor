@@ -105,11 +105,11 @@ an interval of zero, so the `eq` and `lt` operators can include them.
 
 ### Card state
 
-    {"type": "card_state", "states": ["new", "learning"], "operator": "in"}
+    {"type": "card_state", "states": ["new", "learning"]}
 
-Use `in` for "is any of" and `not_in` for "is none of." Select one or more Anki
-states: `new`, `learning`, `review`, or `relearning`. This describes the card's
-current Anki state, not whether it has ever been studied.
+Select one or more Anki states: `new`, `learning`, `review`, or `relearning`.
+A card matches when its current state is one of the selected values. This
+describes the card's current Anki state, not whether it has ever been reviewed.
 
 ### Review history
 

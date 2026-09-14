@@ -45,7 +45,6 @@ def test_parses_flat_compound_policy() -> None:
                 {
                     "type": "card_state",
                     "states": ["new"],
-                    "operator": "in",
                 },
             ],
         }
@@ -56,7 +55,7 @@ def test_parses_flat_compound_policy() -> None:
     assert isinstance(rule, AllRule)
     assert rule.rules == (
         AgeRule(days=365, source="first_review", operator="gte"),
-        CardStateRule(states=("new",), operator="in"),
+        CardStateRule(states=("new",)),
     )
 
 
@@ -71,7 +70,6 @@ def test_rejects_nested_compound_policy() -> None:
                         {
                             "type": "card_state",
                             "states": ["new"],
-                            "operator": "in",
                         },
                         {"type": "interval", "days": 180, "operator": "gte"},
                     ],
@@ -174,18 +172,17 @@ def test_review_history_rule_parses() -> None:
     assert parsed.config.policies[0].rule == ReviewHistoryRule("not_exists")
 
 
-def test_card_state_membership_rule_parses() -> None:
+def test_card_state_rule_parses() -> None:
     parsed = parse_config(
         policy_config(
             rule={
                 "type": "card_state",
                 "states": ["new", "learning"],
-                "operator": "not_in",
             }
         )
     )
     assert not parsed.issues
-    assert parsed.config.policies[0].rule == CardStateRule(("new", "learning"), "not_in")
+    assert parsed.config.policies[0].rule == CardStateRule(("new", "learning"))
 
 
 def test_numeric_operator_is_required() -> None:

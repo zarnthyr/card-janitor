@@ -103,7 +103,7 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "states", "operator"],
+          "required": ["type", "states"],
           "properties": {
             "type": {"const": "card_state"},
             "states": {
@@ -111,8 +111,7 @@
               "minItems": 1,
               "uniqueItems": true,
               "items": {"enum": ["new", "learning", "review", "relearning"]}
-            },
-            "operator": {"enum": ["in", "not_in"]}
+            }
           }
         },
         {

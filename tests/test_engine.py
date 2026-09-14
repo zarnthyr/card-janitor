@@ -81,10 +81,9 @@ def test_interval_rule_uses_current_interval_without_requiring_revlog() -> None:
 
 
 def test_card_state_membership_uses_card_type_even_when_buried() -> None:
-    rule = CardStateRule(("new", "learning"), "in")
+    rule = CardStateRule(("new", "learning"))
     assert matches_rule(rule, facts(card_type=0, queue=-2), 0)
     assert not matches_rule(rule, facts(card_type=2), 0)
-    assert matches_rule(CardStateRule(("new",), "not_in"), facts(card_type=2), 0)
 
 
 def test_review_history_uses_genuine_answer_entries() -> None:

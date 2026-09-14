@@ -23,6 +23,7 @@ from aqt.qt import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -33,6 +34,7 @@ from aqt.qt import (
     QListWidgetItem,
     QMenu,
     QPushButton,
+    QScrollArea,
     QSignalBlocker,
     QSpinBox,
     QStackedWidget,
@@ -166,9 +168,8 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
     if isinstance(rule, IntervalRule):
         return f"Interval {NUMERIC_OPERATOR_SYMBOLS[rule.operator]} {rule.days} days"
     if isinstance(rule, CardStateRule):
-        operator = "is any of" if rule.operator == "in" else "is none of"
         states = ", ".join(state.capitalize() for state in rule.states)
-        return f"Card state {operator} {states}"
+        return f"Card state is {states}"
     if isinstance(rule, ReviewHistoryRule):
         operator = "exists" if rule.operator == "exists" else "does not exist"
         return f"Review history {operator}"
@@ -192,6 +193,24 @@ def _configured_use(state: str) -> str:
 class DashboardRow:
     record: PolicyRecord
     report: PolicyReport | None
+
+
+def _warning_panel(text: str, parent: QWidget, *, destructive: bool = False) -> QLabel:
+    panel = QLabel(text, parent)
+    panel.setWordWrap(True)
+    if destructive:
+        background = "rgba(210, 45, 45, 42)"
+        border = "rgba(210, 45, 45, 145)"
+    else:
+        background = "rgba(230, 160, 0, 35)"
+        border = "rgba(230, 160, 0, 120)"
+    panel.setStyleSheet(
+        f"background-color: {background};"
+        f"border: 1px solid {border};"
+        "border-radius: 5px;"
+        "padding: 8px;"
+    )
+    return panel
 
 
 class CardStatePicker(QPushButton):
@@ -261,7 +280,11 @@ class RuleConditionRow(QWidget):
         self.kind.addItem("Review history", "review_history")
         self.kind.setMinimumWidth(190)
         self.operator = QComboBox(self)
-        self.operator.setMinimumWidth(125)
+        self.fixed_operator = QLabel("is", self)
+        self.operator_stack = QStackedWidget(self)
+        self.operator_stack.setMinimumWidth(125)
+        self.operator_stack.addWidget(self.operator)
+        self.operator_stack.addWidget(self.fixed_operator)
         self.days = QSpinBox(self)
         self.days.setRange(0, 100000)
         self.days.setSuffix(" days")
@@ -279,7 +302,7 @@ class RuleConditionRow(QWidget):
         for widget in (
             self.number_label,
             self.kind,
-            self.operator,
+            self.operator_stack,
             self.value_stack,
             self.remove_button,
         ):
@@ -298,7 +321,6 @@ class RuleConditionRow(QWidget):
         elif isinstance(rule, CardStateRule):
             self.kind.setCurrentIndex(self.kind.findData("card_state"))
             selected_states = rule.states
-            selected_operator = rule.operator
         elif isinstance(rule, ReviewHistoryRule):
             self.kind.setCurrentIndex(self.kind.findData("review_history"))
             selected_operator = rule.operator
@@ -315,14 +337,15 @@ class RuleConditionRow(QWidget):
         kind = self.kind.currentData()
         self.operator.clear()
         if kind == "card_state":
-            self.operator.addItem("is any of", "in")
-            self.operator.addItem("is none of", "not_in")
+            self.operator_stack.setCurrentWidget(self.fixed_operator)
             self.value_stack.setCurrentWidget(self.states)
         elif kind == "review_history":
+            self.operator_stack.setCurrentWidget(self.operator)
             self.operator.addItem("exists", "exists")
             self.operator.addItem("does not exist", "not_exists")
             self.value_stack.setCurrentWidget(self.no_value)
         else:
+            self.operator_stack.setCurrentWidget(self.operator)
             for label, value in NUMERIC_OPERATOR_LABELS:
                 self.operator.addItem(label, value)
             self.operator.setCurrentIndex(self.operator.findData("gte"))
@@ -337,7 +360,7 @@ class RuleConditionRow(QWidget):
         if kind == "interval":
             return IntervalRule(self.days.value(), self.operator.currentData())
         if kind == "card_state":
-            return CardStateRule(self.states.states(), self.operator.currentData())
+            return CardStateRule(self.states.states())
         return ReviewHistoryRule(self.operator.currentData())
 
 
@@ -374,6 +397,12 @@ class PolicyEditorDialog(QDialog):
         state = policy.state if policy else raw.get("state", "manual")
         index = self.state.findData(state)
         self.state.setCurrentIndex(index if index >= 0 else self.state.findData("manual"))
+        self.automatic_warning = _warning_panel(
+            "<b>Automatic policies run without confirmation.</b><br>"
+            "Use On demand first if you want to review the matching cards.",
+            self,
+        )
+        form.addRow(self.automatic_warning)
         form.addRow("Mode", self.state)
         layout.addWidget(general_group)
 
@@ -424,21 +453,24 @@ class PolicyEditorDialog(QDialog):
         self.add_condition_button = QPushButton("Add Condition", self)
         match_row.addWidget(self.add_condition_button)
         conditions_group_layout.addLayout(match_row)
-        self.creation_age_warning = QLabel(
+        self.creation_age_warning = _warning_panel(
             "⚠ Imported cards retain their original creation dates and may qualify "
             "immediately. Review the matching cards before using Automatic mode.",
             self,
         )
-        self.creation_age_warning.setWordWrap(True)
-        self.creation_age_warning.setStyleSheet(
-            "background-color: rgba(230, 160, 0, 35);"
-            "border: 1px solid rgba(230, 160, 0, 120);"
-            "border-radius: 5px;"
-            "padding: 8px;"
-        )
         conditions_group_layout.addWidget(self.creation_age_warning)
+        self.conditions_scroll = QScrollArea(self)
+        self.conditions_scroll.setWidgetResizable(True)
+        self.conditions_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.conditions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.conditions_scroll.setMinimumHeight(70)
+        self.conditions_scroll.setMaximumHeight(230)
+        self.conditions_container = QWidget(self.conditions_scroll)
         self.conditions_layout = QVBoxLayout()
-        conditions_group_layout.addLayout(self.conditions_layout)
+        self.conditions_layout.setContentsMargins(0, 0, 0, 0)
+        self.conditions_container.setLayout(self.conditions_layout)
+        self.conditions_scroll.setWidget(self.conditions_container)
+        conditions_group_layout.addWidget(self.conditions_scroll)
         source_rule = policy.rule if policy else _best_effort_rule(raw.get("rule"))
         if isinstance(source_rule, (AllRule, AnyRule)):
             self.match.setCurrentIndex(
@@ -473,6 +505,13 @@ class PolicyEditorDialog(QDialog):
         self.move_deck.setEditable(True)
         self.move_deck.addItems(deck_names)
         self.delete = QCheckBox("Delete cards", self)
+        self.delete_warning = _warning_panel(
+            "<b>Matching cards will be DELETED from your collection.</b><br>"
+            "Review them carefully and consider backing up your collection before "
+            "running this policy.",
+            self,
+            destructive=True,
+        )
         tags = [action.tag for action in source_actions if isinstance(action, TagAction)]
         if tags:
             self.tag_enabled.setChecked(True)
@@ -492,7 +531,8 @@ class PolicyEditorDialog(QDialog):
         actions_grid.addWidget(self.suspend, 1, 0)
         actions_grid.addWidget(self.move_enabled, 2, 0)
         actions_grid.addWidget(self.move_deck, 2, 1)
-        actions_grid.addWidget(self.delete, 3, 0)
+        actions_grid.addWidget(self.delete_warning, 3, 0, 1, 2)
+        actions_grid.addWidget(self.delete, 4, 0)
         actions_group_layout.addLayout(actions_grid)
         layout.addWidget(actions_group)
         qconnect(self.delete.toggled, self._update_action_controls)
@@ -517,19 +557,28 @@ class PolicyEditorDialog(QDialog):
         qconnect(row.kind.currentIndexChanged, self._update_condition_warning)
         self._renumber_conditions()
         self._update_condition_warning()
+        self._update_conditions_extent()
 
     def _remove_condition(self, row: RuleConditionRow) -> None:
         if len(self._conditions) == 1:
             showWarning("A policy must have at least one condition.", parent=self)
             return
         self._conditions.remove(row)
+        self.conditions_layout.removeWidget(row)
         row.deleteLater()
         self._renumber_conditions()
         self._update_condition_warning()
+        self._update_conditions_extent()
 
     def _renumber_conditions(self) -> None:
         for index, row in enumerate(self._conditions, start=1):
             row.number_label.setText(f"{index}.")
+
+    def _update_conditions_extent(self) -> None:
+        spacing = max(0, self.conditions_layout.spacing())
+        height = sum(max(1, row.sizeHint().height()) for row in self._conditions)
+        height += spacing * max(0, len(self._conditions) - 1)
+        self.conditions_container.setMinimumHeight(height)
 
     def _update_condition_warning(self, _value: object = None) -> None:
         show_creation_warning = any(
@@ -547,6 +596,11 @@ class PolicyEditorDialog(QDialog):
             widget.setEnabled(not deleting)
         self.tag.setEnabled(not deleting and self.tag_enabled.isChecked())
         self.move_deck.setEnabled(not deleting and self.move_enabled.isChecked())
+        self._update_warning_panels()
+
+    def _update_warning_panels(self) -> None:
+        self.automatic_warning.setVisible(self.state.currentData() == "automatic")
+        self.delete_warning.setVisible(self.delete.isChecked())
 
     def _accept(self) -> None:  # noqa: PLR0912
         name = self.name.text().strip()
@@ -678,8 +732,7 @@ def _best_effort_rule(raw: object) -> Rule | None:  # noqa: PLR0911
             if isinstance(raw_states, list) and value in raw_states
         )
         if states:
-            operator = raw.get("operator")
-            return CardStateRule(states, operator if operator in {"in", "not_in"} else "in")
+            return CardStateRule(states)
     if kind == "review_history" and raw.get("operator") in {"exists", "not_exists"}:
         return ReviewHistoryRule(raw["operator"])
     return None
