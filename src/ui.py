@@ -23,6 +23,7 @@ from aqt.qt import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QEvent,
     QFormLayout,
     QFrame,
     QGridLayout,
@@ -968,9 +969,9 @@ class CardJanitorDialog(QDialog):
         self.add_button = QPushButton("Add…", self)
         self.add_button.setToolTip("Create a cleanup policy.")
         self.edit_button = QPushButton("Edit…", self)
-        self.edit_button.setToolTip("Edit the selected policy.")
+        self.edit_button.setToolTip("Edit the highlighted policy.")
         self.remove_button = QPushButton("Remove…", self)
-        self.remove_button.setToolTip("Remove the selected policy.")
+        self.remove_button.setToolTip("Remove the highlighted policy.")
         intro.addWidget(self.add_button)
         intro.addWidget(self.edit_button)
         intro.addWidget(self.remove_button)
@@ -988,6 +989,8 @@ class CardJanitorDialog(QDialog):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setTabKeyNavigation(False)
+        self.table.installEventFilter(self)
+        self.table.viewport().installEventFilter(self)
         vertical_header = self.table.verticalHeader()
         vertical_header.setVisible(False)
         vertical_header.setMinimumSectionSize(self.fontMetrics().height() * 2 + 12)
@@ -1059,12 +1062,12 @@ class CardJanitorDialog(QDialog):
             "Browse",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
-        self.view_button.setToolTip("Open cards from the selected policies in Browse.")
+        self.view_button.setToolTip("Open cards from the checked policies in Browse.")
         self.run_button = buttons.addButton(
             "Clean Up",
             QDialogButtonBox.ButtonRole.AcceptRole,
         )
-        self.run_button.setToolTip("Apply the actions from the selected policies.")
+        self.run_button.setToolTip("Apply the actions from the checked policies.")
         if isinstance(self.run_button, QPushButton):
             self.run_button.setDefault(True)
         qconnect(self.settings_button.clicked, self._open_settings)
@@ -1217,34 +1220,38 @@ class CardJanitorDialog(QDialog):
         if item.column() != self.COLUMN_RUN:
             self._edit_policy()
 
-    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt virtual method
-        focused = self.focusWidget()
-        if event.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return):
-            if isinstance(focused, QPushButton) and focused.isEnabled():
-                focused.click()
-            elif focused in (self.table, self.table.viewport()):
-                self._edit_policy()
-            event.accept()
-            return
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and focused in (
-            self.table,
-            self.table.viewport(),
+    def eventFilter(self, watched: object, event: QEvent) -> bool:  # noqa: N802
+        if (
+            watched not in (self.table, self.table.viewport())
+            or event.type() != QEvent.Type.KeyPress
+            or not isinstance(event, QKeyEvent)
         ):
+            return super().eventFilter(watched, event)
+        if event.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return):
+            self._edit_policy()
+            return True
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self._remove_policy()
-            event.accept()
-            return
-        super().keyPressEvent(event)
+            return True
+        if event.key() == Qt.Key.Key_Space:
+            row = self.table.currentRow()
+            if 0 <= row < len(self._rows):
+                item = self.table.item(row, self.COLUMN_RUN)
+                if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                    checked = item.checkState() == Qt.CheckState.Checked
+                    item.setCheckState(
+                        Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked
+                    )
+            return True
+        return super().eventFilter(watched, event)
 
     def _update_summary(self) -> None:
         self.summary.setVisible(True)
         reports = self.checked_reports()
-        global_issues = [
-            issue for issue in self._parsed.issues if not issue.path.startswith("policies[")
-        ]
-        if global_issues:
+        if self._parsed.issues:
             self.summary.setText(
-                "Configuration settings need repair:\n"
-                + "\n".join(f"• {issue}" for issue in global_issues)
+                "Configuration needs repair before cleanup can run:\n"
+                + "\n".join(f"• {issue}" for issue in self._parsed.issues)
             )
             self.view_button.setEnabled(False)
             self.run_button.setEnabled(False)
@@ -1283,7 +1290,7 @@ class CardJanitorDialog(QDialog):
             )
         if errors:
             messages.append(
-                "A selected policy has an error. Unselect it or fix the configuration before running."
+                "A checked policy has an error. Uncheck it or fix the configuration before running."
             )
         self.summary.setText("\n".join(messages))
         self.view_button.setEnabled(bool(candidate_ids))

@@ -1,8 +1,8 @@
 # Configuration
 
 Add and edit policies in the Card Janitor window. Use **Settings** to configure
-automatic cleanup, notifications, and debug logging. Choose **Edit JSON** from
-that dialog to edit the underlying configuration directly.
+notifications and debug logging. Choose **Edit JSON** to edit the underlying
+configuration directly.
 
 Invalid configuration fails closed: no on-demand or automatic cleanup runs
 while a validation error is present. Invalid policies remain visible in Card
@@ -12,7 +12,18 @@ repaired through **Settings** or **Edit JSON**.
 Deck names are resolved when a policy is evaluated. A missing or filtered move
 destination is an error.
 
-## Mining example
+## Safety and undo
+
+Card Janitor can permanently delete cards. Back up your collection before use,
+begin in On demand mode, and inspect matching cards with **Browse** before
+running cleanup. Automatic policies run without confirmation.
+
+Each cleanup run is recorded as one entry in Anki's collection undo history.
+Policy and settings changes are stored in the add-on configuration, outside the
+collection undo system. Removing a policy therefore requires confirmation but
+cannot be undone with Anki's Undo command.
+
+## Example
 
     {
       "config_version": 1,
@@ -20,11 +31,11 @@ destination is an error.
       "debug_logging": false,
       "policies": [
         {
-          "id": "mining-cleanup",
-          "name": "Mining cleanup",
+          "id": "old-studied-cards",
+          "name": "Old studied cards",
           "state": "manual",
           "scope": {
-            "decks": ["Mining"],
+            "decks": ["My Deck"],
             "include_subdecks": true,
             "include_suspended": false
           },
@@ -35,33 +46,34 @@ destination is an error.
             "operator": "gte"
           },
           "actions": [
-            {"type": "tag", "tag": "retired"},
+            {"type": "tag", "tag": "cleaned_up"},
             {"type": "suspend"}
           ]
         }
       ]
     }
 
-Keep `state` set to `manual` while testing. **Card Janitor** evaluates every
-configured policy and shows its scope, conditions, actions, and the number of
-cards it would clean up.
+In JSON, `state: "manual"` is the **On demand** mode shown in the policy editor.
+Keep this mode while testing. Card Janitor evaluates every configured policy
+and shows its scope, conditions, actions, and the number of cards it would
+clean up.
 Every policy is included by default in the dashboard. The checkboxes affect
 only the current run. Change `state` to `automatic` to also run a policy once
 per day without approval. Each run is recorded in Anki's undo history.
 
-The window remains open while you inspect cards. **Browse** opens
-the union from all checked policies. Select a row and use **Edit** to change
-that policy; **Refresh** recalculates the table. Running a policy manually does
-not count as that day's automatic cleanup.
+The window remains open while you inspect cards. **Browse** opens the union
+from all checked policies. Select a row and use **Edit** to change that policy;
+**Refresh** recalculates the table. Running a policy on demand does not count as
+that day's automatic cleanup.
 
 Policy modes are:
 
 - `manual` — runs only when you start cleanup from Card Janitor
 - `automatic` — runs once per day without confirmation and can also be run on demand
 
-Automatic cleanup runs on profile opening if it has not yet run that Anki day.
-It also runs when the Anki day changes while the application remains open. Use
-**Card Janitor** whenever you want to run policies manually.
+Automatic cleanup runs when a profile opens if it has not yet run that day. It
+also runs when Anki's day changes while the application remains open. Use Card
+Janitor whenever you want to run policies on demand.
 
 Set `notify_after_automatic_run` to `false` to suppress successful automatic-run
 summaries. No summary is shown when no cards were changed.
@@ -88,7 +100,7 @@ in the card ID.
 > first evaluation. Anki does not expose a reliable per-card local-import timestamp.
 
 Use creation-age conditions only for cards whose provenance you understand. Keep the
-policy in `manual` mode and inspect its matching cards before changing it to
+policy in On demand (`manual`) mode and inspect its matching cards before changing it to
 `automatic`. Card Janitor does not attempt to rewrite card IDs. If you use another
 add-on to normalize creation dates, back up the collection first and verify that the
 tool safely updates all related references.
@@ -151,7 +163,7 @@ to greater than, at least, exactly, at most, and less than.
 - `{"type": "move", "deck": "Retired"}` moves the card to an existing normal deck.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
 
-`delete_card` must be the policy's only action. It can use `state: "automatic"`, but automatic deletion runs without confirmation. Manual deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the Mining example uses `state: "manual"` with tag and suspend actions.
+`delete_card` must be the policy's only action. It can use `state: "automatic"`, but automatic deletion runs without confirmation. On-demand deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the example uses `state: "manual"` with tag and suspend actions.
 
 ## Scope behavior
 
@@ -159,4 +171,15 @@ to greater than, at least, exactly, at most, and less than.
 
 ## Overlapping policies
 
-Compatible actions are merged and deduplicated during manual and automatic execution. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
+Compatible actions are merged and deduplicated during on-demand and automatic execution. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
+
+## Keyboard navigation
+
+In Card Janitor, use the arrow keys to highlight a policy, Space to toggle its
+checkbox, Enter to edit it, and Delete or Backspace to remove it after
+confirmation. Tab and Shift+Tab move between the table and buttons. Cleanup has
+no global shortcut and requires the **Clean Up** button.
+
+The policy editor initially focuses the name field. Tab and Shift+Tab move
+through its controls in visual order; standard Space, arrow-key, and Enter
+behavior applies to checkboxes, lists, selectors, and dialog buttons.

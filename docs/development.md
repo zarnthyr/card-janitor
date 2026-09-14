@@ -9,10 +9,10 @@ make inspect
 
 The project targets Python 3.10+ and uses the Anki 26.08 development packages. Runtime dependencies are limited to APIs bundled with Anki.
 
-For manual testing, install `card-janitor.ankiaddon` in Anki and begin with a
-policy whose state is `manual`. Open **Card Janitor…** to add or edit policies,
-review affected-card counts, inspect qualifying cards in the Browser, execute a
-policy, and test undo before trying the `automatic` state. The manager is a
+For manual testing, install `card-janitor.ankiaddon` in Anki and begin with an
+On demand policy (`state: "manual"`). Open **Card Janitor…** to add or edit
+policies, review card counts, inspect qualifying cards in the Browser, execute
+a policy, and test undo before trying Automatic mode. The manager is a
 modeless tool window, so it remains available while working in the Browser.
 
 ## Linked development installation

@@ -2,7 +2,14 @@
 
 Configurable policy-based cleanup for Anki cards.
 
-Applies cleanup policies according to deck scope, study age, current interval, or new-card status, either after manual preview and approval or automatically once per Anki day.
+Applies cleanup policies according to deck scope, age, interval, card state, or review history, either on demand or automatically once per day.
+
+> [!WARNING]
+> Card Janitor can make destructive collection changes, including permanently
+> deleting cards. Back up your collection before use. Begin with **On demand**
+> mode, inspect matching cards with **Browse**, and verify Anki's undo behavior
+> before enabling automatic cleanup. You use this add-on at your own risk; its
+> author accepts no responsibility or liability for collection damage or data loss.
 
 ## Installation
 
@@ -34,7 +41,7 @@ Then install `card-janitor.ankiaddon` from Anki's add-ons screen or by double cl
 Each policy has three parts:
 
 * Scope — one or more decks, optionally including subdecks
-* Conditions — age, interval, card state, or study status, combined with AND/OR
+* Conditions — age, interval, card state, or review history, combined with AND/OR
 * Actions — tag, suspend, move, or delete the qualifying cards
 
 First-review age is derived from genuine answer entries in Anki's review log. Cards without first-review history do not qualify for that condition. Card-creation age is available separately.
@@ -54,7 +61,7 @@ First-review age is derived from genuine answer entries in Anki's review log. Ca
 | On demand  | Runs only when you start cleanup from Card Janitor          |
 | Automatic  | Runs once per day without confirmation and can also be run on demand |
 
-Automatic cleanup runs on profile opening if it has not yet run that Anki day, and on Anki's day-change hook when the application remains open. It does not use background polling. Its completion notification can be disabled independently.
+Automatic cleanup runs when a profile opens if it has not yet run that day, and when Anki's day changes while the application remains open. It does not use background polling. Its completion notification can be disabled independently.
 
 ## Configuration
 
@@ -65,7 +72,7 @@ Tools → Card Janitor…
 Card Janitor → Add… or Edit…
 ```
 
-The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and open **Card Janitor…** to preview its results. The dashboard can open candidates in Anki's Browser or apply the configured actions after approval.
+The add-on ships with no policies, so installing it cannot modify a collection. Begin with an on-demand tag-and-suspend policy and open **Card Janitor…** to preview its results. The dashboard can open candidates in Anki's Browser or apply the configured actions.
 
 Policies can be created and repaired in the manager. **Settings…** controls
 notifications and debug logging. Its **Edit JSON…** button
@@ -80,7 +87,7 @@ See [config.md](./docs/config.md) for the complete schema and examples.
 * Tags belong to notes in Anki, so tagging a qualifying card tags its note and any sibling cards
 * First-review age cannot recover review history that was deleted or omitted during import
 * Anki does not store a reliable per-card timestamp for when a card was imported into the current collection
-* Decks are configured by name, so renamed or missing decks cause the affected policy to fail closed
+* Decks are configured by name, so renamed or missing decks cause that policy to fail closed
 
 ## Development
 
