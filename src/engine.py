@@ -16,8 +16,8 @@ from .models import (
     IntervalRule,
     MoveAction,
     Policy,
+    ReviewHistoryRule,
     Rule,
-    StudyStatusRule,
     SuspendAction,
     TagAction,
 )
@@ -93,9 +93,9 @@ def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:  # noqa: PLR
             return False
         included = state in rule.states
         return included if rule.operator == "in" else not included
-    if isinstance(rule, StudyStatusRule):
-        never_studied = card.first_review_ms is None
-        return never_studied if rule.status == "never_studied" else not never_studied
+    if isinstance(rule, ReviewHistoryRule):
+        exists = card.first_review_ms is not None
+        return exists if rule.operator == "exists" else not exists
     if isinstance(rule, AllRule):
         return all(matches_rule(child, card, now_ms) for child in rule.rules)
     if isinstance(rule, AnyRule):

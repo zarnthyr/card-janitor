@@ -46,8 +46,8 @@ class CardStateRule:
 
 
 @dataclass(frozen=True)
-class StudyStatusRule:
-    status: Literal["never_studied", "ever_studied"]
+class ReviewHistoryRule:
+    operator: Literal["exists", "not_exists"]
 
 
 @dataclass(frozen=True)
@@ -60,7 +60,7 @@ class AnyRule:
     rules: tuple[Rule, ...]
 
 
-Rule: TypeAlias = AgeRule | IntervalRule | CardStateRule | StudyStatusRule | AllRule | AnyRule
+Rule: TypeAlias = AgeRule | IntervalRule | CardStateRule | ReviewHistoryRule | AllRule | AnyRule
 
 
 @dataclass(frozen=True)
@@ -154,7 +154,7 @@ def _nonnegative_int(data: dict[str, Any], key: str, path: str) -> int:
 
 def _parse_simple_rule(
     value: object, path: str
-) -> AgeRule | IntervalRule | CardStateRule | StudyStatusRule:
+) -> AgeRule | IntervalRule | CardStateRule | ReviewHistoryRule:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     rule_type = value.get("type")
@@ -188,11 +188,11 @@ def _parse_simple_rule(
         if operator not in {"in", "not_in"}:
             raise ValueError(f"{path}.operator: must be 'in' or 'not_in'")
         return CardStateRule(tuple(dict.fromkeys(states)), operator)
-    if rule_type == "study_status":
-        status = value.get("status")
-        if status not in {"never_studied", "ever_studied"}:
-            raise ValueError(f"{path}.status: must be 'never_studied' or 'ever_studied'")
-        return StudyStatusRule(status)
+    if rule_type == "review_history":
+        operator = value.get("operator")
+        if operator not in {"exists", "not_exists"}:
+            raise ValueError(f"{path}.operator: must be 'exists' or 'not_exists'")
+        return ReviewHistoryRule(operator)
     if rule_type in {"all", "any"}:
         raise ValueError(f"{path}.type: compound rules cannot be nested")
     raise ValueError(f"{path}.type: unknown rule type {rule_type!r}")
@@ -349,8 +349,8 @@ def rule_to_dict(rule: Rule) -> dict[str, Any]:
             "states": list(rule.states),
             "operator": rule.operator,
         }
-    if isinstance(rule, StudyStatusRule):
-        return {"type": "study_status", "status": rule.status}
+    if isinstance(rule, ReviewHistoryRule):
+        return {"type": "review_history", "operator": rule.operator}
     if isinstance(rule, (AllRule, AnyRule)):
         return {
             "type": "all" if isinstance(rule, AllRule) else "any",

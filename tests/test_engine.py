@@ -17,9 +17,9 @@ from card_janitor.models import (
     CardStateRule,
     IntervalRule,
     Policy,
+    ReviewHistoryRule,
     Rule,
     Scope,
-    StudyStatusRule,
     SuspendAction,
     TagAction,
 )
@@ -87,11 +87,11 @@ def test_card_state_membership_uses_card_type_even_when_buried() -> None:
     assert matches_rule(CardStateRule(("new",), "not_in"), facts(card_type=2), 0)
 
 
-def test_never_studied_uses_genuine_review_history() -> None:
-    rule = StudyStatusRule("never_studied")
+def test_review_history_uses_genuine_answer_entries() -> None:
+    rule = ReviewHistoryRule("not_exists")
     assert matches_rule(rule, facts(card_type=0, first_review_ms=None), 0)
     assert not matches_rule(rule, facts(card_type=0, first_review_ms=2000), 0)
-    assert matches_rule(StudyStatusRule("ever_studied"), facts(first_review_ms=2000), 0)
+    assert matches_rule(ReviewHistoryRule("exists"), facts(first_review_ms=2000), 0)
 
 
 @pytest.mark.parametrize(

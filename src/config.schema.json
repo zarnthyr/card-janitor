@@ -118,10 +118,10 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "status"],
+          "required": ["type", "operator"],
           "properties": {
-            "type": {"const": "study_status"},
-            "status": {"enum": ["never_studied", "ever_studied"]}
+            "type": {"const": "review_history"},
+            "operator": {"enum": ["exists", "not_exists"]}
           }
         }
       ]

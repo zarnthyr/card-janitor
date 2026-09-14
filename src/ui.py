@@ -31,6 +31,7 @@ from aqt.qt import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMenu,
     QPushButton,
     QSignalBlocker,
     QSpinBox,
@@ -40,6 +41,7 @@ from aqt.qt import (
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
     qconnect,
 )
 from aqt.utils import showWarning, tooltip
@@ -67,9 +69,9 @@ from .models import (
     MoveAction,
     Policy,
     PolicyRecord,
+    ReviewHistoryRule,
     Rule,
     Scope,
-    StudyStatusRule,
     SuspendAction,
     TagAction,
 )
@@ -167,9 +169,9 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
         operator = "is any of" if rule.operator == "in" else "is none of"
         states = ", ".join(state.capitalize() for state in rule.states)
         return f"Card state {operator} {states}"
-    if isinstance(rule, StudyStatusRule):
-        status = "Never studied" if rule.status == "never_studied" else "Ever studied"
-        return f"Study status is {status}"
+    if isinstance(rule, ReviewHistoryRule):
+        operator = "exists" if rule.operator == "exists" else "does not exist"
+        return f"Review history {operator}"
     if isinstance(rule, (AllRule, AnyRule)):
         operator = " AND " if isinstance(rule, AllRule) else " OR "
         description = operator.join(_describe_rule(child, nested=True) for child in rule.rules)
@@ -196,44 +198,52 @@ class CardStatePicker(QPushButton):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._states = ("new",)
-        qconnect(self.clicked, self._choose_states)
-        self._update_text()
+        self._checkboxes: dict[str, QCheckBox] = {}
+        menu = QMenu(self)
+        container = QWidget(menu)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(4)
+        for label, value in CARD_STATES:
+            checkbox = QCheckBox(label, container)
+            self._checkboxes[value] = checkbox
+            qconnect(
+                checkbox.toggled,
+                lambda checked, selected=value: self._state_toggled(selected, checked),
+            )
+            layout.addWidget(checkbox)
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(container)
+        menu.addAction(action)
+        self.setMenu(menu)
+        self.set_states(self._states)
 
     def states(self) -> tuple[str, ...]:
         return self._states
 
     def set_states(self, states: tuple[str, ...]) -> None:
         self._states = tuple(value for _label, value in CARD_STATES if value in states)
+        blockers = [QSignalBlocker(checkbox) for checkbox in self._checkboxes.values()]
+        for value, checkbox in self._checkboxes.items():
+            checkbox.setChecked(value in self._states)
+        del blockers
         self._update_text()
 
     def _update_text(self) -> None:
         selected = [label for label, value in CARD_STATES if value in self._states]
-        self.setText(", ".join(selected) + "…" if selected else "Choose states…")
+        self.setText(", ".join(selected) if selected else "Choose states")
 
-    def _choose_states(self) -> None:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Select Card States")
-        layout = QVBoxLayout(dialog)
-        checkboxes: list[tuple[str, QCheckBox]] = []
-        for label, value in CARD_STATES:
-            checkbox = QCheckBox(label, dialog)
-            checkbox.setChecked(value in self._states)
-            checkboxes.append((value, checkbox))
-            layout.addWidget(checkbox)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
-            parent=dialog,
+    def _state_toggled(self, state: str, _checked: bool) -> None:
+        selected = tuple(
+            value for _label, value in CARD_STATES if self._checkboxes[value].isChecked()
         )
-        qconnect(buttons.accepted, dialog.accept)
-        qconnect(buttons.rejected, dialog.reject)
-        layout.addWidget(buttons)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        selected = tuple(value for value, checkbox in checkboxes if checkbox.isChecked())
         if not selected:
-            showWarning("Choose at least one card state.", parent=self)
+            blocker = QSignalBlocker(self._checkboxes[state])
+            self._checkboxes[state].setChecked(True)
+            del blocker
             return
-        self.set_states(selected)
+        self._states = selected
+        self._update_text()
 
 
 class RuleConditionRow(QWidget):
@@ -248,31 +258,22 @@ class RuleConditionRow(QWidget):
         self.kind.addItem("Age since creation", "age_card_created")
         self.kind.addItem("Current interval", "interval")
         self.kind.addItem("Card state", "card_state")
-        self.kind.addItem("Study status", "study_status")
+        self.kind.addItem("Review history", "review_history")
         self.kind.setMinimumWidth(190)
-        creation_age_index = self.kind.findData("age_card_created")
-        self.kind.setItemData(
-            creation_age_index,
-            "This uses the timestamp encoded in the card ID, not the date the card was "
-            "imported into your collection. Imported cards commonly retain their original "
-            "creator's timestamp and may qualify immediately.",
-            Qt.ItemDataRole.ToolTipRole,
-        )
         self.operator = QComboBox(self)
         self.operator.setMinimumWidth(125)
         self.days = QSpinBox(self)
         self.days.setRange(0, 100000)
         self.days.setSuffix(" days")
         self.days.setMinimumWidth(220)
-        self.choice = QComboBox(self)
-        self.choice.setMinimumWidth(220)
         self.states = CardStatePicker(self)
         self.states.setMinimumWidth(220)
         self.value_stack = QStackedWidget(self)
         self.value_stack.setMinimumWidth(220)
         self.value_stack.addWidget(self.days)
-        self.value_stack.addWidget(self.choice)
         self.value_stack.addWidget(self.states)
+        self.no_value = QWidget(self)
+        self.value_stack.addWidget(self.no_value)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(80)
         for widget in (
@@ -283,7 +284,6 @@ class RuleConditionRow(QWidget):
             self.remove_button,
         ):
             layout.addWidget(widget)
-        selected_choice: str | None = None
         selected_states: tuple[str, ...] | None = None
         selected_operator: str | None = None
         if isinstance(rule, AgeRule):
@@ -299,41 +299,36 @@ class RuleConditionRow(QWidget):
             self.kind.setCurrentIndex(self.kind.findData("card_state"))
             selected_states = rule.states
             selected_operator = rule.operator
-        elif isinstance(rule, StudyStatusRule):
-            self.kind.setCurrentIndex(self.kind.findData("study_status"))
-            selected_choice = rule.status
+        elif isinstance(rule, ReviewHistoryRule):
+            self.kind.setCurrentIndex(self.kind.findData("review_history"))
+            selected_operator = rule.operator
         else:
             self.days.setValue(365)
         qconnect(self.kind.currentIndexChanged, self._update_controls)
         self._update_controls()
         if selected_operator is not None:
             self.operator.setCurrentIndex(self.operator.findData(selected_operator))
-        if selected_choice is not None:
-            self.choice.setCurrentIndex(self.choice.findData(selected_choice))
         if selected_states is not None:
             self.states.set_states(selected_states)
 
     def _update_controls(self, _index: int = 0) -> None:
         kind = self.kind.currentData()
-        self.kind.setToolTip(self.kind.currentData(Qt.ItemDataRole.ToolTipRole) or "")
         self.operator.clear()
-        self.choice.clear()
         if kind == "card_state":
             self.operator.addItem("is any of", "in")
             self.operator.addItem("is none of", "not_in")
             self.value_stack.setCurrentWidget(self.states)
-        elif kind == "study_status":
-            self.operator.addItem("is", "eq")
-            self.choice.addItem("Never studied", "never_studied")
-            self.choice.addItem("Ever studied", "ever_studied")
-            self.value_stack.setCurrentWidget(self.choice)
+        elif kind == "review_history":
+            self.operator.addItem("exists", "exists")
+            self.operator.addItem("does not exist", "not_exists")
+            self.value_stack.setCurrentWidget(self.no_value)
         else:
             for label, value in NUMERIC_OPERATOR_LABELS:
                 self.operator.addItem(label, value)
             self.operator.setCurrentIndex(self.operator.findData("gte"))
             self.value_stack.setCurrentWidget(self.days)
 
-    def rule(self) -> AgeRule | IntervalRule | CardStateRule | StudyStatusRule:
+    def rule(self) -> AgeRule | IntervalRule | CardStateRule | ReviewHistoryRule:
         kind = self.kind.currentData()
         if kind == "age_first_review":
             return AgeRule(self.days.value(), "first_review", self.operator.currentData())
@@ -343,7 +338,7 @@ class RuleConditionRow(QWidget):
             return IntervalRule(self.days.value(), self.operator.currentData())
         if kind == "card_state":
             return CardStateRule(self.states.states(), self.operator.currentData())
-        return StudyStatusRule(self.choice.currentData())
+        return ReviewHistoryRule(self.operator.currentData())
 
 
 class PolicyEditorDialog(QDialog):
@@ -435,6 +430,12 @@ class PolicyEditorDialog(QDialog):
             self,
         )
         self.creation_age_warning.setWordWrap(True)
+        self.creation_age_warning.setStyleSheet(
+            "background-color: rgba(230, 160, 0, 35);"
+            "border: 1px solid rgba(230, 160, 0, 120);"
+            "border-radius: 5px;"
+            "padding: 8px;"
+        )
         conditions_group_layout.addWidget(self.creation_age_warning)
         self.conditions_layout = QVBoxLayout()
         conditions_group_layout.addLayout(self.conditions_layout)
@@ -651,7 +652,7 @@ def _best_effort_rule(raw: object) -> Rule | None:  # noqa: PLR0911
             for child in children
             if isinstance(
                 child,
-                (AgeRule, IntervalRule, CardStateRule, StudyStatusRule),
+                (AgeRule, IntervalRule, CardStateRule, ReviewHistoryRule),
             )
         )
         if simple:
@@ -679,8 +680,8 @@ def _best_effort_rule(raw: object) -> Rule | None:  # noqa: PLR0911
         if states:
             operator = raw.get("operator")
             return CardStateRule(states, operator if operator in {"in", "not_in"} else "in")
-    if kind == "study_status" and raw.get("status") in {"never_studied", "ever_studied"}:
-        return StudyStatusRule(raw["status"])
+    if kind == "review_history" and raw.get("operator") in {"exists", "not_exists"}:
+        return ReviewHistoryRule(raw["operator"])
     return None
 
 

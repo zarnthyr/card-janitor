@@ -111,13 +111,13 @@ Use `in` for "is any of" and `not_in` for "is none of." Select one or more Anki
 states: `new`, `learning`, `review`, or `relearning`. This describes the card's
 current Anki state, not whether it has ever been studied.
 
-### Study status
+### Review history
 
-    {"type": "study_status", "status": "never_studied"}
+    {"type": "review_history", "operator": "not_exists"}
 
-`never_studied` matches cards with no genuine answer entry in Anki's review
-log. Unlike the `new` card state, it does not match a previously studied card
-that was later reset to New. `ever_studied` matches cards with such an entry.
+Use `exists` to match cards with a genuine answer entry in Anki's review log,
+or `not_exists` to match cards without one. A previously reviewed card that was
+later reset to New still has review history.
 
 ### Combining conditions
 
@@ -131,7 +131,7 @@ that was later reset to New. `ever_studied` matches cards with such an entry.
 
 Use `any` for OR and `all` for AND. Groups must contain at least one condition.
 Composition is deliberately limited to one flat group: every child must be a
-single age, interval, card-state, or study-status condition. Nested AND/OR
+single age, interval, card-state, or review-history condition. Nested AND/OR
 groups are rejected.
 
 For example, the conditions for a stale-new-card policy are:
@@ -140,7 +140,7 @@ For example, the conditions for a stale-new-card policy are:
       "type": "all",
       "rules": [
         {"type": "age", "days": 30, "from": "card_created", "operator": "gte"},
-        {"type": "study_status", "status": "never_studied"}
+        {"type": "review_history", "operator": "not_exists"}
       ]
     }
 

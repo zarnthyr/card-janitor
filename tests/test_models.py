@@ -7,7 +7,7 @@ from card_janitor.models import (
     CardStateRule,
     DeleteCardAction,
     MoveAction,
-    StudyStatusRule,
+    ReviewHistoryRule,
     parse_config,
     policy_to_dict,
 )
@@ -168,10 +168,10 @@ def test_removed_answer_rules_are_rejected() -> None:
         assert not parsed.config.policies
 
 
-def test_study_status_rule_parses() -> None:
-    parsed = parse_config(policy_config(rule={"type": "study_status", "status": "never_studied"}))
+def test_review_history_rule_parses() -> None:
+    parsed = parse_config(policy_config(rule={"type": "review_history", "operator": "not_exists"}))
     assert not parsed.issues
-    assert parsed.config.policies[0].rule == StudyStatusRule("never_studied")
+    assert parsed.config.policies[0].rule == ReviewHistoryRule("not_exists")
 
 
 def test_card_state_membership_rule_parses() -> None:
