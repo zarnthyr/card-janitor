@@ -1057,6 +1057,8 @@ class CardJanitorDialog(QDialog):
             focused = self.focusWidget()
             if isinstance(focused, QPushButton) and focused.isEnabled():
                 focused.click()
+            elif focused in (self.table, self.table.viewport()):
+                self._edit_policy()
             event.accept()
             return
         super().keyPressEvent(event)
