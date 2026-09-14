@@ -11,7 +11,14 @@ from aqt.operations import QueryOp
 from card_janitor import ui
 from card_janitor.actions import build_execution_plan, execute_plan
 from card_janitor.evaluator import evaluate_policy
-from card_janitor.models import AgeRule, Policy, Scope, SuspendAction, TagAction
+from card_janitor.models import (
+    AgeRule,
+    DeleteCardAction,
+    Policy,
+    Scope,
+    SuspendAction,
+    TagAction,
+)
 
 
 def test_query_op_requires_constructor_success_callback() -> None:
@@ -141,5 +148,44 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         assert result.affected_cards == 1
         assert collection.get_card(card_id).queue == -1
         assert collection.get_note(note.id).has_tag("retired")
+        assert collection.undo_status().undo == "Clean test card"
+
+        collection.undo()
+
+        assert collection.get_card(card_id).queue != -1
+        assert not collection.get_note(note.id).has_tag("retired")
+    finally:
+        collection.close()
+
+
+def test_delete_action_can_be_undone(tmp_path: Path) -> None:
+    collection = Collection(str(tmp_path / "collection.anki2"))
+    try:
+        deck_id = collection.decks.add_normal_deck_with_name("Cleanup").id
+        notetype = collection.models.by_name("Basic")
+        assert notetype is not None
+        note = collection.new_note(notetype)
+        note["Front"] = "temporary"
+        note["Back"] = "card"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+        policy = Policy(
+            id="delete",
+            name="Delete",
+            state="manual",
+            scope=Scope(("Cleanup",)),
+            rule=AgeRule(0, "card_created", "gte"),
+            actions=(DeleteCardAction(),),
+        )
+        report = evaluate_policy(collection, policy, now_ms=card_id)
+
+        execute_plan(collection, build_execution_plan((report,)), "Delete test card")
+
+        assert not collection.find_cards(f"cid:{card_id}")
+        assert collection.undo_status().undo == "Delete test card"
+
+        collection.undo()
+
+        assert collection.find_cards(f"cid:{card_id}") == [card_id]
     finally:
         collection.close()
