@@ -35,7 +35,7 @@
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "name": {"type": "string", "minLength": 1},
-        "state": {"enum": ["disabled", "manual", "automatic"]},
+        "state": {"enum": ["manual", "automatic"]},
         "scope": {"$ref": "#/$defs/scope"},
         "rule": {"$ref": "#/$defs/rule"},
         "actions": {

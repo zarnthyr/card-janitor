@@ -83,7 +83,7 @@ class DeleteCardAction:
 
 
 Action: TypeAlias = TagAction | SuspendAction | MoveAction | DeleteCardAction
-PolicyState: TypeAlias = Literal["disabled", "manual", "automatic"]
+PolicyState: TypeAlias = Literal["manual", "automatic"]
 NumericOperator: TypeAlias = Literal["gt", "gte", "eq", "lte", "lt"]
 CardState: TypeAlias = Literal["new", "learning", "review", "relearning"]
 
@@ -247,8 +247,8 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     policy_id = _required_string(value, "id", path)
     name = _required_string(value, "name", path)
     state = value.get("state")
-    if state not in {"disabled", "manual", "automatic"}:
-        raise ValueError(f"{path}.state: must be 'disabled', 'manual', or 'automatic'")
+    if state not in {"manual", "automatic"}:
+        raise ValueError(f"{path}.state: must be 'manual' or 'automatic'")
     actions_value = value.get("actions")
     if not isinstance(actions_value, list) or not actions_value:
         raise ValueError(f"{path}.actions: must be a non-empty array")

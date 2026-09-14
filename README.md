@@ -47,13 +47,12 @@ First-review age is derived from genuine answer entries in Anki's review log. Ca
 > you understand, and preview it with **On demand** mode before enabling automatic
 > actions.
 
-## Policy States
+## Policy Modes
 
-| State     | Behavior                                                               |
-| --------- | ---------------------------------------------------------------------- |
-| Disabled  | Available in the manual dialog but unchecked and never scheduled       |
-| Manual    | Included in manual runs by default and never scheduled                 |
-| Automatic | Included in manual runs by default and run at most once per Anki day |
+| Mode       | Behavior                                                    |
+| ---------- | ----------------------------------------------------------- |
+| On demand  | Runs only when you start cleanup from Card Janitor          |
+| Automatic  | Runs once per day without confirmation and can also be run on demand |
 
 Automatic cleanup runs on profile opening if it has not yet run that Anki day, and on Anki's day-change hook when the application remains open. It does not use background polling. Its completion notification can be disabled independently.
 

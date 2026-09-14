@@ -39,8 +39,7 @@ def test_dashboard_uses_current_query_op_constructor(
 
     manual = SimpleNamespace(state="manual")
     automatic = SimpleNamespace(state="automatic")
-    disabled = SimpleNamespace(state="disabled")
-    parsed = SimpleNamespace(config=SimpleNamespace(policies=(manual, automatic, disabled)))
+    parsed = SimpleNamespace(config=SimpleNamespace(policies=(manual, automatic)))
     evaluated: list[tuple[object, tuple[object, ...]]] = []
     monkeypatch.setattr(ui, "mw", SimpleNamespace(col="current collection"))
     monkeypatch.setattr(ui, "_load_configured", lambda: parsed)
@@ -58,7 +57,7 @@ def test_dashboard_uses_current_query_op_constructor(
     assert callable(created[0].success)
     assert created[0].started
     created[0].op("collection")
-    assert evaluated == [("collection", (manual, automatic, disabled))]
+    assert evaluated == [("collection", (manual, automatic))]
 
 
 @pytest.mark.parametrize(

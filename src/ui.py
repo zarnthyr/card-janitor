@@ -196,16 +196,12 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
 
 
 def _configured_use(state: str) -> str:
-    if state == "disabled":
-        return "Off"
     if state == "manual":
         return "On demand"
     return "Automatic"
 
 
 def _mode_tooltip(state: str) -> str:
-    if state == "disabled":
-        return "Off: runs only when you select it manually."
     if state == "manual":
         return "On demand: runs only when you start cleanup manually."
     return "Automatic: runs once per day without confirmation."
@@ -418,7 +414,6 @@ class PolicyEditorDialog(QDialog):
         self.name = QLineEdit(policy.name if policy else _raw_string(raw, "name"), self)
         form.addRow("Name", self.name)
         self.state = QComboBox(self)
-        self.state.addItem("Off", "disabled")
         self.state.addItem("On demand", "manual")
         self.state.addItem("Automatic", "automatic")
         state = policy.state if policy else raw.get("state", "manual")
@@ -1020,11 +1015,7 @@ class CardJanitorDialog(QDialog):
             use_config_default = checked_keys is None or (
                 known_keys is not None and record.key not in known_keys
             )
-            included = (
-                policy is not None and policy.state != "disabled"
-                if use_config_default
-                else record.key in checked_keys
-            )
+            included = policy is not None if use_config_default else record.key in checked_keys
             run_item = QTableWidgetItem()
             flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
             if policy is not None:

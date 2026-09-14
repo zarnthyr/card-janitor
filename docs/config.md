@@ -45,22 +45,19 @@ destination is an error.
 Keep `state` set to `manual` while testing. **Card Janitor** evaluates every
 configured policy and shows its scope, conditions, actions, and the number of
 cards it would clean up.
-Policies in the `manual` or `automatic` state are included by default; disabled
-policies remain available but start unchecked. The checkboxes affect only the
-current run. Change the state to `automatic` to also run a policy once per Anki
-day without approval. Each run is recorded in Anki's undo
-history.
+Every policy is included by default in the dashboard. The checkboxes affect
+only the current run. Change `state` to `automatic` to also run a policy once
+per day without approval. Each run is recorded in Anki's undo history.
 
 The window remains open while you inspect cards. **Browse** opens
 the union from all checked policies. Select a row and use **Edit** to change
 that policy; **Refresh** recalculates the table. Running a policy manually does
 not count as that day's automatic cleanup.
 
-Policy states are:
+Policy modes are:
 
-- `disabled` — never scheduled and unchecked by default in the dashboard
-- `manual` — checked by default in the dialog but never scheduled
-- `automatic` — checked by default and run at most once per Anki day
+- `manual` — runs only when you start cleanup from Card Janitor
+- `automatic` — runs once per day without confirmation and can also be run on demand
 
 Automatic cleanup runs on profile opening if it has not yet run that Anki day.
 It also runs when the Anki day changes while the application remains open. Use
