@@ -612,10 +612,6 @@ class SettingsDialog(QDialog):
 
         automatic_group = QGroupBox("Automatic Cleanup", self)
         automatic_layout = QVBoxLayout(automatic_group)
-        automatic_description = QLabel(
-            "Automatic policies run at most once per Anki day.", automatic_group
-        )
-        automatic_layout.addWidget(automatic_description)
         self.notify = QCheckBox(
             "Show a notification after cards are cleaned up automatically",
             automatic_group,
