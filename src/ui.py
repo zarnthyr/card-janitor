@@ -866,7 +866,9 @@ class CardJanitorDialog(QDialog):
 
         layout = QVBoxLayout(self)
         intro = QHBoxLayout()
-        intro.addWidget(QLabel("Choose which policies to run.", self))
+        intro.addWidget(
+            QLabel("Manage policies for cleaning up cards automatically or on demand.", self)
+        )
         intro.addStretch()
         self.add_button = QPushButton("Add…", self)
         self.add_button.setToolTip("Create a cleanup policy.")
@@ -878,7 +880,7 @@ class CardJanitorDialog(QDialog):
 
         self.table = QTableWidget(0, 7, self)
         self.table.setHorizontalHeaderLabels(
-            ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "To clean")
+            ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "Cards")
         )
         self.table.horizontalHeaderItem(self.COLUMN_COUNT).setToolTip(
             "Cards that still require at least one configured action."
@@ -894,7 +896,7 @@ class CardJanitorDialog(QDialog):
         for column in (self.COLUMN_RUN, self.COLUMN_STATE):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COLUMN_COUNT, QHeaderView.ResizeMode.Interactive)
-        count_width = self.table.fontMetrics().horizontalAdvance("To clean") + 28
+        count_width = self.table.fontMetrics().horizontalAdvance("Cards") + 28
         self.table.setColumnWidth(self.COLUMN_COUNT, count_width)
         for column in (
             self.COLUMN_POLICY,
@@ -945,6 +947,22 @@ class CardJanitorDialog(QDialog):
         layout.addWidget(buttons)
 
         self.set_dashboard(parsed, reports)
+        QTimer.singleShot(0, self._enable_column_resizing)
+
+    def _enable_column_resizing(self) -> None:
+        header = self.table.horizontalHeader()
+        columns = (
+            self.COLUMN_POLICY,
+            self.COLUMN_STATE,
+            self.COLUMN_SCOPE,
+            self.COLUMN_RULE,
+            self.COLUMN_ACTIONS,
+        )
+        widths = {column: header.sectionSize(column) for column in columns}
+        for column in columns:
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Interactive)
+            header.resizeSection(column, widths[column])
+        self.table.resizeRowsToContents()
 
     def set_dashboard(
         self,
