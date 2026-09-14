@@ -42,3 +42,45 @@ def test_save_policy_replaces_only_target_entry(monkeypatch: pytest.MonkeyPatch)
     assert writes[0][0] == "card_janitor"
     assert writes[0][1]["policies"][0]["id"] == "fixed"
     assert writes[0][1]["policies"][1] == {"also": "preserved"}
+
+
+def test_save_settings_preserves_policies(monkeypatch: pytest.MonkeyPatch) -> None:
+    policies = [{"broken": True}]
+    raw = {
+        "config_version": 1,
+        "automatic_schedule": "invalid",
+        "notify_after_automatic_run": "invalid",
+        "debug_logging": "invalid",
+        "policies": policies,
+    }
+    writes = []
+    monkeypatch.setattr(configuration, "load_raw_config", lambda: raw)
+    monkeypatch.setattr(
+        configuration,
+        "mw",
+        SimpleNamespace(
+            addonManager=SimpleNamespace(
+                writeConfig=lambda module, value: writes.append((module, value))
+            )
+        ),
+    )
+
+    configuration.save_settings(
+        automatic_schedule="profile_open",
+        notify_after_automatic_run=False,
+        debug_logging=True,
+    )
+
+    assert writes == [
+        (
+            "card_janitor",
+            {
+                "config_version": 2,
+                "automatic_schedule": "profile_open",
+                "notify_after_automatic_run": False,
+                "debug_logging": True,
+                "policies": policies,
+            },
+        )
+    ]
+    assert raw["config_version"] == 1

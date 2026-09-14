@@ -68,8 +68,9 @@ Card Janitor → Add… or Edit…
 
 The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and open **Card Janitor…** to preview its results. The dashboard can open candidates in Anki's Browser or apply the configured actions after approval.
 
-Policies can be created and repaired in the manager. **Advanced Settings…** remains available
-for editing the underlying JSON and add-on-wide options.
+Policies can be created and repaired in the manager. **Settings…** controls the
+automatic schedule, notifications, and debug logging. Its **Edit JSON…** button
+opens the underlying configuration for advanced editing.
 
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `state: "automatic"` and runs without confirmation.
 

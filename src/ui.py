@@ -45,7 +45,14 @@ from aqt.qt import (
 from aqt.utils import showWarning, tooltip
 
 from .actions import ExecutionResult, build_execution_plan, execute_plan
-from .configuration import ADDON_MODULE, load_config, load_raw_config, save_policy
+from .configuration import (
+    ADDON_MODULE,
+    ConfigWriteError,
+    load_config,
+    load_raw_config,
+    save_policy,
+    save_settings,
+)
 from .evaluator import evaluate_policies
 from .log import configure as configure_logging
 from .log import debug, error, exception
@@ -69,10 +76,12 @@ from .models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from anki.collection import Collection
 
     from .engine import PolicyReport
-    from .models import AutomaticSchedule, ParsedConfig
+    from .models import AddonConfig, AutomaticSchedule, ParsedConfig
 
 AutomaticTrigger = Literal["profile_open", "day_change"]
 
@@ -593,6 +602,83 @@ def _best_effort_actions(raw: object) -> tuple[Action, ...]:
     return tuple(actions)
 
 
+class SettingsDialog(QDialog):
+    def __init__(self, config: AddonConfig, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._edit_json_requested = False
+        self.setWindowTitle("Card Janitor Settings")
+
+        layout = QVBoxLayout(self)
+
+        automatic_group = QGroupBox("Automatic Cleanup", self)
+        automatic_layout = QVBoxLayout(automatic_group)
+        automatic_description = QLabel(
+            "These settings apply to policies whose mode is Automatic.", automatic_group
+        )
+        automatic_layout.addWidget(automatic_description)
+        automatic_form = QFormLayout()
+        self.schedule = QComboBox(automatic_group)
+        for label, value in (
+            ("Once per Anki day", "daily"),
+            ("Whenever the profile opens", "profile_open"),
+            ("Whenever the profile opens or the Anki day changes", "profile_open_and_daily"),
+        ):
+            self.schedule.addItem(label, value)
+        schedule_index = self.schedule.findData(config.automatic_schedule)
+        self.schedule.setCurrentIndex(max(0, schedule_index))
+        automatic_form.addRow("Schedule", self.schedule)
+        automatic_layout.addLayout(automatic_form)
+        self.notify = QCheckBox(
+            "Show a notification after cards are cleaned up automatically",
+            automatic_group,
+        )
+        self.notify.setChecked(config.notify_after_automatic_run)
+        automatic_layout.addWidget(self.notify)
+        layout.addWidget(automatic_group)
+
+        troubleshooting_group = QGroupBox("Troubleshooting", self)
+        troubleshooting_layout = QVBoxLayout(troubleshooting_group)
+        self.debug_logging = QCheckBox("Enable debug logging", troubleshooting_group)
+        self.debug_logging.setChecked(config.debug_logging)
+        self.debug_logging.setToolTip("Print policy evaluation details to Anki's terminal output.")
+        troubleshooting_layout.addWidget(self.debug_logging)
+        layout.addWidget(troubleshooting_group)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
+            parent=self,
+        )
+        self.json_button = buttons.addButton(
+            "Edit JSON…",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        qconnect(self.json_button.clicked, self._request_json_editor)
+        qconnect(buttons.accepted, self._save)
+        qconnect(buttons.rejected, self.reject)
+        layout.addWidget(buttons)
+
+    @property
+    def edit_json_requested(self) -> bool:
+        return self._edit_json_requested
+
+    def _request_json_editor(self) -> None:
+        self._edit_json_requested = True
+        self.reject()
+
+    def _save(self) -> None:
+        try:
+            save_settings(
+                automatic_schedule=self.schedule.currentData(),
+                notify_after_automatic_run=self.notify.isChecked(),
+                debug_logging=self.debug_logging.isChecked(),
+            )
+        except ConfigWriteError as exc:
+            showWarning(str(exc), parent=self)
+            return
+        configure_logging(debug_logging=self.debug_logging.isChecked())
+        self.accept()
+
+
 class CardJanitorDialog(QDialog):
     COLUMN_RUN = 0
     COLUMN_POLICY = 1
@@ -651,7 +737,7 @@ class CardJanitorDialog(QDialog):
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
         self.settings_button = buttons.addButton(
-            "Advanced Settings…",
+            "Settings…",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
         self.refresh_button = buttons.addButton(
@@ -668,7 +754,7 @@ class CardJanitorDialog(QDialog):
         )
         if isinstance(self.run_button, QPushButton):
             self.run_button.setDefault(True)
-        qconnect(self.settings_button.clicked, open_settings)
+        qconnect(self.settings_button.clicked, self._open_settings)
         qconnect(self.refresh_button.clicked, self._refresh)
         qconnect(self.view_button.clicked, self._view_included)
         qconnect(self.run_button.clicked, self._run)
@@ -828,6 +914,14 @@ class CardJanitorDialog(QDialog):
 
     def _refresh(self) -> None:
         refresh_manual_dialog(self)
+
+    def _open_settings(self) -> None:
+        dialog = SettingsDialog(self._parsed.config, self)
+        result = dialog.exec()
+        if result == QDialog.DialogCode.Accepted:
+            self._refresh()
+        elif dialog.edit_json_requested:
+            open_json_settings(parent=self, on_close=self._refresh)
 
     def _run(self) -> None:
         if self._running:
@@ -996,15 +1090,22 @@ def execute_manual_reports(
     CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
 
 
-def open_settings() -> None:
+def open_json_settings(*, parent: QWidget, on_close: Callable[[], None] | None = None) -> None:
     config = load_raw_config()
     if not isinstance(config, dict):
-        showWarning("The add-on configuration is not a JSON object.", parent=mw)
+        showWarning("The add-on configuration is not a JSON object.", parent=parent)
         return
-    parent = QDialog(mw)
-    parent.mgr = mw.addonManager
-    editor = ConfigEditor(parent, ADDON_MODULE, config)
-    setattr(mw, CONFIG_EDITOR_ATTR, (parent, editor))
+    editor_parent = QDialog(parent)
+    editor_parent.mgr = mw.addonManager
+    editor = ConfigEditor(editor_parent, ADDON_MODULE, config)
+    setattr(mw, CONFIG_EDITOR_ATTR, (editor_parent, editor))
+
+    def editor_closed(_result: int) -> None:
+        setattr(mw, CONFIG_EDITOR_ATTR, None)
+        if callable(on_close):
+            on_close()
+
+    qconnect(editor.finished, editor_closed)
 
 
 def automatic_run_is_due(
@@ -1078,7 +1179,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         if errors:
             error("automatic run evaluation failed", errors=tuple(errors))
             tooltip(
-                "Card Janitor: an automatic policy has errors; see Advanced Settings.",
+                "Card Janitor: an automatic policy has errors; open Card Janitor to repair it.",
                 parent=mw,
             )
             return

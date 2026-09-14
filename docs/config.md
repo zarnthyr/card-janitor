@@ -1,12 +1,13 @@
 # Configuration
 
-Add and edit policies in the Card Janitor window. Use **Advanced Settings** to
-edit add-on-wide options or the underlying JSON directly.
+Add and edit policies in the Card Janitor window. Use **Settings** to configure
+automatic cleanup, notifications, and debug logging. Choose **Edit JSON** from
+that dialog to edit the underlying configuration directly.
 
 Invalid configuration fails closed: no on-demand or automatic cleanup runs
 while a validation error is present. Invalid policies remain visible in Card
 Janitor and can be repaired with **Edit**. Invalid add-on-wide settings can be
-repaired through **Advanced Settings**.
+repaired through **Settings** or **Edit JSON**.
 
 Deck names are resolved when a policy is evaluated. A missing or filtered move
 destination is an error.

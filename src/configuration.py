@@ -8,7 +8,7 @@ from typing import Any
 
 from aqt import mw
 
-from .models import ParsedConfig, Policy, parse_config, policy_to_dict
+from .models import AutomaticSchedule, ParsedConfig, Policy, parse_config, policy_to_dict
 
 ADDON_MODULE = "card_janitor"
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -55,4 +55,23 @@ def save_policy(policy: Policy, *, index: int | None = None) -> None:
     else:
         message = "The policy no longer exists. Refresh and try again."
         raise ConfigWriteError(message)
+    mw.addonManager.writeConfig(ADDON_MODULE, updated)
+
+
+def save_settings(
+    *,
+    automatic_schedule: AutomaticSchedule,
+    notify_after_automatic_run: bool,
+    debug_logging: bool,
+) -> None:
+    """Update add-on-wide settings while preserving every policy entry."""
+    raw = load_raw_config()
+    if not isinstance(raw, dict):
+        message = "The add-on configuration is not a JSON object."
+        raise ConfigWriteError(message)
+    updated = deepcopy(raw)
+    updated["config_version"] = 2
+    updated["automatic_schedule"] = automatic_schedule
+    updated["notify_after_automatic_run"] = notify_after_automatic_run
+    updated["debug_logging"] = debug_logging
     mw.addonManager.writeConfig(ADDON_MODULE, updated)
