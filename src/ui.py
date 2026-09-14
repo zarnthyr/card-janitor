@@ -213,13 +213,13 @@ def _warning_panel(text: str, parent: QWidget, *, destructive: bool = False) -> 
     return panel
 
 
-class CardStatePicker(QPushButton):
+class CardStatePicker(QComboBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._states = ("new",)
         self._checkboxes: dict[str, QCheckBox] = {}
-        menu = QMenu(self)
-        container = QWidget(menu)
+        self._menu = QMenu(self)
+        container = QWidget(self._menu)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(4)
@@ -231,11 +231,14 @@ class CardStatePicker(QPushButton):
                 lambda checked, selected=value: self._state_toggled(selected, checked),
             )
             layout.addWidget(checkbox)
-        action = QWidgetAction(menu)
+        action = QWidgetAction(self._menu)
         action.setDefaultWidget(container)
-        menu.addAction(action)
-        self.setMenu(menu)
+        self._menu.addAction(action)
+        self.addItem("")
         self.set_states(self._states)
+
+    def showPopup(self) -> None:  # noqa: N802 - Qt virtual method
+        self._menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
 
     def states(self) -> tuple[str, ...]:
         return self._states
@@ -251,7 +254,7 @@ class CardStatePicker(QPushButton):
     def _update_text(self) -> None:
         selected = [label for label, value in CARD_STATES if value in self._states]
         summary = ", ".join(selected) if selected else "Choose states"
-        self.setText(summary)
+        self.setItemText(0, summary)
         self.setToolTip(summary)
 
     def _state_toggled(self, state: str, _checked: bool) -> None:
