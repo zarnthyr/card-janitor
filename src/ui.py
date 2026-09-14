@@ -131,19 +131,19 @@ def _load_for_operation(parent: object = mw) -> ParsedConfig | None:
 
 def _describe_action(action: Action) -> str:
     if isinstance(action, TagAction):
-        return f"Add the tag {action.tag!r} to notes"
+        return f"Tag notes with {action.tag!r}"
     if isinstance(action, SuspendAction):
         return "Suspend cards"
     if isinstance(action, MoveAction):
-        return f"Move cards to the {action.deck!r} deck"
+        return f"Move cards to {action.deck!r}"
     if isinstance(action, DeleteCardAction):
-        return "Delete cards and any notes left without cards"
+        return "Delete cards"
     message = f"unknown cleanup action: {action!r}"
     raise AssertionError(message)
 
 
 def _describe_actions(actions: tuple[Action, ...]) -> str:
-    return " + ".join(_describe_action(action) for action in actions)
+    return "\n".join(_describe_action(action) for action in actions)
 
 
 def _describe_scope(scope: Scope) -> str:
@@ -833,7 +833,7 @@ class CardJanitorDialog(QDialog):
     COLUMN_SCOPE = 3
     COLUMN_RULE = 4
     COLUMN_ACTIONS = 5
-    COLUMN_AFFECTED = 6
+    COLUMN_COUNT = 6
 
     def __init__(self, parsed: ParsedConfig, reports: tuple[PolicyReport, ...]) -> None:
         super().__init__(mw)
@@ -845,17 +845,22 @@ class CardJanitorDialog(QDialog):
 
         layout = QVBoxLayout(self)
         intro = QHBoxLayout()
-        intro.addWidget(QLabel("Choose which policies to run.", self))
+        intro.addWidget(QLabel("Select the policies to include in this cleanup.", self))
         intro.addStretch()
         self.add_button = QPushButton("Add…", self)
+        self.add_button.setToolTip("Create a cleanup policy.")
         self.edit_button = QPushButton("Edit…", self)
+        self.edit_button.setToolTip("Edit the selected policy.")
         intro.addWidget(self.add_button)
         intro.addWidget(self.edit_button)
         layout.addLayout(intro)
 
         self.table = QTableWidget(0, 7, self)
         self.table.setHorizontalHeaderLabels(
-            ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "Cards")
+            ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "To clean")
+        )
+        self.table.horizontalHeaderItem(self.COLUMN_COUNT).setToolTip(
+            "Cards that still require at least one configured action."
         )
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -863,7 +868,7 @@ class CardJanitorDialog(QDialog):
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.verticalHeader().setVisible(False)
         header = self.table.horizontalHeader()
-        for column in (self.COLUMN_RUN, self.COLUMN_STATE, self.COLUMN_AFFECTED):
+        for column in (self.COLUMN_RUN, self.COLUMN_STATE, self.COLUMN_COUNT):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         for column in (
             self.COLUMN_POLICY,
@@ -887,18 +892,22 @@ class CardJanitorDialog(QDialog):
             "Settings…",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
+        self.settings_button.setToolTip("Configure Card Janitor.")
         self.refresh_button = buttons.addButton(
             "Refresh",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
+        self.refresh_button.setToolTip("Recalculate the card counts.")
         self.view_button = buttons.addButton(
             "Browse",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
+        self.view_button.setToolTip("Open cards from the checked policies in Browse.")
         self.run_button = buttons.addButton(
             "Clean Up",
             QDialogButtonBox.ButtonRole.AcceptRole,
         )
+        self.run_button.setToolTip("Apply the actions from the checked policies.")
         if isinstance(self.run_button, QPushButton):
             self.run_button.setDefault(True)
         qconnect(self.settings_button.clicked, self._open_settings)
@@ -968,17 +977,21 @@ class CardJanitorDialog(QDialog):
                 )
             for column, value in enumerate(values, start=1):
                 item = QTableWidgetItem(value)
+                if column == self.COLUMN_COUNT:
+                    item.setTextAlignment(
+                        Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                    )
                 self.table.setItem(row, column, item)
             if policy is None:
                 error_text = "\n".join(str(issue) for issue in record.issues)
-                self.table.item(row, self.COLUMN_AFFECTED).setToolTip(error_text)
+                self.table.item(row, self.COLUMN_COUNT).setToolTip(error_text)
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(error_text)
             else:
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(f"Policy ID: {policy.id}")
                 self.table.item(row, self.COLUMN_SCOPE).setToolTip(_scope_tooltip(policy.scope))
                 if dashboard_row.report and dashboard_row.report.errors:
                     error_text = "\n".join(dashboard_row.report.errors)
-                    self.table.item(row, self.COLUMN_AFFECTED).setToolTip(error_text)
+                    self.table.item(row, self.COLUMN_COUNT).setToolTip(error_text)
         del signal_blocker
         self.table.resizeRowsToContents()
         if self._rows:
@@ -1016,6 +1029,11 @@ class CardJanitorDialog(QDialog):
                 "Configuration settings need repair:\n"
                 + "\n".join(f"• {issue}" for issue in global_issues)
             )
+            self.view_button.setEnabled(False)
+            self.run_button.setEnabled(False)
+            return
+        if not self._rows:
+            self.summary.setText("No policies have been added. Add a policy to get started.")
             self.view_button.setEnabled(False)
             self.run_button.setEnabled(False)
             return
