@@ -44,8 +44,8 @@ def test_dashboard_uses_current_query_op_constructor(
 
     created: list[FakeQueryOp] = []
 
-    on_demand = SimpleNamespace(state="on_demand")
-    automatic = SimpleNamespace(state="automatic")
+    on_demand = SimpleNamespace(mode="on_demand")
+    automatic = SimpleNamespace(mode="automatic")
     parsed = SimpleNamespace(config=SimpleNamespace(policies=(on_demand, automatic)))
     evaluated: list[tuple[object, tuple[object, ...]]] = []
     monkeypatch.setattr(ui, "mw", SimpleNamespace(col="current collection"))
@@ -136,7 +136,7 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         policy = Policy(
             id="mining",
             name="Mining",
-            state="on_demand",
+            mode="on_demand",
             scope=Scope(("Mining",)),
             rule=AgeRule(1, "first_review", "gte"),
             actions=(TagAction("retired"), SuspendAction()),
@@ -172,7 +172,7 @@ def test_delete_action_can_be_undone(tmp_path: Path) -> None:
         policy = Policy(
             id="delete",
             name="Delete",
-            state="on_demand",
+            mode="on_demand",
             scope=Scope(("Cleanup",)),
             rule=AgeRule(0, "card_created", "gte"),
             actions=(DeleteCardAction(),),

@@ -31,11 +31,11 @@
     "policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "state", "scope", "rule", "actions"],
+      "required": ["id", "name", "mode", "scope", "match", "conditions", "actions"],
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "name": {"type": "string", "minLength": 1},
-        "state": {
+        "mode": {
           "enum": ["on_demand", "automatic"],
           "description": "on_demand runs only when requested in Card Janitor; automatic also runs once per day without confirmation"
         },
@@ -43,9 +43,15 @@
           "$ref": "#/$defs/scope",
           "description": "Decks whose cards this policy may clean up"
         },
-        "rule": {
-          "$ref": "#/$defs/rule",
-          "description": "Condition or flat AND/OR group that cards must match"
+        "match": {
+          "enum": ["all", "any"],
+          "description": "Whether all conditions or any condition must match"
+        },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "description": "Conditions cards must satisfy before actions are applied",
+          "items": {"$ref": "#/$defs/condition"}
         },
         "actions": {
           "type": "array",
@@ -76,34 +82,16 @@
         }
       }
     },
-    "rule": {
-      "oneOf": [
-        {"$ref": "#/$defs/simple_rule"},
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "rules"],
-          "properties": {
-            "type": {"enum": ["all", "any"]},
-            "rules": {
-              "type": "array",
-              "minItems": 1,
-              "items": {"$ref": "#/$defs/simple_rule"}
-            }
-          }
-        }
-      ]
-    },
-    "simple_rule": {
+    "condition": {
       "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "days", "from", "operator"],
+          "required": ["type", "days", "source", "operator"],
           "properties": {
             "type": {"const": "age"},
             "days": {"type": "integer", "minimum": 0},
-            "from": {"enum": ["first_review", "card_created"]},
+            "source": {"enum": ["first_review", "card_created"]},
             "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
           }
         },
@@ -147,10 +135,15 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "tag"],
+          "required": ["type", "tags"],
           "properties": {
             "type": {"const": "tag"},
-            "tag": {"type": "string", "minLength": 1}
+            "tags": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1}
+            }
           }
         },
         {

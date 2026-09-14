@@ -211,14 +211,14 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
     raise AssertionError(message)
 
 
-def _configured_use(state: str) -> str:
-    if state == "on_demand":
+def _configured_use(mode: str) -> str:
+    if mode == "on_demand":
         return "On demand"
     return "Automatic"
 
 
-def _mode_tooltip(state: str) -> str:
-    if state == "on_demand":
+def _mode_tooltip(mode: str) -> str:
+    if mode == "on_demand":
         return "On demand: runs only when you click Clean Up in Card Janitor."
     return "Automatic: runs once per day without confirmation and can also be run on demand."
 
@@ -443,19 +443,19 @@ class PolicyEditorDialog(QDialog):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.name = QLineEdit(policy.name if policy else _raw_string(raw, "name"), self)
         form.addRow("Name", self.name)
-        self.state = QComboBox(self)
-        self.state.addItem("On demand", "on_demand")
-        self.state.addItem("Automatic", "automatic")
-        state = policy.state if policy else raw.get("state", "on_demand")
-        index = self.state.findData(state)
-        self.state.setCurrentIndex(index if index >= 0 else self.state.findData("on_demand"))
+        self.mode = QComboBox(self)
+        self.mode.addItem("On demand", "on_demand")
+        self.mode.addItem("Automatic", "automatic")
+        mode = policy.mode if policy else raw.get("mode", "on_demand")
+        index = self.mode.findData(mode)
+        self.mode.setCurrentIndex(index if index >= 0 else self.mode.findData("on_demand"))
         self.automatic_warning = _warning_panel(
             "This policy runs once per day <b>without confirmation</b>.",
             self,
         )
         form.insertRow(0, self.automatic_warning)
         self.mode_label = QLabel("Mode", self)
-        form.addRow(self.mode_label, self.state)
+        form.addRow(self.mode_label, self.mode)
         layout.addWidget(general_group)
 
         scope_group = QGroupBox("Scope", self)
@@ -531,18 +531,26 @@ class PolicyEditorDialog(QDialog):
         self.conditions_container.setLayout(self.conditions_layout)
         self.conditions_scroll.setWidget(self.conditions_container)
         conditions_group_layout.addWidget(self.conditions_scroll)
-        source_rule = policy.rule if policy else _best_effort_rule(raw.get("rule"))
+        source_rule = policy.rule if policy else None
         if isinstance(source_rule, (AllRule, AnyRule)):
             self.match.setCurrentIndex(
                 self.match.findData("all" if isinstance(source_rule, AllRule) else "any")
             )
             rules = source_rule.rules
         else:
-            rules = (
-                (source_rule,)
-                if source_rule is not None
-                else (AgeRule(365, "first_review", "gte"),)
+            raw_match = raw.get("match")
+            self.match.setCurrentIndex(
+                self.match.findData(raw_match if raw_match in {"all", "any"} else "all")
             )
+            raw_conditions = raw.get("conditions")
+            condition_values = raw_conditions if isinstance(raw_conditions, list) else ()
+            rules = tuple(
+                condition
+                for condition in (_best_effort_rule(item) for item in condition_values)
+                if condition is not None
+            )
+            if not rules:
+                rules = (AgeRule(365, "first_review", "gte"),)
         for rule in rules:
             self._add_condition(rule)
         qconnect(self.add_condition_button.clicked, lambda: self._add_condition(None))
@@ -600,7 +608,7 @@ class PolicyEditorDialog(QDialog):
         actions_group_layout.addLayout(actions_grid)
         layout.addWidget(actions_group)
         qconnect(self.delete.toggled, self._update_action_controls)
-        qconnect(self.state.currentIndexChanged, self._update_action_controls)
+        qconnect(self.mode.currentIndexChanged, self._update_action_controls)
         qconnect(self.tag_enabled.toggled, self._update_action_controls)
         qconnect(self.move_enabled.toggled, self._update_action_controls)
         self._update_action_controls()
@@ -614,7 +622,7 @@ class PolicyEditorDialog(QDialog):
         layout.addWidget(buttons)
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         self.cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        qconnect(self.state.currentIndexChanged, self._update_mode_tooltip)
+        qconnect(self.mode.currentIndexChanged, self._update_mode_tooltip)
         self._update_mode_tooltip()
         self._update_tab_order()
         QTimer.singleShot(0, self._focus_initial)
@@ -625,14 +633,14 @@ class PolicyEditorDialog(QDialog):
             self.name.selectAll()
 
     def _update_mode_tooltip(self, _index: int = 0) -> None:
-        help_text = _mode_tooltip(self.state.currentData())
+        help_text = _mode_tooltip(self.mode.currentData())
         self.mode_label.setToolTip(help_text)
-        self.state.setToolTip(help_text)
+        self.mode.setToolTip(help_text)
 
     def _update_tab_order(self) -> None:
         widgets: list[QWidget] = [
             self.name,
-            self.state,
+            self.mode,
             self.decks,
             self.include_subdecks,
             self.include_suspended,
@@ -718,7 +726,7 @@ class PolicyEditorDialog(QDialog):
         self._update_warning_panels()
 
     def _update_warning_panels(self) -> None:
-        self.automatic_warning.setVisible(self.state.currentData() == "automatic")
+        self.automatic_warning.setVisible(self.mode.currentData() == "automatic")
         self.delete_warning.setVisible(self.delete.isChecked())
 
     def _accept(self) -> None:  # noqa: PLR0912
@@ -735,20 +743,18 @@ class PolicyEditorDialog(QDialog):
             showWarning("Enter at least one deck.", parent=self)
             return
         simple_rules = tuple(row.rule() for row in self._conditions)
-        rule: Rule
-        if len(simple_rules) == 1:
-            rule = simple_rules[0]
-        elif self.match.currentData() == "all":
-            rule = AllRule(simple_rules)
-        else:
-            rule = AnyRule(simple_rules)
+        rule: Rule = (
+            AllRule(simple_rules) if self.match.currentData() == "all" else AnyRule(simple_rules)
+        )
         actions: list[Action] = []
         if self.delete.isChecked():
             actions.append(DeleteCardAction())
         else:
             if self.tag_enabled.isChecked():
                 tags = tuple(
-                    value for value in re.split(r"[\s,]+", self.tag.text().strip()) if value
+                    dict.fromkeys(
+                        value for value in re.split(r"[\s,]+", self.tag.text().strip()) if value
+                    )
                 )
                 if not tags:
                     showWarning("Enter one or more tags or disable the tag action.", parent=self)
@@ -784,7 +790,7 @@ class PolicyEditorDialog(QDialog):
         self.result_policy = Policy(
             id=policy_id,
             name=name,
-            state=self.state.currentData(),
+            mode=self.mode.currentData(),
             scope=Scope(
                 decks=decks,
                 include_subdecks=self.include_subdecks.isChecked(),
@@ -814,27 +820,15 @@ def _raw_bool(raw: object, key: str, *, default: bool) -> bool:
     return value if isinstance(value, bool) else default
 
 
-def _best_effort_rule(raw: object) -> Rule | None:  # noqa: PLR0911
+def _best_effort_rule(raw: object) -> Rule | None:
     if not isinstance(raw, dict):
         return None
     kind = raw.get("type")
-    if kind in {"all", "any"} and isinstance(raw.get("rules"), list):
-        children = tuple(filter(None, (_best_effort_rule(child) for child in raw["rules"])))
-        simple = tuple(
-            child
-            for child in children
-            if isinstance(
-                child,
-                (AgeRule, IntervalRule, CardStateRule, ReviewHistoryRule),
-            )
-        )
-        if simple:
-            return AllRule(simple) if kind == "all" else AnyRule(simple)
     days = raw.get("days")
     if not isinstance(days, int) or isinstance(days, bool) or days < 0:
         days = 365
     if kind == "age":
-        source = raw.get("from")
+        source = raw.get("source")
         return AgeRule(
             days,
             source if source in {"first_review", "card_created"} else "first_review",
@@ -865,8 +859,8 @@ def _best_effort_actions(raw: object) -> tuple[Action, ...]:
         if not isinstance(item, dict):
             continue
         kind = item.get("type")
-        if kind == "tag" and isinstance(item.get("tag"), str):
-            actions.append(TagAction(item["tag"]))
+        if kind == "tag" and isinstance(item.get("tags"), list):
+            actions.extend(TagAction(tag) for tag in item["tags"] if isinstance(tag, str))
         elif kind == "suspend":
             actions.append(SuspendAction())
         elif kind == "move" and isinstance(item.get("deck"), str):
@@ -952,7 +946,7 @@ class SettingsDialog(QDialog):
 class CardJanitorDialog(QDialog):
     COLUMN_RUN = 0
     COLUMN_POLICY = 1
-    COLUMN_STATE = 2
+    COLUMN_MODE = 2
     COLUMN_SCOPE = 3
     COLUMN_RULE = 4
     COLUMN_ACTIONS = 5
@@ -1001,7 +995,7 @@ class CardJanitorDialog(QDialog):
         vertical_header.setVisible(False)
         vertical_header.setMinimumSectionSize(self.fontMetrics().height() * 2 + 12)
         header = self.table.horizontalHeader()
-        for column in (self.COLUMN_RUN, self.COLUMN_STATE):
+        for column in (self.COLUMN_RUN, self.COLUMN_MODE):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COLUMN_COUNT, QHeaderView.ResizeMode.Interactive)
         count_width = self.table.fontMetrics().horizontalAdvance("Cards") + 28
@@ -1113,7 +1107,7 @@ class CardJanitorDialog(QDialog):
         header = self.table.horizontalHeader()
         columns = (
             self.COLUMN_POLICY,
-            self.COLUMN_STATE,
+            self.COLUMN_MODE,
             self.COLUMN_SCOPE,
             self.COLUMN_RULE,
         )
@@ -1169,7 +1163,7 @@ class CardJanitorDialog(QDialog):
                 report = dashboard_row.report
                 values = (
                     policy.name,
-                    _configured_use(policy.state),
+                    _configured_use(policy.mode),
                     _describe_scope(policy.scope),
                     _describe_rule(policy.rule),
                     _describe_actions(policy.actions),
@@ -1188,7 +1182,7 @@ class CardJanitorDialog(QDialog):
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(error_text)
             else:
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(_policy_tooltip(policy))
-                self.table.item(row, self.COLUMN_STATE).setToolTip(_mode_tooltip(policy.state))
+                self.table.item(row, self.COLUMN_MODE).setToolTip(_mode_tooltip(policy.mode))
                 self.table.item(row, self.COLUMN_SCOPE).setToolTip(_scope_tooltip(policy.scope))
                 if dashboard_row.report and dashboard_row.report.errors:
                     error_text = "\n".join(dashboard_row.report.errors)
@@ -1568,7 +1562,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         error("invalid configuration", issues=tuple(str(issue) for issue in parsed.issues))
         showWarning(_issues_text(parsed), parent=mw)
         return
-    policies = tuple(policy for policy in parsed.config.policies if policy.state == "automatic")
+    policies = tuple(policy for policy in parsed.config.policies if policy.mode == "automatic")
     if not policies:
         debug("automatic run skipped", reason="no automatic policies")
         return

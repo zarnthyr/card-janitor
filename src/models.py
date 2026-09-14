@@ -83,7 +83,7 @@ class DeleteCardAction:
 
 
 Action: TypeAlias = TagAction | SuspendAction | MoveAction | DeleteCardAction
-PolicyState: TypeAlias = Literal["on_demand", "automatic"]
+PolicyMode: TypeAlias = Literal["on_demand", "automatic"]
 NumericOperator: TypeAlias = Literal["gt", "gte", "eq", "lte", "lt"]
 CardState: TypeAlias = Literal["new", "learning", "review", "relearning"]
 
@@ -92,7 +92,7 @@ CardState: TypeAlias = Literal["new", "learning", "review", "relearning"]
 class Policy:
     id: str
     name: str
-    state: PolicyState
+    mode: PolicyMode
     scope: Scope
     rule: Rule
     actions: tuple[Action, ...]
@@ -158,9 +158,9 @@ def _parse_simple_rule(
     rule_type = value.get("type")
     if rule_type == "age":
         days = _nonnegative_int(value, "days", path)
-        source = value.get("from")
+        source = value.get("source")
         if source not in {"first_review", "card_created"}:
-            raise ValueError(f"{path}.from: must be 'first_review' or 'card_created'")
+            raise ValueError(f"{path}.source: must be 'first_review' or 'card_created'")
         operator = value.get("operator")
         if operator not in {"gt", "gte", "eq", "lte", "lt"}:
             raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
@@ -188,39 +188,40 @@ def _parse_simple_rule(
         if operator not in {"exists", "not_exists"}:
             raise ValueError(f"{path}.operator: must be 'exists' or 'not_exists'")
         return ReviewHistoryRule(operator)
-    if rule_type in {"all", "any"}:
-        raise ValueError(f"{path}.type: compound rules cannot be nested")
     raise ValueError(f"{path}.type: unknown rule type {rule_type!r}")
 
 
-def _parse_rule(value: object, path: str) -> Rule:
-    if not isinstance(value, dict):
-        raise ValueError(f"{path}: must be an object")
-    rule_type = value.get("type")
-    if rule_type in {"all", "any"}:
-        children = value.get("rules")
-        if not isinstance(children, list) or not children:
-            raise ValueError(f"{path}.rules: must be a non-empty array")
-        rules = tuple(
-            _parse_simple_rule(child, f"{path}.rules[{index}]")
-            for index, child in enumerate(children)
-        )
-        return AllRule(rules) if rule_type == "all" else AnyRule(rules)
-    return _parse_simple_rule(value, path)
+def _parse_conditions(value: object, match: object, path: str) -> Rule:
+    if match not in {"all", "any"}:
+        raise ValueError(f"{path}.match: must be 'all' or 'any'")
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{path}.conditions: must be a non-empty array")
+    conditions = tuple(
+        _parse_simple_rule(condition, f"{path}.conditions[{index}]")
+        for index, condition in enumerate(value)
+    )
+    return AllRule(conditions) if match == "all" else AnyRule(conditions)
 
 
-def _parse_action(value: object, path: str) -> Action:
+def _parse_action(value: object, path: str) -> tuple[Action, ...]:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     action_type = value.get("type")
     if action_type == "tag":
-        return TagAction(tag=_required_string(value, "tag", path))
+        tags = value.get("tags")
+        if (
+            not isinstance(tags, list)
+            or not tags
+            or any(not isinstance(tag, str) or not tag.strip() for tag in tags)
+        ):
+            raise ValueError(f"{path}.tags: must be a non-empty array of strings")
+        return tuple(TagAction(tag) for tag in dict.fromkeys(tag.strip() for tag in tags))
     if action_type == "suspend":
-        return SuspendAction()
+        return (SuspendAction(),)
     if action_type == "move":
-        return MoveAction(deck=_required_string(value, "deck", path))
+        return (MoveAction(deck=_required_string(value, "deck", path)),)
     if action_type == "delete_card":
-        return DeleteCardAction()
+        return (DeleteCardAction(),)
     raise ValueError(f"{path}.type: unknown action type {action_type!r}")
 
 
@@ -246,14 +247,16 @@ def parse_policy(value: object, index: int = 0) -> Policy:
         raise ValueError(f"{path}: must be an object")
     policy_id = _required_string(value, "id", path)
     name = _required_string(value, "name", path)
-    state = value.get("state")
-    if state not in {"on_demand", "automatic"}:
-        raise ValueError(f"{path}.state: must be 'on_demand' or 'automatic'")
+    mode = value.get("mode")
+    if mode not in {"on_demand", "automatic"}:
+        raise ValueError(f"{path}.mode: must be 'on_demand' or 'automatic'")
     actions_value = value.get("actions")
     if not isinstance(actions_value, list) or not actions_value:
         raise ValueError(f"{path}.actions: must be a non-empty array")
     actions = tuple(
-        _parse_action(action, f"{path}.actions[{i}]") for i, action in enumerate(actions_value)
+        parsed_action
+        for index, action in enumerate(actions_value)
+        for parsed_action in _parse_action(action, f"{path}.actions[{index}]")
     )
     delete_actions = [action for action in actions if isinstance(action, DeleteCardAction)]
     if delete_actions and len(actions) != 1:
@@ -264,9 +267,9 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     return Policy(
         id=policy_id,
         name=name,
-        state=state,
+        mode=mode,
         scope=_parse_scope(value.get("scope"), f"{path}.scope"),
-        rule=_parse_rule(value.get("rule"), f"{path}.rule"),
+        rule=_parse_conditions(value.get("conditions"), value.get("match"), path),
         actions=actions,
     )
 
@@ -328,12 +331,12 @@ def parse_config(value: object) -> ParsedConfig:
     )
 
 
-def rule_to_dict(rule: Rule) -> dict[str, Any]:
+def condition_to_dict(rule: Rule) -> dict[str, Any]:
     if isinstance(rule, AgeRule):
         return {
             "type": "age",
             "days": rule.days,
-            "from": rule.source,
+            "source": rule.source,
             "operator": rule.operator,
         }
     if isinstance(rule, IntervalRule):
@@ -345,17 +348,12 @@ def rule_to_dict(rule: Rule) -> dict[str, Any]:
         }
     if isinstance(rule, ReviewHistoryRule):
         return {"type": "review_history", "operator": rule.operator}
-    if isinstance(rule, (AllRule, AnyRule)):
-        return {
-            "type": "all" if isinstance(rule, AllRule) else "any",
-            "rules": [rule_to_dict(child) for child in rule.rules],
-        }
     raise AssertionError(f"unknown rule: {rule!r}")
 
 
 def action_to_dict(action: Action) -> dict[str, Any]:
     if isinstance(action, TagAction):
-        return {"type": "tag", "tag": action.tag}
+        return {"type": "tag", "tags": [action.tag]}
     if isinstance(action, SuspendAction):
         return {"type": "suspend"}
     if isinstance(action, MoveAction):
@@ -366,15 +364,31 @@ def action_to_dict(action: Action) -> dict[str, Any]:
 
 
 def policy_to_dict(policy: Policy) -> dict[str, Any]:
+    if isinstance(policy.rule, (AllRule, AnyRule)):
+        match = "all" if isinstance(policy.rule, AllRule) else "any"
+        conditions = policy.rule.rules
+    else:
+        match = "all"
+        conditions = (policy.rule,)
+    serialized_actions: list[dict[str, Any]] = []
+    tags = list(
+        dict.fromkeys(action.tag for action in policy.actions if isinstance(action, TagAction))
+    )
+    if tags:
+        serialized_actions.append({"type": "tag", "tags": tags})
+    serialized_actions.extend(
+        action_to_dict(action) for action in policy.actions if not isinstance(action, TagAction)
+    )
     return {
         "id": policy.id,
         "name": policy.name,
-        "state": policy.state,
+        "mode": policy.mode,
         "scope": {
             "decks": list(policy.scope.decks),
             "include_subdecks": policy.scope.include_subdecks,
             "include_suspended": policy.scope.include_suspended,
         },
-        "rule": rule_to_dict(policy.rule),
-        "actions": [action_to_dict(action) for action in policy.actions],
+        "match": match,
+        "conditions": [condition_to_dict(condition) for condition in conditions],
+        "actions": serialized_actions,
     }

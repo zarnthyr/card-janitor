@@ -50,7 +50,7 @@ def policy(
     return Policy(
         id="test",
         name="Test",
-        state="on_demand",
+        mode="on_demand",
         scope=scope or Scope(("Mining",)),
         rule=rule or AgeRule(365, "first_review", "gte"),
         actions=actions or (SuspendAction(),),

@@ -78,7 +78,7 @@ Policies can be created and repaired in the manager. **Settings…** controls
 notifications and debug logging. Its **Edit JSON…** button
 opens the underlying configuration for advanced editing.
 
-Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `state: "automatic"` and runs without confirmation.
+Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
 
 See [config.md](./docs/config.md) for the complete schema and examples.
 

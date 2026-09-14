@@ -33,19 +33,18 @@ cannot be undone with Anki's Undo command.
         {
           "id": "mature-cards",
           "name": "Mature cards",
-          "state": "on_demand",
+          "mode": "on_demand",
           "scope": {
             "decks": ["My Deck"],
             "include_subdecks": true,
             "include_suspended": false
           },
-          "rule": {
-            "type": "interval",
-            "days": 365,
-            "operator": "gte"
-          },
+          "match": "all",
+          "conditions": [
+            {"type": "interval", "days": 365, "operator": "gte"}
+          ],
           "actions": [
-            {"type": "tag", "tag": "retired"},
+            {"type": "tag", "tags": ["retired"]},
             {"type": "suspend"},
             {"type": "move", "deck": "Retired"}
           ]
@@ -53,12 +52,12 @@ cannot be undone with Anki's Undo command.
       ]
     }
 
-In JSON, `state: "on_demand"` is the **On demand** mode shown in the policy editor.
+In JSON, `mode: "on_demand"` is the **On demand** mode shown in the policy editor.
 Keep this mode while testing. Card Janitor evaluates every configured policy
 and shows its scope, conditions, actions, and the number of cards it would
 clean up.
 Every policy is included by default in the dashboard. The checkboxes affect
-only the current run. Change `state` to `automatic` to also run a policy once
+only the current run. Change `mode` to `automatic` to also run a policy once
 per day without approval. Each run is recorded in Anki's undo history.
 
 The window remains open while you inspect cards. **Browse** opens the union
@@ -87,7 +86,7 @@ printed, regardless of this setting.
 
 ### Age
 
-    {"type": "age", "days": 365, "from": "first_review", "operator": "gte"}
+    {"type": "age", "days": 365, "source": "first_review", "operator": "gte"}
 
 Age uses completed 24-hour periods. `first_review` is the earliest review-log
 entry with a genuine answer rating. Cards without such history do not match any
@@ -100,8 +99,8 @@ in the card ID.
 > first evaluation. Anki does not expose a reliable per-card local-import timestamp.
 
 Use creation-age conditions only for cards whose provenance you understand. Keep the
-policy in On demand (`on_demand`) mode and inspect its matching cards before changing it to
-`automatic`. Card Janitor does not attempt to rewrite card IDs. If you use another
+policy in On demand (`mode: "on_demand"`) and inspect its matching cards before changing
+it to Automatic. Card Janitor does not attempt to rewrite card IDs. If you use another
 add-on to normalize creation dates, back up the collection first and verify that the
 tool safely updates all related references.
 
@@ -130,40 +129,35 @@ later reset to New still has review history.
 
 ### Combining conditions
 
-    {
-      "type": "any",
-      "rules": [
-        {"type": "age", "days": 365, "from": "first_review", "operator": "gte"},
-        {"type": "interval", "days": 180, "operator": "gte"}
-      ]
-    }
+    "match": "any",
+    "conditions": [
+      {"type": "age", "days": 365, "source": "first_review", "operator": "gte"},
+      {"type": "interval", "days": 180, "operator": "gte"}
+    ]
 
-Use `any` for OR and `all` for AND. Groups must contain at least one condition.
-Composition is deliberately limited to one flat group: every child must be a
-single age, interval, card-state, or review-history condition. Nested AND/OR
-groups are rejected.
+Use `match: "any"` for OR and `match: "all"` for AND. `conditions` must contain
+at least one age, interval, card-state, or review-history condition. Nested
+AND/OR groups are not supported.
 
 For example, the conditions for a stale-new-card policy are:
 
-    {
-      "type": "all",
-      "rules": [
-        {"type": "age", "days": 30, "from": "card_created", "operator": "gte"},
-        {"type": "review_history", "operator": "not_exists"}
-      ]
-    }
+    "match": "all",
+    "conditions": [
+      {"type": "age", "days": 30, "source": "card_created", "operator": "gte"},
+      {"type": "review_history", "operator": "not_exists"}
+    ]
 
 Numeric conditions support `gt`, `gte`, `eq`, `lte`, and `lt`. These correspond
 to greater than, at least, exactly, at most, and less than.
 
 ## Actions
 
-- `{"type": "tag", "tag": "retired"}` tags the note. Anki has no card-level tags, so sibling cards share it.
+- `{"type": "tag", "tags": ["retired"]}` adds one or more tags to the note. Anki has no card-level tags, so sibling cards share them.
 - `{"type": "suspend"}` suspends the qualifying card.
 - `{"type": "move", "deck": "Retired"}` moves the card to an existing normal deck.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
 
-`delete_card` must be the policy's only action. It can use `state: "automatic"`, but automatic deletion runs without confirmation. On-demand deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the example uses `state: "on_demand"` with reversible tag, suspend, and move actions.
+`delete_card` must be the policy's only action. It can use `mode: "automatic"`, but automatic deletion runs without confirmation. On-demand deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the example uses `mode: "on_demand"` with reversible tag, suspend, and move actions.
 
 ## Scope behavior
 
