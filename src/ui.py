@@ -48,7 +48,7 @@ from aqt.qt import (
     QWidgetAction,
     qconnect,
 )
-from aqt.utils import showWarning, tooltip
+from aqt.utils import askUser, showWarning, tooltip
 
 from .actions import ExecutionResult, build_execution_plan, execute_plan
 from .configuration import (
@@ -56,6 +56,7 @@ from .configuration import (
     ConfigWriteError,
     load_config,
     load_raw_config,
+    remove_policy,
     save_policy,
     save_settings,
 )
@@ -874,8 +875,11 @@ class CardJanitorDialog(QDialog):
         self.add_button.setToolTip("Create a cleanup policy.")
         self.edit_button = QPushButton("Edit…", self)
         self.edit_button.setToolTip("Edit the selected policy.")
+        self.remove_button = QPushButton("Remove…", self)
+        self.remove_button.setToolTip("Remove the selected policy.")
         intro.addWidget(self.add_button)
         intro.addWidget(self.edit_button)
+        intro.addWidget(self.remove_button)
         layout.addLayout(intro)
 
         self.table = QTableWidget(0, 7, self)
@@ -910,6 +914,7 @@ class CardJanitorDialog(QDialog):
         qconnect(self.table.itemDoubleClicked, self._on_item_double_clicked)
         qconnect(self.add_button.clicked, self._add_policy)
         qconnect(self.edit_button.clicked, self._edit_policy)
+        qconnect(self.remove_button.clicked, self._remove_policy)
         layout.addWidget(self.table)
 
         self.summary = QLabel(self)
@@ -1070,12 +1075,19 @@ class CardJanitorDialog(QDialog):
             self._edit_policy()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt virtual method
+        focused = self.focusWidget()
         if event.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return):
-            focused = self.focusWidget()
             if isinstance(focused, QPushButton) and focused.isEnabled():
                 focused.click()
             elif focused in (self.table, self.table.viewport()):
                 self._edit_policy()
+            event.accept()
+            return
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace) and focused in (
+            self.table,
+            self.table.viewport(),
+        ):
+            self._remove_policy()
             event.accept()
             return
         super().keyPressEvent(event)
@@ -1161,7 +1173,9 @@ class CardJanitorDialog(QDialog):
         return self._rows[row].record if 0 <= row < len(self._rows) else None
 
     def _update_buttons(self) -> None:
-        self.edit_button.setEnabled(self._selected_record() is not None)
+        has_selection = self._selected_record() is not None
+        self.edit_button.setEnabled(has_selection)
+        self.remove_button.setEnabled(has_selection)
 
     def _add_policy(self) -> None:
         self._open_editor(None)
@@ -1170,6 +1184,27 @@ class CardJanitorDialog(QDialog):
         record = self._selected_record()
         if record is not None:
             self._open_editor(record)
+
+    def _remove_policy(self) -> None:
+        record = self._selected_record()
+        if record is None:
+            return
+        raw = record.raw if isinstance(record.raw, dict) else {}
+        name = record.policy.name if record.policy else _raw_string(raw, "name")
+        name = name or f"Invalid policy {record.index + 1}"
+        if not askUser(
+            f"Remove {name!r}?\n\nThis will not change any cards.",
+            parent=self,
+            defaultno=True,
+            title="Card Janitor",
+        ):
+            return
+        try:
+            remove_policy(index=record.index)
+        except ConfigWriteError as exc:
+            showWarning(str(exc), parent=self)
+            return
+        self._refresh()
 
     def _open_editor(self, record: PolicyRecord | None) -> None:
         excluded_id = record.policy.id.casefold() if record and record.policy else None

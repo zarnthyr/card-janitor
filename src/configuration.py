@@ -57,6 +57,24 @@ def save_policy(policy: Policy, *, index: int | None = None) -> None:
     mw.addonManager.writeConfig(ADDON_MODULE, updated)
 
 
+def remove_policy(*, index: int) -> None:
+    """Remove one policy while preserving all other raw configuration."""
+    raw = load_raw_config()
+    if not isinstance(raw, dict):
+        message = "The add-on configuration is not a JSON object."
+        raise ConfigWriteError(message)
+    policies = raw.get("policies")
+    if not isinstance(policies, list):
+        message = "The policies setting is not an array."
+        raise ConfigWriteError(message)
+    if not 0 <= index < len(policies):
+        message = "The policy no longer exists. Refresh and try again."
+        raise ConfigWriteError(message)
+    updated = deepcopy(raw)
+    del updated["policies"][index]
+    mw.addonManager.writeConfig(ADDON_MODULE, updated)
+
+
 def save_settings(
     *,
     notify_after_automatic_run: bool,

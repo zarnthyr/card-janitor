@@ -43,6 +43,41 @@ def test_save_policy_replaces_only_target_entry(monkeypatch: pytest.MonkeyPatch)
     assert writes[0][1]["policies"][1] == {"also": "preserved"}
 
 
+def test_remove_policy_removes_only_target_entry(monkeypatch: pytest.MonkeyPatch) -> None:
+    raw = {
+        "config_version": 1,
+        "notify_after_automatic_run": True,
+        "debug_logging": False,
+        "policies": [{"first": True}, {"remove": True}, {"last": True}],
+    }
+    writes = []
+    monkeypatch.setattr(configuration, "load_raw_config", lambda: raw)
+    monkeypatch.setattr(
+        configuration,
+        "mw",
+        SimpleNamespace(
+            addonManager=SimpleNamespace(
+                writeConfig=lambda module, value: writes.append((module, value))
+            )
+        ),
+    )
+
+    configuration.remove_policy(index=1)
+
+    assert writes == [
+        (
+            "card_janitor",
+            {
+                "config_version": 1,
+                "notify_after_automatic_run": True,
+                "debug_logging": False,
+                "policies": [{"first": True}, {"last": True}],
+            },
+        )
+    ]
+    assert raw["policies"] == [{"first": True}, {"remove": True}, {"last": True}]
+
+
 def test_save_settings_preserves_policies(monkeypatch: pytest.MonkeyPatch) -> None:
     policies = [{"broken": True}]
     raw = {
