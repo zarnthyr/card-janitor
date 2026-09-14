@@ -81,7 +81,7 @@ if TYPE_CHECKING:
     from anki.collection import Collection
 
     from .engine import PolicyReport
-    from .models import AddonConfig, AutomaticSchedule, ParsedConfig
+    from .models import AddonConfig, ParsedConfig
 
 AutomaticTrigger = Literal["profile_open", "day_change"]
 
@@ -163,7 +163,7 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
     raise AssertionError(message)
 
 
-def _configured_use(state: str, _schedule: AutomaticSchedule) -> str:
+def _configured_use(state: str) -> str:
     if state == "disabled":
         return "Off"
     if state == "manual":
@@ -613,21 +613,9 @@ class SettingsDialog(QDialog):
         automatic_group = QGroupBox("Automatic Cleanup", self)
         automatic_layout = QVBoxLayout(automatic_group)
         automatic_description = QLabel(
-            "These settings apply to policies whose mode is Automatic.", automatic_group
+            "Automatic policies run at most once per Anki day.", automatic_group
         )
         automatic_layout.addWidget(automatic_description)
-        automatic_form = QFormLayout()
-        self.schedule = QComboBox(automatic_group)
-        for label, value in (
-            ("Once per Anki day", "daily"),
-            ("Whenever the profile opens", "profile_open"),
-            ("Whenever the profile opens or the Anki day changes", "profile_open_and_daily"),
-        ):
-            self.schedule.addItem(label, value)
-        schedule_index = self.schedule.findData(config.automatic_schedule)
-        self.schedule.setCurrentIndex(max(0, schedule_index))
-        automatic_form.addRow("Schedule", self.schedule)
-        automatic_layout.addLayout(automatic_form)
         self.notify = QCheckBox(
             "Show a notification after cards are cleaned up automatically",
             automatic_group,
@@ -668,7 +656,6 @@ class SettingsDialog(QDialog):
     def _save(self) -> None:
         try:
             save_settings(
-                automatic_schedule=self.schedule.currentData(),
                 notify_after_automatic_run=self.notify.isChecked(),
                 debug_logging=self.debug_logging.isChecked(),
             )
@@ -813,7 +800,7 @@ class CardJanitorDialog(QDialog):
                 report = dashboard_row.report
                 values = (
                     policy.name,
-                    _configured_use(policy.state, parsed.config.automatic_schedule),
+                    _configured_use(policy.state),
                     _describe_scope(policy.scope),
                     _describe_rule(policy.rule),
                     _describe_actions(policy.actions),
@@ -1109,21 +1096,15 @@ def open_json_settings(*, parent: QWidget, on_close: Callable[[], None] | None =
 
 
 def automatic_run_is_due(
-    schedule: AutomaticSchedule,
-    trigger: AutomaticTrigger,
     *,
     today: int,
     last_automatic_day: object,
 ) -> bool:
-    if schedule == "profile_open":
-        return trigger == "profile_open"
-    if schedule == "profile_open_and_daily":
-        return True
     return last_automatic_day != today
 
 
-def _mark_daily_run(schedule: AutomaticSchedule, today: int) -> None:
-    if schedule != "daily" or mw.pm.profile is None:
+def _mark_daily_run(today: int) -> None:
+    if mw.pm.profile is None:
         return
     mw.pm.profile[LAST_AUTOMATIC_DAY_PROFILE_KEY] = today
 
@@ -1152,15 +1133,12 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
     profile = mw.pm.profile
     last_day = profile.get(LAST_AUTOMATIC_DAY_PROFILE_KEY) if profile else None
     if not automatic_run_is_due(
-        parsed.config.automatic_schedule,
-        trigger,
         today=today,
         last_automatic_day=last_day,
     ):
         debug(
             "automatic run skipped",
-            reason="schedule is not due",
-            schedule=parsed.config.automatic_schedule,
+            reason="automatic cleanup already ran today",
             trigger=trigger,
             today=today,
             last_automatic_day=last_day,
@@ -1170,7 +1148,6 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
     debug(
         "automatic run started",
         policy_count=len(policies),
-        schedule=parsed.config.automatic_schedule,
         trigger=trigger,
     )
 
@@ -1185,7 +1162,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
             return
         plan = build_execution_plan(reports)
         if plan.is_empty:
-            _mark_daily_run(parsed.config.automatic_schedule, today)
+            _mark_daily_run(today)
             if plan.conflicted_card_ids:
                 tooltip(
                     f"Card Janitor: {len(plan.conflicted_card_ids)} conflicting cards "
@@ -1217,7 +1194,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
             return execute_plan(col, build_execution_plan(filtered), "Card Janitor: Automatic Run")
 
         def on_applied(result: ExecutionResult) -> None:
-            _mark_daily_run(parsed.config.automatic_schedule, today)
+            _mark_daily_run(today)
             debug(
                 "automatic run complete",
                 affected_cards=result.affected_cards,

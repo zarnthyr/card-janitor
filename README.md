@@ -2,7 +2,7 @@
 
 Configurable policy-based cleanup for Anki cards.
 
-Applies cleanup policies according to deck scope, study age, current interval, or new-card status, either after manual preview and approval or automatically on a configurable schedule.
+Applies cleanup policies according to deck scope, study age, current interval, or new-card status, either after manual preview and approval or automatically once per Anki day.
 
 ## Installation
 
@@ -53,9 +53,9 @@ First-review age is derived from genuine answer entries in Anki's review log. Ca
 | --------- | ---------------------------------------------------------------------- |
 | Disabled  | Available in the manual dialog but unchecked and never scheduled       |
 | Manual    | Included in manual runs by default and never scheduled                 |
-| Automatic | Included in manual runs by default and also run on the configured schedule |
+| Automatic | Included in manual runs by default and run at most once per Anki day |
 
-Automatic execution can run on profile open, daily, or both. Daily execution uses Anki's day-change hook rather than background polling. Its completion notification can be disabled independently.
+Automatic cleanup runs on profile opening if it has not yet run that Anki day, and on Anki's day-change hook when the application remains open. It does not use background polling. Its completion notification can be disabled independently.
 
 ## Configuration
 
@@ -68,8 +68,8 @@ Card Janitor → Add… or Edit…
 
 The add-on ships with no policies, so installing it cannot modify a collection. Begin with a manual tag-and-suspend policy and open **Card Janitor…** to preview its results. The dashboard can open candidates in Anki's Browser or apply the configured actions after approval.
 
-Policies can be created and repaired in the manager. **Settings…** controls the
-automatic schedule, notifications, and debug logging. Its **Edit JSON…** button
+Policies can be created and repaired in the manager. **Settings…** controls
+notifications and debug logging. Its **Edit JSON…** button
 opens the underlying configuration for advanced editing.
 
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `state: "automatic"` and runs without confirmation.

@@ -8,12 +8,11 @@ from typing import Any
 
 from aqt import mw
 
-from .models import AutomaticSchedule, ParsedConfig, Policy, parse_config, policy_to_dict
+from .models import CONFIG_VERSION, ParsedConfig, Policy, parse_config, policy_to_dict
 
 ADDON_MODULE = "card_janitor"
 DEFAULT_CONFIG: dict[str, Any] = {
-    "config_version": 2,
-    "automatic_schedule": "daily",
+    "config_version": CONFIG_VERSION,
     "notify_after_automatic_run": True,
     "debug_logging": False,
     "policies": [],
@@ -60,7 +59,6 @@ def save_policy(policy: Policy, *, index: int | None = None) -> None:
 
 def save_settings(
     *,
-    automatic_schedule: AutomaticSchedule,
     notify_after_automatic_run: bool,
     debug_logging: bool,
 ) -> None:
@@ -70,8 +68,7 @@ def save_settings(
         message = "The add-on configuration is not a JSON object."
         raise ConfigWriteError(message)
     updated = deepcopy(raw)
-    updated["config_version"] = 2
-    updated["automatic_schedule"] = automatic_schedule
+    updated["config_version"] = CONFIG_VERSION
     updated["notify_after_automatic_run"] = notify_after_automatic_run
     updated["debug_logging"] = debug_logging
     mw.addonManager.writeConfig(ADDON_MODULE, updated)

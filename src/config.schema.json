@@ -4,22 +4,17 @@
   "additionalProperties": false,
   "required": [
     "config_version",
-    "automatic_schedule",
     "notify_after_automatic_run",
     "debug_logging",
     "policies"
   ],
   "properties": {
     "config_version": {
-      "const": 2
-    },
-    "automatic_schedule": {
-      "enum": ["profile_open", "daily", "profile_open_and_daily"],
-      "description": "When automatic cleanup policies are evaluated"
+      "const": 1
     },
     "notify_after_automatic_run": {
       "type": "boolean",
-      "description": "Show a summary when cards are retired automatically"
+      "description": "Show a summary when cards are cleaned up automatically"
     },
     "debug_logging": {
       "type": "boolean",

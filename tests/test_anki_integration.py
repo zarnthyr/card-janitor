@@ -85,22 +85,16 @@ def test_automatic_completion_message(
 
 
 @pytest.mark.parametrize(
-    ("schedule", "trigger", "last_day", "expected"),
+    ("last_day", "expected"),
     [
-        ("profile_open", "profile_open", None, True),
-        ("profile_open", "day_change", None, False),
-        ("daily", "profile_open", 9, True),
-        ("daily", "profile_open", 10, False),
-        ("daily", "day_change", 9, True),
-        ("profile_open_and_daily", "profile_open", 10, True),
-        ("profile_open_and_daily", "day_change", 10, True),
+        (None, True),
+        (9, True),
+        (10, False),
     ],
 )
-def test_automatic_schedule(schedule: str, trigger: str, last_day: object, expected: bool) -> None:
+def test_daily_automatic_run_is_due(last_day: object, expected: bool) -> None:
     assert (
         ui.automatic_run_is_due(
-            schedule,
-            trigger,
             today=10,
             last_automatic_day=last_day,
         )

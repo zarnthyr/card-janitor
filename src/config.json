@@ -1,6 +1,5 @@
 {
-  "config_version": 2,
-  "automatic_schedule": "daily",
+  "config_version": 1,
   "notify_after_automatic_run": true,
   "debug_logging": false,
   "policies": []

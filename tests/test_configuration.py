@@ -10,8 +10,7 @@ from card_janitor.models import AgeRule, Policy, Scope, SuspendAction
 
 def test_save_policy_replaces_only_target_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = {
-        "config_version": 2,
-        "automatic_schedule": "daily",
+        "config_version": 1,
         "notify_after_automatic_run": True,
         "debug_logging": False,
         "policies": [{"broken": True}, {"also": "preserved"}],
@@ -48,7 +47,6 @@ def test_save_settings_preserves_policies(monkeypatch: pytest.MonkeyPatch) -> No
     policies = [{"broken": True}]
     raw = {
         "config_version": 1,
-        "automatic_schedule": "invalid",
         "notify_after_automatic_run": "invalid",
         "debug_logging": "invalid",
         "policies": policies,
@@ -66,7 +64,6 @@ def test_save_settings_preserves_policies(monkeypatch: pytest.MonkeyPatch) -> No
     )
 
     configuration.save_settings(
-        automatic_schedule="profile_open",
         notify_after_automatic_run=False,
         debug_logging=True,
     )
@@ -75,12 +72,11 @@ def test_save_settings_preserves_policies(monkeypatch: pytest.MonkeyPatch) -> No
         (
             "card_janitor",
             {
-                "config_version": 2,
-                "automatic_schedule": "profile_open",
+                "config_version": 1,
                 "notify_after_automatic_run": False,
                 "debug_logging": True,
                 "policies": policies,
             },
         )
     ]
-    assert raw["config_version"] == 1
+    assert raw["notify_after_automatic_run"] == "invalid"

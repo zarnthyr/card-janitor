@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
-CONFIG_VERSION = 2
+CONFIG_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -89,7 +89,6 @@ class DeleteCardAction:
 
 Action: TypeAlias = TagAction | SuspendAction | MoveAction | DeleteCardAction
 PolicyState: TypeAlias = Literal["disabled", "manual", "automatic"]
-AutomaticSchedule: TypeAlias = Literal["profile_open", "daily", "profile_open_and_daily"]
 
 
 @dataclass(frozen=True)
@@ -105,7 +104,6 @@ class Policy:
 @dataclass(frozen=True)
 class AddonConfig:
     config_version: int
-    automatic_schedule: AutomaticSchedule
     notify_after_automatic_run: bool
     debug_logging: bool
     policies: tuple[Policy, ...]
@@ -237,11 +235,9 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     path = f"policies[{index}]"
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
-    if "enabled" in value or "mode" in value:
-        raise ValueError(f"{path}: replace 'enabled' and 'mode' with 'state'")
     policy_id = _required_string(value, "id", path)
     name = _required_string(value, "name", path)
-    state = value.get("state", "manual")
+    state = value.get("state")
     if state not in {"disabled", "manual", "automatic"}:
         raise ValueError(f"{path}.state: must be 'disabled', 'manual', or 'automatic'")
     actions_value = value.get("actions")
@@ -276,16 +272,6 @@ def parse_config(value: object) -> ParsedConfig:
     if not _is_int(version) or version != CONFIG_VERSION:
         issues.append(ConfigIssue("config_version", f"must be {CONFIG_VERSION}"))
         version = CONFIG_VERSION
-
-    schedule = value.get("automatic_schedule", "daily")
-    if schedule not in {"profile_open", "daily", "profile_open_and_daily"}:
-        issues.append(
-            ConfigIssue(
-                "automatic_schedule",
-                "must be 'profile_open', 'daily', or 'profile_open_and_daily'",
-            )
-        )
-        schedule = "daily"
 
     notify = value.get("notify_after_automatic_run", True)
     if not isinstance(notify, bool):
@@ -324,7 +310,6 @@ def parse_config(value: object) -> ParsedConfig:
     return ParsedConfig(
         config=AddonConfig(
             config_version=CONFIG_VERSION,
-            automatic_schedule=schedule,
             notify_after_automatic_run=notify,
             debug_logging=debug_logging,
             policies=tuple(policies),

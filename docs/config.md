@@ -12,14 +12,10 @@ repaired through **Settings** or **Edit JSON**.
 Deck names are resolved when a policy is evaluated. A missing or filtered move
 destination is an error.
 
-Configuration version 2 replaces the former `enabled` and `mode` policy fields
-with the single `state` field.
-
 ## Mining example
 
     {
-      "config_version": 2,
-      "automatic_schedule": "daily",
+      "config_version": 1,
       "notify_after_automatic_run": true,
       "debug_logging": false,
       "policies": [
@@ -50,26 +46,24 @@ configured policy and shows its scope, conditions, actions, and the number of
 cards it would clean up.
 Policies in the `manual` or `automatic` state are included by default; disabled
 policies remain available but start unchecked. The checkboxes affect only the
-current run. Change the state to `automatic` to also run a policy on the
-configured schedule without approval. Each run is recorded in Anki's undo
+current run. Change the state to `automatic` to also run a policy once per Anki
+day without approval. Each run is recorded in Anki's undo
 history.
 
 The window remains open while you inspect cards. **Browse** opens
 the union from all checked policies. Select a row and use **Edit** to change
-that policy; **Refresh** recalculates the table. Running an automatic policy
-manually does not alter its next scheduled run.
+that policy; **Refresh** recalculates the table. Running a policy manually does
+not count as that day's automatic cleanup.
 
 Policy states are:
 
 - `disabled` — never scheduled and unchecked by default in the dashboard
 - `manual` — checked by default in the dialog but never scheduled
-- `automatic` — checked by default in the dialog and also run automatically
+- `automatic` — checked by default and run at most once per Anki day
 
-`automatic_schedule` supports:
-
-- `profile_open` — run whenever the profile opens
-- `daily` — run at most once per Anki day, on profile opening or day change
-- `profile_open_and_daily` — run on every profile opening and day change
+Automatic cleanup runs on profile opening if it has not yet run that Anki day.
+It also runs when the Anki day changes while the application remains open. Use
+**Card Janitor** whenever you want to run policies manually.
 
 Set `notify_after_automatic_run` to `false` to suppress successful automatic-run
 summaries. No summary is shown when no cards were changed.
