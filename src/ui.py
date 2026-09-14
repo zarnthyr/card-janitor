@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import contextlib
+import itertools
 import re
 from collections import Counter
 from dataclasses import dataclass, replace
@@ -105,6 +106,20 @@ CARD_STATES = (
     ("Review", "review"),
     ("Relearning", "relearning"),
 )
+CONDITION_HELP = {
+    "age_first_review": (
+        "Elapsed whole days since the card's earliest genuine answer in Anki's review log."
+    ),
+    "age_card_created": (
+        "Elapsed whole days since the original creation timestamp stored in the card ID. "
+        "Imported cards may appear much older."
+    ),
+    "interval": "The card's current Anki interval in days. New cards normally have interval 0.",
+    "card_state": (
+        "The card's current scheduling state. This does not indicate whether it has review history."
+    ),
+    "review_history": "Whether Anki's review log contains a genuine answer for the card.",
+}
 
 MENU_ATTR = "_card_janitor_action"
 CONFIG_EDITOR_ATTR = "_card_janitor_config_editor"
@@ -203,8 +218,8 @@ def _configured_use(state: str) -> str:
 
 def _mode_tooltip(state: str) -> str:
     if state == "manual":
-        return "On demand: runs only when you start cleanup manually."
-    return "Automatic: runs once per day without confirmation."
+        return "On demand: runs only when you click Clean Up in Card Janitor."
+    return "Automatic: runs once per day without confirmation and can also be run on demand."
 
 
 @dataclass(frozen=True)
@@ -273,7 +288,7 @@ class CardStatePicker(QComboBox):
         selected = [label for label, value in CARD_STATES if value in self._states]
         summary = ", ".join(selected) if selected else "Choose states"
         self.setItemText(0, summary)
-        self.setToolTip(summary)
+        self.setToolTip(f"Match cards whose current state is any of: {summary}.")
 
     def _state_toggled(self, state: str, _checked: bool) -> None:
         selected = tuple(
@@ -322,6 +337,7 @@ class RuleConditionRow(QWidget):
         self.value_stack.addWidget(self.no_value)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(75)
+        self.remove_button.setToolTip("Remove this condition.")
         for widget in (
             self.number_label,
             self.kind,
@@ -358,6 +374,8 @@ class RuleConditionRow(QWidget):
 
     def _update_controls(self, _index: int = 0) -> None:
         kind = self.kind.currentData()
+        help_text = CONDITION_HELP[kind]
+        self.kind.setToolTip(help_text)
         self.operator.clear()
         if kind == "card_state":
             self.operator_stack.setCurrentWidget(self.fixed_operator)
@@ -373,6 +391,9 @@ class RuleConditionRow(QWidget):
                 self.operator.addItem(label, value)
             self.operator.setCurrentIndex(self.operator.findData("gte"))
             self.value_stack.setCurrentWidget(self.days)
+        self.operator.setToolTip("Choose how this condition compares the card value.")
+        self.fixed_operator.setToolTip("A card matches when its state is one of those selected.")
+        self.days.setToolTip(help_text)
 
     def rule(self) -> AgeRule | IntervalRule | CardStateRule | ReviewHistoryRule:
         kind = self.kind.currentData()
@@ -386,10 +407,18 @@ class RuleConditionRow(QWidget):
             return CardStateRule(self.states.states())
         return ReviewHistoryRule(self.operator.currentData())
 
+    def focus_widgets(self) -> tuple[QWidget, ...]:
+        return (self.kind, self.operator, self.days, self.states, self.remove_button)
+
 
 class PolicyEditorDialog(QDialog):
-    def __init__(self, record: PolicyRecord | None, existing_ids: set[str]) -> None:
-        super().__init__(mw)
+    def __init__(
+        self,
+        record: PolicyRecord | None,
+        existing_ids: set[str],
+        parent: QWidget,
+    ) -> None:
+        super().__init__(parent)
         self._record = record
         self._existing_ids = existing_ids
         self.result_policy: Policy | None = None
@@ -424,7 +453,8 @@ class PolicyEditorDialog(QDialog):
             self,
         )
         form.insertRow(0, self.automatic_warning)
-        form.addRow("Mode", self.state)
+        self.mode_label = QLabel("Mode", self)
+        form.addRow(self.mode_label, self.state)
         layout.addWidget(general_group)
 
         scope_group = QGroupBox("Scope", self)
@@ -433,6 +463,8 @@ class PolicyEditorDialog(QDialog):
         self.decks = QListWidget(self)
         self.decks.setAlternatingRowColors(True)
         self.decks.setMinimumHeight(130)
+        self.decks.setTabKeyNavigation(False)
+        self.decks.setToolTip("Select the decks whose cards this policy may clean up.")
         raw_scope = raw.get("scope") if isinstance(raw.get("scope"), dict) else {}
         deck_values = policy.scope.decks if policy else _raw_string_list(raw_scope, "decks")
         for deck_name in (*deck_names, *(name for name in deck_values if name not in deck_names)):
@@ -445,10 +477,12 @@ class PolicyEditorDialog(QDialog):
         scope_layout.addSpacing(6)
         self.include_subdecks = QCheckBox("Include subdecks", self)
         self.include_subdecks.setToolTip(
-            "Include every child of each selected deck, even when those child decks are not "
-            "selected separately in the list."
+            "Also include cards in every child deck of each selected deck."
         )
         self.include_suspended = QCheckBox("Include suspended cards", self)
+        self.include_suspended.setToolTip(
+            "Allow this policy to match cards that are already suspended."
+        )
         self.include_subdecks.setChecked(
             policy.scope.include_subdecks
             if policy
@@ -470,9 +504,11 @@ class PolicyEditorDialog(QDialog):
         self.match = QComboBox(self)
         self.match.addItem("All conditions (AND)", "all")
         self.match.addItem("Any condition (OR)", "any")
+        self.match.setToolTip("Require every condition to match, or allow any one to match.")
         match_row.addWidget(self.match)
         match_row.addStretch()
         self.add_condition_button = QPushButton("Add Condition", self)
+        self.add_condition_button.setToolTip("Add another condition to this policy.")
         match_row.addWidget(self.add_condition_button)
         self.creation_age_warning = _warning_panel(
             "Imported cards retain their original creation dates and "
@@ -485,6 +521,7 @@ class PolicyEditorDialog(QDialog):
         self.conditions_scroll.setWidgetResizable(True)
         self.conditions_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.conditions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.conditions_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.conditions_scroll.setMinimumHeight(100)
         self.conditions_scroll.setMaximumHeight(230)
         self.conditions_container = QWidget(self.conditions_scroll)
@@ -519,14 +556,20 @@ class PolicyEditorDialog(QDialog):
         actions_grid.setColumnStretch(1, 1)
         source_actions = policy.actions if policy else _best_effort_actions(raw.get("actions"))
         self.tag_enabled = QCheckBox("Add tags", self)
+        self.tag_enabled.setToolTip("Add tags to the notes of matching cards.")
         self.tag = QLineEdit(self)
         self.tag.setPlaceholderText("Separate tags with spaces or commas")
+        self.tag.setToolTip("Enter one or more note tags, separated by spaces or commas.")
         self.suspend = QCheckBox("Suspend cards", self)
+        self.suspend.setToolTip("Suspend matching cards so Anki no longer schedules them.")
         self.move_enabled = QCheckBox("Move to deck", self)
+        self.move_enabled.setToolTip("Move matching cards to another deck.")
         self.move_deck = QComboBox(self)
         self.move_deck.setEditable(True)
         self.move_deck.addItems(deck_names)
+        self.move_deck.setToolTip("Choose or enter the destination deck.")
         self.delete = QCheckBox("Delete cards", self)
+        self.delete.setToolTip("Delete matching cards from the collection.")
         self.delete_warning = _warning_panel(
             "Matching cards will be <b>DELETED</b> from your collection.",
             self,
@@ -568,6 +611,49 @@ class PolicyEditorDialog(QDialog):
         qconnect(buttons.accepted, self._accept)
         qconnect(buttons.rejected, self.reject)
         layout.addWidget(buttons)
+        self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        self.cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        qconnect(self.state.currentIndexChanged, self._update_mode_tooltip)
+        self._update_mode_tooltip()
+        self._update_tab_order()
+        QTimer.singleShot(0, self._focus_initial)
+
+    def _focus_initial(self) -> None:
+        self.name.setFocus()
+        if self._record is not None:
+            self.name.selectAll()
+
+    def _update_mode_tooltip(self, _index: int = 0) -> None:
+        help_text = _mode_tooltip(self.state.currentData())
+        self.mode_label.setToolTip(help_text)
+        self.state.setToolTip(help_text)
+
+    def _update_tab_order(self) -> None:
+        widgets: list[QWidget] = [
+            self.name,
+            self.state,
+            self.decks,
+            self.include_subdecks,
+            self.include_suspended,
+            self.match,
+            self.add_condition_button,
+        ]
+        for row in self._conditions:
+            widgets.extend(row.focus_widgets())
+        widgets.extend(
+            (
+                self.tag_enabled,
+                self.tag,
+                self.suspend,
+                self.move_enabled,
+                self.move_deck,
+                self.delete,
+                self.save_button,
+                self.cancel_button,
+            )
+        )
+        for current, following in itertools.pairwise(widgets):
+            QWidget.setTabOrder(current, following)
 
     def _add_condition(self, rule: Rule | None) -> None:
         row = RuleConditionRow(rule, self)
@@ -578,17 +664,23 @@ class PolicyEditorDialog(QDialog):
         self._renumber_conditions()
         self._update_condition_warning()
         self._update_conditions_extent()
+        if hasattr(self, "save_button"):
+            self._update_tab_order()
+            row.kind.setFocus()
 
     def _remove_condition(self, row: RuleConditionRow) -> None:
         if len(self._conditions) == 1:
             showWarning("A policy must have at least one condition.", parent=self)
             return
+        index = self._conditions.index(row)
         self._conditions.remove(row)
         self.conditions_layout.removeWidget(row)
         row.deleteLater()
         self._renumber_conditions()
         self._update_condition_warning()
         self._update_conditions_extent()
+        self._update_tab_order()
+        self._conditions[min(index, len(self._conditions) - 1)].kind.setFocus()
 
     def _renumber_conditions(self) -> None:
         for index, row in enumerate(self._conditions, start=1):
@@ -821,6 +913,13 @@ class SettingsDialog(QDialog):
         qconnect(buttons.accepted, self._save)
         qconnect(buttons.rejected, self.reject)
         layout.addWidget(buttons)
+        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        QWidget.setTabOrder(self.notify, self.debug_logging)
+        QWidget.setTabOrder(self.debug_logging, self.json_button)
+        QWidget.setTabOrder(self.json_button, save_button)
+        QWidget.setTabOrder(save_button, cancel_button)
+        QTimer.singleShot(0, self.notify.setFocus)
 
     @property
     def edit_json_requested(self) -> bool:
@@ -888,6 +987,7 @@ class CardJanitorDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setTabKeyNavigation(False)
         vertical_header = self.table.verticalHeader()
         vertical_header.setVisible(False)
         vertical_header.setMinimumSectionSize(self.fontMetrics().height() * 2 + 12)
@@ -973,9 +1073,32 @@ class CardJanitorDialog(QDialog):
         qconnect(self.run_button.clicked, self._run)
         qconnect(buttons.rejected, self.close)
         layout.addWidget(buttons)
+        self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+
+        tab_widgets = (
+            self.add_button,
+            self.edit_button,
+            self.remove_button,
+            self.table,
+            self.empty_add_button,
+            self.settings_button,
+            self.refresh_button,
+            self.view_button,
+            self.close_button,
+            self.run_button,
+        )
+        for current, following in itertools.pairwise(tab_widgets):
+            QWidget.setTabOrder(current, following)
 
         self.set_dashboard(parsed, reports)
         QTimer.singleShot(0, self._enable_column_resizing)
+        QTimer.singleShot(0, self._focus_initial)
+
+    def _focus_initial(self) -> None:
+        if self._rows:
+            self.table.setFocus()
+        else:
+            self.empty_add_button.setFocus()
 
     def _enable_column_resizing(self) -> None:
         header = self.table.horizontalHeader()
@@ -1234,7 +1357,7 @@ class CardJanitorDialog(QDialog):
             for item in self._parsed.policy_records
             if item.policy is not None and item.policy.id.casefold() != excluded_id
         }
-        editor = PolicyEditorDialog(record, existing_ids)
+        editor = PolicyEditorDialog(record, existing_ids, self)
         if editor.exec() != QDialog.DialogCode.Accepted or editor.result_policy is None:
             return
         try:
