@@ -28,6 +28,7 @@ from aqt.qt import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QKeyEvent,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -41,6 +42,7 @@ from aqt.qt import (
     Qt,
     QTableWidget,
     QTableWidgetItem,
+    QTimer,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
@@ -161,6 +163,17 @@ def _scope_tooltip(scope: Scope) -> str:
     )
 
 
+def _policy_tooltip(policy: Policy) -> str:
+    decks = ", ".join(policy.scope.decks)
+    if policy.scope.include_subdecks:
+        decks += " and its subdecks" if len(policy.scope.decks) == 1 else " and their subdecks"
+    return (
+        f"Cards in {decks} will be cleaned up when:\n"
+        f"{_describe_rule(policy.rule)}\n\n"
+        f"Actions:\n{_describe_actions(policy.actions)}"
+    )
+
+
 def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
     if isinstance(rule, AgeRule):
         source = "Age since first review" if rule.source == "first_review" else "Age since creation"
@@ -191,10 +204,10 @@ def _configured_use(state: str) -> str:
 
 def _mode_tooltip(state: str) -> str:
     if state == "disabled":
-        return "Off: not included by default and never run automatically."
+        return "Off: runs only when you select it manually."
     if state == "manual":
-        return "On demand: included by default here but never run automatically."
-    return "Automatic: included by default here and run once per day."
+        return "On demand: runs only when you start cleanup manually."
+    return "Automatic: runs once per day without confirmation."
 
 
 @dataclass(frozen=True)
@@ -1001,7 +1014,7 @@ class CardJanitorDialog(QDialog):
                 self.table.item(row, self.COLUMN_COUNT).setToolTip(error_text)
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(error_text)
             else:
-                self.table.item(row, self.COLUMN_POLICY).setToolTip(f"Policy ID: {policy.id}")
+                self.table.item(row, self.COLUMN_POLICY).setToolTip(_policy_tooltip(policy))
                 self.table.item(row, self.COLUMN_STATE).setToolTip(_mode_tooltip(policy.state))
                 self.table.item(row, self.COLUMN_SCOPE).setToolTip(_scope_tooltip(policy.scope))
                 if dashboard_row.report and dashboard_row.report.errors:
@@ -1009,6 +1022,7 @@ class CardJanitorDialog(QDialog):
                     self.table.item(row, self.COLUMN_COUNT).setToolTip(error_text)
         del signal_blocker
         self.table.resizeRowsToContents()
+        QTimer.singleShot(0, self.table.resizeRowsToContents)
         if self._rows:
             self.table.selectRow(0)
         self._update_summary()
@@ -1037,6 +1051,15 @@ class CardJanitorDialog(QDialog):
     def _on_item_double_clicked(self, item: QTableWidgetItem) -> None:
         if item.column() != self.COLUMN_RUN:
             self._edit_policy()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 - Qt virtual method
+        if event.key() in (Qt.Key.Key_Enter, Qt.Key.Key_Return):
+            focused = self.focusWidget()
+            if isinstance(focused, QPushButton) and focused.isEnabled():
+                focused.click()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def _update_summary(self) -> None:
         reports = self.checked_reports()
