@@ -1,6 +1,7 @@
 # Copyright (C) 2026 Zarnthyr
 # License: GNU AGPL v3 or later
 
+import pytest
 from card_janitor.engine import (
     MILLIS_PER_DAY,
     CardFacts,
@@ -13,8 +14,8 @@ from card_janitor.models import (
     Action,
     AgeRule,
     AnyRule,
+    CardStateRule,
     IntervalRule,
-    NewRule,
     Policy,
     Rule,
     Scope,
@@ -51,46 +52,68 @@ def policy(
         name="Test",
         state="manual",
         scope=scope or Scope(("Mining",)),
-        rule=rule or AgeRule(365, "first_review"),
+        rule=rule or AgeRule(365, "first_review", "gte"),
         actions=actions or (SuspendAction(),),
     )
 
 
 def test_first_review_age_uses_elapsed_days_inclusively() -> None:
-    rule = AgeRule(365, "first_review")
+    rule = AgeRule(365, "first_review", "gte")
     card = facts(first_review_ms=5000)
     assert not matches_rule(rule, card, 5000 + 365 * MILLIS_PER_DAY - 1)
     assert matches_rule(rule, card, 5000 + 365 * MILLIS_PER_DAY)
 
 
 def test_first_review_age_does_not_approximate_missing_history() -> None:
-    assert not matches_rule(AgeRule(1, "first_review"), facts(first_review_ms=None), 10**12)
+    for operator in ("gt", "gte", "eq", "lte", "lt"):
+        assert not matches_rule(
+            AgeRule(1, "first_review", operator), facts(first_review_ms=None), 10**12
+        )
 
 
 def test_any_rule_matches_either_child() -> None:
-    rule = AnyRule((AgeRule(365, "first_review"), IntervalRule(180)))
+    rule = AnyRule((AgeRule(365, "first_review", "gte"), IntervalRule(180, "gte")))
     assert matches_rule(rule, facts(interval=180), 2000 + MILLIS_PER_DAY)
 
 
 def test_interval_rule_uses_current_interval_without_requiring_revlog() -> None:
-    assert matches_rule(IntervalRule(180), facts(interval=180, first_review_ms=None), 0)
+    assert matches_rule(IntervalRule(180, "gte"), facts(interval=180, first_review_ms=None), 0)
 
 
-def test_new_rule_uses_card_type_even_when_buried() -> None:
-    assert matches_rule(NewRule(), facts(card_type=0, queue=-2), 0)
-    assert not matches_rule(NewRule(), facts(card_type=2), 0)
+def test_card_state_membership_uses_card_type_even_when_buried() -> None:
+    rule = CardStateRule(("new", "learning"), "in")
+    assert matches_rule(rule, facts(card_type=0, queue=-2), 0)
+    assert not matches_rule(rule, facts(card_type=2), 0)
+    assert matches_rule(CardStateRule(("new",), "not_in"), facts(card_type=2), 0)
 
 
 def test_never_studied_uses_genuine_review_history() -> None:
     rule = StudyStatusRule("never_studied")
     assert matches_rule(rule, facts(card_type=0, first_review_ms=None), 0)
     assert not matches_rule(rule, facts(card_type=0, first_review_ms=2000), 0)
+    assert matches_rule(StudyStatusRule("ever_studied"), facts(first_review_ms=2000), 0)
+
+
+@pytest.mark.parametrize(
+    ("operator", "expected"),
+    [("gt", False), ("gte", True), ("eq", True), ("lte", True), ("lt", False)],
+)
+def test_numeric_operators(operator: str, expected: bool) -> None:
+    assert matches_rule(IntervalRule(30, operator), facts(interval=30), 0) is expected
+
+
+def test_exact_age_matches_one_completed_day_bucket() -> None:
+    rule = AgeRule(30, "first_review", "eq")
+    card = facts(first_review_ms=5000)
+    assert matches_rule(rule, card, 5000 + 30 * MILLIS_PER_DAY)
+    assert matches_rule(rule, card, 5000 + 31 * MILLIS_PER_DAY - 1)
+    assert not matches_rule(rule, card, 5000 + 31 * MILLIS_PER_DAY)
 
 
 def test_scope_excludes_suspended_and_filtered_by_default() -> None:
     cards = [facts(), facts(card_id=2, queue=-1), facts(card_id=3, original_deck_id=1)]
     report = evaluate_facts(
-        policy(rule=IntervalRule(1)),
+        policy(rule=IntervalRule(1, "gte")),
         cards,
         {1},
         (ResolvedAction(SuspendAction()),),
@@ -104,7 +127,7 @@ def test_actionable_excludes_cards_with_all_actions_satisfied() -> None:
     configured = policy(
         actions=(TagAction("retired"), SuspendAction()),
         scope=Scope(("Mining",), include_suspended=True),
-        rule=IntervalRule(1),
+        rule=IntervalRule(1, "gte"),
     )
     actions = (ResolvedAction(TagAction("retired")), ResolvedAction(SuspendAction()))
     report = evaluate_facts(configured, [card], {1}, actions, now_ms=10**12)

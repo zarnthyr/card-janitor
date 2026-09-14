@@ -24,7 +24,7 @@ def report(actions: tuple[ResolvedAction, ...], value: CardFacts | None = None) 
         name="Policy",
         state="automatic",
         scope=Scope(("Mining",)),
-        rule=IntervalRule(1),
+        rule=IntervalRule(1, "gte"),
         actions=tuple(a.action for a in actions),
     )
     return PolicyReport(policy, (item,), (item,), 0, actions)

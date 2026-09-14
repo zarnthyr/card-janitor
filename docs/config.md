@@ -31,7 +31,8 @@ destination is an error.
           "rule": {
             "type": "age",
             "days": 365,
-            "from": "first_review"
+            "from": "first_review",
+            "operator": "gte"
           },
           "actions": [
             {"type": "tag", "tag": "retired"},
@@ -77,9 +78,12 @@ printed, regardless of this setting.
 
 ### Age
 
-    {"type": "age", "days": 365, "from": "first_review"}
+    {"type": "age", "days": 365, "from": "first_review", "operator": "gte"}
 
-Age uses elapsed 24-hour periods. `first_review` is the earliest review-log entry with a genuine answer rating. Cards without such history do not match. `card_created` uses the creation timestamp embedded in the card ID.
+Age uses completed 24-hour periods. `first_review` is the earliest review-log
+entry with a genuine answer rating. Cards without such history do not match any
+first-review-age comparison. `card_created` uses the creation timestamp embedded
+in the card ID.
 
 > **Warning:** `card_created` does not mean "imported into this collection." Imported cards usually
 > retain the source author's card IDs and creation timestamps. A newly imported premade
@@ -87,24 +91,25 @@ Age uses elapsed 24-hour periods. `first_review` is the earliest review-log entr
 > first evaluation. Anki does not expose a reliable per-card local-import timestamp.
 
 Use creation-age conditions only for cards whose provenance you understand. Keep the
-policy in `manual` mode and inspect its affected cards before changing it to
+policy in `manual` mode and inspect its matching cards before changing it to
 `automatic`. Card Janitor does not attempt to rewrite card IDs. If you use another
 add-on to normalize creation dates, back up the collection first and verify that the
 tool safely updates all related references.
 
 ### Current interval
 
-    {"type": "interval", "days": 180}
+    {"type": "interval", "days": 180, "operator": "gte"}
 
-Matches cards whose current Anki interval is at least as large as `days`. New cards normally have an interval of zero and do not match.
+Compares Anki's current interval, in days, with `days`. New cards normally have
+an interval of zero, so the `eq` and `lt` operators can include them.
 
 ### Card state
 
-    {"type": "card_state", "state": "new"}
+    {"type": "card_state", "states": ["new", "learning"], "operator": "in"}
 
-Matches cards in the selected Anki state: `new`, `learning`, `review`, or
-`relearning`. This describes the card's current Anki state, not whether it has
-ever been studied.
+Use `in` for "is any of" and `not_in` for "is none of." Select one or more Anki
+states: `new`, `learning`, `review`, or `relearning`. This describes the card's
+current Anki state, not whether it has ever been studied.
 
 ### Study status
 
@@ -112,15 +117,15 @@ ever been studied.
 
 `never_studied` matches cards with no genuine answer entry in Anki's review
 log. Unlike the `new` card state, it does not match a previously studied card
-that was later reset to New.
+that was later reset to New. `ever_studied` matches cards with such an entry.
 
 ### Combining conditions
 
     {
       "type": "any",
       "rules": [
-        {"type": "age", "days": 365, "from": "first_review"},
-        {"type": "interval", "days": 180}
+        {"type": "age", "days": 365, "from": "first_review", "operator": "gte"},
+        {"type": "interval", "days": 180, "operator": "gte"}
       ]
     }
 
@@ -134,10 +139,13 @@ For example, the conditions for a stale-new-card policy are:
     {
       "type": "all",
       "rules": [
-        {"type": "age", "days": 30, "from": "card_created"},
+        {"type": "age", "days": 30, "from": "card_created", "operator": "gte"},
         {"type": "study_status", "status": "never_studied"}
       ]
     }
+
+Numeric conditions support `gt`, `gte`, `eq`, `lte`, and `lt`. These correspond
+to greater than, at least, exactly, at most, and less than.
 
 ## Actions
 

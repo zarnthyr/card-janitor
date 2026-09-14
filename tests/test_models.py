@@ -4,9 +4,9 @@
 from card_janitor.models import (
     AgeRule,
     AllRule,
+    CardStateRule,
     DeleteCardAction,
     MoveAction,
-    NewRule,
     StudyStatusRule,
     parse_config,
     policy_to_dict,
@@ -19,7 +19,12 @@ def policy_config(**overrides: object) -> dict:
         "name": "Mining",
         "state": "manual",
         "scope": {"decks": ["Mining"], "include_subdecks": True},
-        "rule": {"type": "age", "days": 365, "from": "first_review"},
+        "rule": {
+            "type": "age",
+            "days": 365,
+            "from": "first_review",
+            "operator": "gte",
+        },
         "actions": [{"type": "tag", "tag": "retired"}, {"type": "suspend"}],
     }
     policy.update(overrides)
@@ -36,8 +41,12 @@ def test_parses_flat_compound_policy() -> None:
         rule={
             "type": "all",
             "rules": [
-                {"type": "age", "days": 365, "from": "first_review"},
-                {"type": "new"},
+                {"type": "age", "days": 365, "from": "first_review", "operator": "gte"},
+                {
+                    "type": "card_state",
+                    "states": ["new"],
+                    "operator": "in",
+                },
             ],
         }
     )
@@ -46,8 +55,8 @@ def test_parses_flat_compound_policy() -> None:
     rule = parsed.config.policies[0].rule
     assert isinstance(rule, AllRule)
     assert rule.rules == (
-        AgeRule(days=365, source="first_review"),
-        NewRule(),
+        AgeRule(days=365, source="first_review", operator="gte"),
+        CardStateRule(states=("new",), operator="in"),
     )
 
 
@@ -59,8 +68,12 @@ def test_rejects_nested_compound_policy() -> None:
                 {
                     "type": "any",
                     "rules": [
-                        {"type": "new"},
-                        {"type": "interval", "days": 180},
+                        {
+                            "type": "card_state",
+                            "states": ["new"],
+                            "operator": "in",
+                        },
+                        {"type": "interval", "days": 180, "operator": "gte"},
                     ],
                 }
             ],
@@ -73,7 +86,7 @@ def test_rejects_nested_compound_policy() -> None:
 
 
 def test_invalid_policy_is_omitted() -> None:
-    raw = policy_config(rule={"type": "age", "days": 0, "from": "first_review"})
+    raw = policy_config(rule={"type": "age", "days": -1, "from": "first_review", "operator": "gte"})
     parsed = parse_config(raw)
     assert parsed.issues
     assert not parsed.config.policies
@@ -159,6 +172,25 @@ def test_study_status_rule_parses() -> None:
     parsed = parse_config(policy_config(rule={"type": "study_status", "status": "never_studied"}))
     assert not parsed.issues
     assert parsed.config.policies[0].rule == StudyStatusRule("never_studied")
+
+
+def test_card_state_membership_rule_parses() -> None:
+    parsed = parse_config(
+        policy_config(
+            rule={
+                "type": "card_state",
+                "states": ["new", "learning"],
+                "operator": "not_in",
+            }
+        )
+    )
+    assert not parsed.issues
+    assert parsed.config.policies[0].rule == CardStateRule(("new", "learning"), "not_in")
+
+
+def test_numeric_operator_is_required() -> None:
+    parsed = parse_config(policy_config(rule={"type": "interval", "days": 30}))
+    assert "operator" in str(parsed.issues[0])
 
 
 def test_serialized_policy_round_trips() -> None:

@@ -82,35 +82,37 @@
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "days", "from"],
+          "required": ["type", "days", "from", "operator"],
           "properties": {
             "type": {"const": "age"},
-            "days": {"type": "integer", "minimum": 1},
-            "from": {"enum": ["first_review", "card_created"]}
+            "days": {"type": "integer", "minimum": 0},
+            "from": {"enum": ["first_review", "card_created"]},
+            "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type", "days"],
+          "required": ["type", "days", "operator"],
           "properties": {
             "type": {"const": "interval"},
-            "days": {"type": "integer", "minimum": 1}
+            "days": {"type": "integer", "minimum": 0},
+            "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
           }
         },
         {
           "type": "object",
           "additionalProperties": false,
-          "required": ["type"],
-          "properties": {"type": {"const": "new"}}
-        },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["type", "state"],
+          "required": ["type", "states", "operator"],
           "properties": {
             "type": {"const": "card_state"},
-            "state": {"enum": ["new", "learning", "review", "relearning"]}
+            "states": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"enum": ["new", "learning", "review", "relearning"]}
+            },
+            "operator": {"enum": ["in", "not_in"]}
           }
         },
         {
@@ -119,7 +121,7 @@
           "required": ["type", "status"],
           "properties": {
             "type": {"const": "study_status"},
-            "status": {"const": "never_studied"}
+            "status": {"enum": ["never_studied", "ever_studied"]}
           }
         }
       ]

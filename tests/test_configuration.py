@@ -31,7 +31,7 @@ def test_save_policy_replaces_only_target_entry(monkeypatch: pytest.MonkeyPatch)
         name="Fixed",
         state="manual",
         scope=Scope(("Mining",)),
-        rule=AgeRule(365, "first_review"),
+        rule=AgeRule(365, "first_review", "gte"),
         actions=(SuspendAction(),),
     )
 

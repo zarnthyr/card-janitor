@@ -65,7 +65,6 @@ from .models import (
     DeleteCardAction,
     IntervalRule,
     MoveAction,
-    NewRule,
     Policy,
     PolicyRecord,
     Rule,
@@ -84,6 +83,21 @@ if TYPE_CHECKING:
     from .models import AddonConfig, ParsedConfig
 
 AutomaticTrigger = Literal["profile_open", "day_change"]
+
+NUMERIC_OPERATOR_LABELS = (
+    ("is greater than", "gt"),
+    ("is at least", "gte"),
+    ("is exactly", "eq"),
+    ("is at most", "lte"),
+    ("is less than", "lt"),
+)
+NUMERIC_OPERATOR_SYMBOLS = {"gt": ">", "gte": "≥", "eq": "=", "lte": "≤", "lt": "<"}
+CARD_STATES = (
+    ("New", "new"),
+    ("Learning", "learning"),
+    ("Review", "review"),
+    ("Relearning", "relearning"),
+)
 
 MENU_ATTR = "_card_janitor_action"
 CONFIG_EDITOR_ATTR = "_card_janitor_config_editor"
@@ -145,16 +159,17 @@ def _scope_tooltip(scope: Scope) -> str:
 
 def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
     if isinstance(rule, AgeRule):
-        source = "First studied" if rule.source == "first_review" else "Created"
-        return f"{source} ≥ {rule.days} days ago"
+        source = "Age since first review" if rule.source == "first_review" else "Age since creation"
+        return f"{source} {NUMERIC_OPERATOR_SYMBOLS[rule.operator]} {rule.days} days"
     if isinstance(rule, IntervalRule):
-        return f"Interval ≥ {rule.days} days"
-    if isinstance(rule, NewRule):
-        return "Still new"
+        return f"Interval {NUMERIC_OPERATOR_SYMBOLS[rule.operator]} {rule.days} days"
     if isinstance(rule, CardStateRule):
-        return f"Card state is {rule.state.capitalize()}"
+        operator = "is any of" if rule.operator == "in" else "is none of"
+        states = ", ".join(state.capitalize() for state in rule.states)
+        return f"Card state {operator} {states}"
     if isinstance(rule, StudyStatusRule):
-        return "Study status is Never studied"
+        status = "Never studied" if rule.status == "never_studied" else "Ever studied"
+        return f"Study status is {status}"
     if isinstance(rule, (AllRule, AnyRule)):
         operator = " AND " if isinstance(rule, AllRule) else " OR "
         description = operator.join(_describe_rule(child, nested=True) for child in rule.rules)
@@ -175,6 +190,50 @@ def _configured_use(state: str) -> str:
 class DashboardRow:
     record: PolicyRecord
     report: PolicyReport | None
+
+
+class CardStatePicker(QPushButton):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._states = ("new",)
+        qconnect(self.clicked, self._choose_states)
+        self._update_text()
+
+    def states(self) -> tuple[str, ...]:
+        return self._states
+
+    def set_states(self, states: tuple[str, ...]) -> None:
+        self._states = tuple(value for _label, value in CARD_STATES if value in states)
+        self._update_text()
+
+    def _update_text(self) -> None:
+        selected = [label for label, value in CARD_STATES if value in self._states]
+        self.setText(", ".join(selected) + "…" if selected else "Choose states…")
+
+    def _choose_states(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Select Card States")
+        layout = QVBoxLayout(dialog)
+        checkboxes: list[tuple[str, QCheckBox]] = []
+        for label, value in CARD_STATES:
+            checkbox = QCheckBox(label, dialog)
+            checkbox.setChecked(value in self._states)
+            checkboxes.append((value, checkbox))
+            layout.addWidget(checkbox)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        qconnect(buttons.accepted, dialog.accept)
+        qconnect(buttons.rejected, dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        selected = tuple(value for value, checkbox in checkboxes if checkbox.isChecked())
+        if not selected:
+            showWarning("Choose at least one card state.", parent=self)
+            return
+        self.set_states(selected)
 
 
 class RuleConditionRow(QWidget):
@@ -199,18 +258,21 @@ class RuleConditionRow(QWidget):
             "creator's timestamp and may qualify immediately.",
             Qt.ItemDataRole.ToolTipRole,
         )
-        self.operator = QLabel("is at least", self)
-        self.operator.setMinimumWidth(70)
+        self.operator = QComboBox(self)
+        self.operator.setMinimumWidth(125)
         self.days = QSpinBox(self)
-        self.days.setRange(1, 100000)
+        self.days.setRange(0, 100000)
         self.days.setSuffix(" days")
         self.days.setMinimumWidth(220)
         self.choice = QComboBox(self)
         self.choice.setMinimumWidth(220)
+        self.states = CardStatePicker(self)
+        self.states.setMinimumWidth(220)
         self.value_stack = QStackedWidget(self)
         self.value_stack.setMinimumWidth(220)
         self.value_stack.addWidget(self.days)
         self.value_stack.addWidget(self.choice)
+        self.value_stack.addWidget(self.states)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(80)
         for widget in (
@@ -222,19 +284,21 @@ class RuleConditionRow(QWidget):
         ):
             layout.addWidget(widget)
         selected_choice: str | None = None
+        selected_states: tuple[str, ...] | None = None
+        selected_operator: str | None = None
         if isinstance(rule, AgeRule):
             kind = "age_first_review" if rule.source == "first_review" else "age_card_created"
             self.kind.setCurrentIndex(self.kind.findData(kind))
             self.days.setValue(rule.days)
+            selected_operator = rule.operator
         elif isinstance(rule, IntervalRule):
             self.kind.setCurrentIndex(self.kind.findData("interval"))
             self.days.setValue(rule.days)
-        elif isinstance(rule, NewRule):
-            self.kind.setCurrentIndex(self.kind.findData("card_state"))
-            selected_choice = "new"
+            selected_operator = rule.operator
         elif isinstance(rule, CardStateRule):
             self.kind.setCurrentIndex(self.kind.findData("card_state"))
-            selected_choice = rule.state
+            selected_states = rule.states
+            selected_operator = rule.operator
         elif isinstance(rule, StudyStatusRule):
             self.kind.setCurrentIndex(self.kind.findData("study_status"))
             selected_choice = rule.status
@@ -242,35 +306,44 @@ class RuleConditionRow(QWidget):
             self.days.setValue(365)
         qconnect(self.kind.currentIndexChanged, self._update_controls)
         self._update_controls()
+        if selected_operator is not None:
+            self.operator.setCurrentIndex(self.operator.findData(selected_operator))
         if selected_choice is not None:
             self.choice.setCurrentIndex(self.choice.findData(selected_choice))
+        if selected_states is not None:
+            self.states.set_states(selected_states)
 
     def _update_controls(self, _index: int = 0) -> None:
         kind = self.kind.currentData()
         self.kind.setToolTip(self.kind.currentData(Qt.ItemDataRole.ToolTipRole) or "")
-        uses_choice = kind in {"card_state", "study_status"}
-        self.operator.setText("is" if uses_choice else "is at least")
-        self.value_stack.setCurrentWidget(self.choice if uses_choice else self.days)
+        self.operator.clear()
         self.choice.clear()
         if kind == "card_state":
-            self.choice.addItem("New", "new")
-            self.choice.addItem("Learning", "learning")
-            self.choice.addItem("Review", "review")
-            self.choice.addItem("Relearning", "relearning")
+            self.operator.addItem("is any of", "in")
+            self.operator.addItem("is none of", "not_in")
+            self.value_stack.setCurrentWidget(self.states)
         elif kind == "study_status":
+            self.operator.addItem("is", "eq")
             self.choice.addItem("Never studied", "never_studied")
+            self.choice.addItem("Ever studied", "ever_studied")
+            self.value_stack.setCurrentWidget(self.choice)
+        else:
+            for label, value in NUMERIC_OPERATOR_LABELS:
+                self.operator.addItem(label, value)
+            self.operator.setCurrentIndex(self.operator.findData("gte"))
+            self.value_stack.setCurrentWidget(self.days)
 
     def rule(self) -> AgeRule | IntervalRule | CardStateRule | StudyStatusRule:
         kind = self.kind.currentData()
         if kind == "age_first_review":
-            return AgeRule(self.days.value(), "first_review")
+            return AgeRule(self.days.value(), "first_review", self.operator.currentData())
         if kind == "age_card_created":
-            return AgeRule(self.days.value(), "card_created")
+            return AgeRule(self.days.value(), "card_created", self.operator.currentData())
         if kind == "interval":
-            return IntervalRule(self.days.value())
+            return IntervalRule(self.days.value(), self.operator.currentData())
         if kind == "card_state":
-            return CardStateRule(self.choice.currentData())
-        return StudyStatusRule("never_studied")
+            return CardStateRule(self.states.states(), self.operator.currentData())
+        return StudyStatusRule(self.choice.currentData())
 
 
 class PolicyEditorDialog(QDialog):
@@ -356,6 +429,13 @@ class PolicyEditorDialog(QDialog):
         self.add_condition_button = QPushButton("Add Condition", self)
         match_row.addWidget(self.add_condition_button)
         conditions_group_layout.addLayout(match_row)
+        self.creation_age_warning = QLabel(
+            "⚠ Imported cards retain their original creation dates and may qualify "
+            "immediately. Review the matching cards before using Automatic mode.",
+            self,
+        )
+        self.creation_age_warning.setWordWrap(True)
+        conditions_group_layout.addWidget(self.creation_age_warning)
         self.conditions_layout = QVBoxLayout()
         conditions_group_layout.addLayout(self.conditions_layout)
         source_rule = policy.rule if policy else _best_effort_rule(raw.get("rule"))
@@ -365,10 +445,15 @@ class PolicyEditorDialog(QDialog):
             )
             rules = source_rule.rules
         else:
-            rules = (source_rule,) if source_rule is not None else (AgeRule(365, "first_review"),)
+            rules = (
+                (source_rule,)
+                if source_rule is not None
+                else (AgeRule(365, "first_review", "gte"),)
+            )
         for rule in rules:
             self._add_condition(rule)
         qconnect(self.add_condition_button.clicked, lambda: self._add_condition(None))
+        self._update_condition_warning()
         layout.addWidget(conditions_group)
 
         actions_group = QGroupBox("Actions", self)
@@ -428,7 +513,9 @@ class PolicyEditorDialog(QDialog):
         self._conditions.append(row)
         self.conditions_layout.addWidget(row)
         qconnect(row.remove_button.clicked, lambda: self._remove_condition(row))
+        qconnect(row.kind.currentIndexChanged, self._update_condition_warning)
         self._renumber_conditions()
+        self._update_condition_warning()
 
     def _remove_condition(self, row: RuleConditionRow) -> None:
         if len(self._conditions) == 1:
@@ -437,10 +524,17 @@ class PolicyEditorDialog(QDialog):
         self._conditions.remove(row)
         row.deleteLater()
         self._renumber_conditions()
+        self._update_condition_warning()
 
     def _renumber_conditions(self) -> None:
         for index, row in enumerate(self._conditions, start=1):
             row.number_label.setText(f"{index}.")
+
+    def _update_condition_warning(self, _value: object = None) -> None:
+        show_creation_warning = any(
+            row.kind.currentData() == "age_card_created" for row in self._conditions
+        )
+        self.creation_age_warning.setVisible(show_creation_warning)
 
     def _update_action_controls(self, _value: object = None) -> None:
         deleting = self.delete.isChecked()
@@ -557,29 +651,36 @@ def _best_effort_rule(raw: object) -> Rule | None:  # noqa: PLR0911
             for child in children
             if isinstance(
                 child,
-                (AgeRule, IntervalRule, NewRule, CardStateRule, StudyStatusRule),
+                (AgeRule, IntervalRule, CardStateRule, StudyStatusRule),
             )
         )
         if simple:
             return AllRule(simple) if kind == "all" else AnyRule(simple)
     days = raw.get("days")
-    if not isinstance(days, int) or isinstance(days, bool) or days < 1:
+    if not isinstance(days, int) or isinstance(days, bool) or days < 0:
         days = 365
     if kind == "age":
         source = raw.get("from")
         return AgeRule(
-            days, source if source in {"first_review", "card_created"} else "first_review"
+            days,
+            source if source in {"first_review", "card_created"} else "first_review",
+            raw.get("operator") if raw.get("operator") in NUMERIC_OPERATOR_SYMBOLS else "gte",
         )
     if kind == "interval":
-        return IntervalRule(days)
-    if kind == "new":
-        return NewRule()
+        operator = raw.get("operator")
+        return IntervalRule(days, operator if operator in NUMERIC_OPERATOR_SYMBOLS else "gte")
     if kind == "card_state":
-        state = raw.get("state")
-        if state in {"new", "learning", "review", "relearning"}:
-            return CardStateRule(state)
-    if kind == "study_status" and raw.get("status") == "never_studied":
-        return StudyStatusRule("never_studied")
+        raw_states = raw.get("states")
+        states = tuple(
+            value
+            for _label, value in CARD_STATES
+            if isinstance(raw_states, list) and value in raw_states
+        )
+        if states:
+            operator = raw.get("operator")
+            return CardStateRule(states, operator if operator in {"in", "not_in"} else "in")
+    if kind == "study_status" and raw.get("status") in {"never_studied", "ever_studied"}:
+        return StudyStatusRule(raw["status"])
     return None
 
 

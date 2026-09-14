@@ -15,7 +15,6 @@ from .models import (
     DeleteCardAction,
     IntervalRule,
     MoveAction,
-    NewRule,
     Policy,
     Rule,
     StudyStatusRule,
@@ -65,18 +64,38 @@ class PolicyReport:
     errors: tuple[str, ...] = ()
 
 
+def _matches_number(actual: int, operator: str, expected: int) -> bool:
+    if operator == "gt":
+        return actual > expected
+    if operator == "gte":
+        return actual >= expected
+    if operator == "eq":
+        return actual == expected
+    if operator == "lte":
+        return actual <= expected
+    if operator == "lt":
+        return actual < expected
+    raise ValueError(f"Unsupported numeric operator: {operator!r}")
+
+
 def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:  # noqa: PLR0911
     if isinstance(rule, AgeRule):
         timestamp = card.first_review_ms if rule.source == "first_review" else card.created_at_ms
-        return timestamp is not None and now_ms - timestamp >= rule.days * MILLIS_PER_DAY
+        if timestamp is None:
+            return False
+        elapsed_days = (now_ms - timestamp) // MILLIS_PER_DAY
+        return _matches_number(elapsed_days, rule.operator, rule.days)
     if isinstance(rule, IntervalRule):
-        return card.interval >= rule.days
-    if isinstance(rule, NewRule):
-        return card.card_type == 0
+        return _matches_number(card.interval, rule.operator, rule.days)
     if isinstance(rule, CardStateRule):
-        return card.card_type == {"new": 0, "learning": 1, "review": 2, "relearning": 3}[rule.state]
+        state = {0: "new", 1: "learning", 2: "review", 3: "relearning"}.get(card.card_type)
+        if state is None:
+            return False
+        included = state in rule.states
+        return included if rule.operator == "in" else not included
     if isinstance(rule, StudyStatusRule):
-        return card.first_review_ms is None
+        never_studied = card.first_review_ms is None
+        return never_studied if rule.status == "never_studied" else not never_studied
     if isinstance(rule, AllRule):
         return all(matches_rule(child, card, now_ms) for child in rule.rules)
     if isinstance(rule, AnyRule):

@@ -30,26 +30,24 @@ class Scope:
 class AgeRule:
     days: int
     source: Literal["first_review", "card_created"]
+    operator: NumericOperator
 
 
 @dataclass(frozen=True)
 class IntervalRule:
     days: int
-
-
-@dataclass(frozen=True)
-class NewRule:
-    pass
+    operator: NumericOperator
 
 
 @dataclass(frozen=True)
 class CardStateRule:
-    state: Literal["new", "learning", "review", "relearning"]
+    states: tuple[CardState, ...]
+    operator: MembershipOperator
 
 
 @dataclass(frozen=True)
 class StudyStatusRule:
-    status: Literal["never_studied"]
+    status: Literal["never_studied", "ever_studied"]
 
 
 @dataclass(frozen=True)
@@ -62,9 +60,7 @@ class AnyRule:
     rules: tuple[Rule, ...]
 
 
-Rule: TypeAlias = (
-    AgeRule | IntervalRule | NewRule | CardStateRule | StudyStatusRule | AllRule | AnyRule
-)
+Rule: TypeAlias = AgeRule | IntervalRule | CardStateRule | StudyStatusRule | AllRule | AnyRule
 
 
 @dataclass(frozen=True)
@@ -89,6 +85,9 @@ class DeleteCardAction:
 
 Action: TypeAlias = TagAction | SuspendAction | MoveAction | DeleteCardAction
 PolicyState: TypeAlias = Literal["disabled", "manual", "automatic"]
+NumericOperator: TypeAlias = Literal["gt", "gte", "eq", "lte", "lt"]
+MembershipOperator: TypeAlias = Literal["in", "not_in"]
+CardState: TypeAlias = Literal["new", "learning", "review", "relearning"]
 
 
 @dataclass(frozen=True)
@@ -146,38 +145,53 @@ def _bool(data: dict[str, Any], key: str, *, default: bool, path: str) -> bool:
     return value
 
 
-def _positive_int(data: dict[str, Any], key: str, path: str) -> int:
+def _nonnegative_int(data: dict[str, Any], key: str, path: str) -> int:
     value = data.get(key)
-    if not _is_int(value) or value < 1:
-        raise ValueError(f"{path}.{key}: must be a positive integer")
+    if not _is_int(value) or value < 0:
+        raise ValueError(f"{path}.{key}: must be a non-negative integer")
     return value
 
 
 def _parse_simple_rule(
     value: object, path: str
-) -> AgeRule | IntervalRule | NewRule | CardStateRule | StudyStatusRule:
+) -> AgeRule | IntervalRule | CardStateRule | StudyStatusRule:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     rule_type = value.get("type")
     if rule_type == "age":
-        days = _positive_int(value, "days", path)
+        days = _nonnegative_int(value, "days", path)
         source = value.get("from")
         if source not in {"first_review", "card_created"}:
             raise ValueError(f"{path}.from: must be 'first_review' or 'card_created'")
-        return AgeRule(days=days, source=source)
+        operator = value.get("operator")
+        if operator not in {"gt", "gte", "eq", "lte", "lt"}:
+            raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
+        return AgeRule(days=days, source=source, operator=operator)
     if rule_type == "interval":
-        return IntervalRule(days=_positive_int(value, "days", path))
-    if rule_type == "new":
-        return NewRule()
+        operator = value.get("operator")
+        if operator not in {"gt", "gte", "eq", "lte", "lt"}:
+            raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
+        return IntervalRule(days=_nonnegative_int(value, "days", path), operator=operator)
     if rule_type == "card_state":
-        state = value.get("state")
-        if state not in {"new", "learning", "review", "relearning"}:
-            raise ValueError(f"{path}.state: must be 'new', 'learning', 'review', or 'relearning'")
-        return CardStateRule(state)
+        states = value.get("states")
+        valid_states = {"new", "learning", "review", "relearning"}
+        if (
+            not isinstance(states, list)
+            or not states
+            or any(state not in valid_states for state in states)
+        ):
+            raise ValueError(
+                f"{path}.states: must be a non-empty array containing 'new', 'learning', "
+                "'review', or 'relearning'"
+            )
+        operator = value.get("operator")
+        if operator not in {"in", "not_in"}:
+            raise ValueError(f"{path}.operator: must be 'in' or 'not_in'")
+        return CardStateRule(tuple(dict.fromkeys(states)), operator)
     if rule_type == "study_status":
         status = value.get("status")
-        if status != "never_studied":
-            raise ValueError(f"{path}.status: must be 'never_studied'")
+        if status not in {"never_studied", "ever_studied"}:
+            raise ValueError(f"{path}.status: must be 'never_studied' or 'ever_studied'")
         return StudyStatusRule(status)
     if rule_type in {"all", "any"}:
         raise ValueError(f"{path}.type: compound rules cannot be nested")
@@ -321,13 +335,20 @@ def parse_config(value: object) -> ParsedConfig:
 
 def rule_to_dict(rule: Rule) -> dict[str, Any]:
     if isinstance(rule, AgeRule):
-        return {"type": "age", "days": rule.days, "from": rule.source}
+        return {
+            "type": "age",
+            "days": rule.days,
+            "from": rule.source,
+            "operator": rule.operator,
+        }
     if isinstance(rule, IntervalRule):
-        return {"type": "interval", "days": rule.days}
-    if isinstance(rule, NewRule):
-        return {"type": "new"}
+        return {"type": "interval", "days": rule.days, "operator": rule.operator}
     if isinstance(rule, CardStateRule):
-        return {"type": "card_state", "state": rule.state}
+        return {
+            "type": "card_state",
+            "states": list(rule.states),
+            "operator": rule.operator,
+        }
     if isinstance(rule, StudyStatusRule):
         return {"type": "study_status", "status": rule.status}
     if isinstance(rule, (AllRule, AnyRule)):

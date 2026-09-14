@@ -132,7 +132,7 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
             name="Mining",
             state="manual",
             scope=Scope(("Mining",)),
-            rule=AgeRule(1, "first_review"),
+            rule=AgeRule(1, "first_review", "gte"),
             actions=(TagAction("retired"), SuspendAction()),
         )
         report = evaluate_policy(collection, policy, now_ms=first_review + 86_400_000)
