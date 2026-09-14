@@ -174,7 +174,7 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
         operator = "exists" if rule.operator == "exists" else "does not exist"
         return f"Review history {operator}"
     if isinstance(rule, (AllRule, AnyRule)):
-        operator = " AND " if isinstance(rule, AllRule) else " OR "
+        operator = "\nAND " if isinstance(rule, AllRule) else "\nOR "
         description = operator.join(_describe_rule(child, nested=True) for child in rule.rules)
         return f"({description})" if nested else description
     message = f"unknown cleanup rule: {rule!r}"
@@ -187,6 +187,14 @@ def _configured_use(state: str) -> str:
     if state == "manual":
         return "On demand"
     return "Automatic"
+
+
+def _mode_tooltip(state: str) -> str:
+    if state == "disabled":
+        return "Off: not included by default and never run automatically."
+    if state == "manual":
+        return "On demand: included by default here but never run automatically."
+    return "Automatic: included by default here and run once per day."
 
 
 @dataclass(frozen=True)
@@ -428,8 +436,8 @@ class PolicyEditorDialog(QDialog):
         scope_layout.addSpacing(6)
         self.include_subdecks = QCheckBox("Include subdecks", self)
         self.include_subdecks.setToolTip(
-            "Include every child of each checked deck, even when those child decks are not "
-            "checked separately in the list."
+            "Include every child of each selected deck, even when those child decks are not "
+            "selected separately in the list."
         )
         self.include_suspended = QCheckBox("Include suspended cards", self)
         self.include_subdecks.setChecked(
@@ -845,7 +853,7 @@ class CardJanitorDialog(QDialog):
 
         layout = QVBoxLayout(self)
         intro = QHBoxLayout()
-        intro.addWidget(QLabel("Select the policies to include in this cleanup.", self))
+        intro.addWidget(QLabel("Choose which policies to run.", self))
         intro.addStretch()
         self.add_button = QPushButton("Add…", self)
         self.add_button.setToolTip("Create a cleanup policy.")
@@ -866,10 +874,15 @@ class CardJanitorDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-        self.table.verticalHeader().setVisible(False)
+        vertical_header = self.table.verticalHeader()
+        vertical_header.setVisible(False)
+        vertical_header.setMinimumSectionSize(self.fontMetrics().height() * 2 + 12)
         header = self.table.horizontalHeader()
-        for column in (self.COLUMN_RUN, self.COLUMN_STATE, self.COLUMN_COUNT):
+        for column in (self.COLUMN_RUN, self.COLUMN_STATE):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(self.COLUMN_COUNT, QHeaderView.ResizeMode.Interactive)
+        count_width = self.table.fontMetrics().horizontalAdvance("To clean") + 28
+        self.table.setColumnWidth(self.COLUMN_COUNT, count_width)
         for column in (
             self.COLUMN_POLICY,
             self.COLUMN_SCOPE,
@@ -879,6 +892,7 @@ class CardJanitorDialog(QDialog):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         qconnect(self.table.itemChanged, self._on_item_changed)
         qconnect(self.table.itemSelectionChanged, self._update_buttons)
+        qconnect(self.table.itemDoubleClicked, self._on_item_double_clicked)
         qconnect(self.add_button.clicked, self._add_policy)
         qconnect(self.edit_button.clicked, self._edit_policy)
         layout.addWidget(self.table)
@@ -902,12 +916,12 @@ class CardJanitorDialog(QDialog):
             "Browse",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
-        self.view_button.setToolTip("Open cards from the checked policies in Browse.")
+        self.view_button.setToolTip("Open cards from the selected policies in Browse.")
         self.run_button = buttons.addButton(
             "Clean Up",
             QDialogButtonBox.ButtonRole.AcceptRole,
         )
-        self.run_button.setToolTip("Apply the actions from the checked policies.")
+        self.run_button.setToolTip("Apply the actions from the selected policies.")
         if isinstance(self.run_button, QPushButton):
             self.run_button.setDefault(True)
         qconnect(self.settings_button.clicked, self._open_settings)
@@ -988,6 +1002,7 @@ class CardJanitorDialog(QDialog):
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(error_text)
             else:
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(f"Policy ID: {policy.id}")
+                self.table.item(row, self.COLUMN_STATE).setToolTip(_mode_tooltip(policy.state))
                 self.table.item(row, self.COLUMN_SCOPE).setToolTip(_scope_tooltip(policy.scope))
                 if dashboard_row.report and dashboard_row.report.errors:
                     error_text = "\n".join(dashboard_row.report.errors)
@@ -1018,6 +1033,10 @@ class CardJanitorDialog(QDialog):
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() == self.COLUMN_RUN:
             self._update_summary()
+
+    def _on_item_double_clicked(self, item: QTableWidgetItem) -> None:
+        if item.column() != self.COLUMN_RUN:
+            self._edit_policy()
 
     def _update_summary(self) -> None:
         reports = self.checked_reports()
@@ -1066,7 +1085,7 @@ class CardJanitorDialog(QDialog):
             )
         if errors:
             messages.append(
-                "A checked policy has an error. Uncheck it or fix the configuration before running."
+                "A selected policy has an error. Unselect it or fix the configuration before running."
             )
         self.summary.setText("\n".join(messages))
         self.view_button.setEnabled(bool(candidate_ids))
