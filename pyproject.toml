@@ -16,6 +16,7 @@ dependencies = []
 [dependency-groups]
 dev = [
     "aqt>=26.8",
+    "jsonschema>=4.26",
     "pytest>=9.0.3",
     "ruff>=0.15.16",
 ]

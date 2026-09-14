@@ -142,6 +142,19 @@ def test_automatic_notification_setting_must_be_boolean() -> None:
     assert parsed.config.notify_after_automatic_run
 
 
+def test_addon_settings_are_required() -> None:
+    for missing in (
+        "config_version",
+        "notify_after_automatic_run",
+        "debug_logging",
+        "policies",
+    ):
+        raw = policy_config()
+        del raw[missing]
+        parsed = parse_config(raw)
+        assert any(issue.path == missing for issue in parsed.issues)
+
+
 def test_policy_mode_is_validated() -> None:
     parsed = parse_config(policy_config(mode="notify"))
     assert str(parsed.issues[0]) == "policies[0].mode: must be 'on_demand' or 'automatic'"
@@ -163,6 +176,28 @@ def test_match_and_conditions_are_required() -> None:
         parsed = parse_config(raw)
         assert missing in str(parsed.issues[0])
         assert not parsed.config.policies
+
+
+def test_unknown_configuration_and_policy_fields_are_rejected() -> None:
+    raw = policy_config()
+    raw["unexpected"] = True
+    parsed = parse_config(raw)
+    assert str(parsed.issues[0]) == "unexpected: unknown setting"
+
+    raw = policy_config(unexpected=True)
+    parsed = parse_config(raw)
+    assert str(parsed.issues[0]) == "policies[0].unexpected: unknown field"
+    assert not parsed.config.policies
+
+
+def test_duplicate_scope_values_and_condition_states_are_rejected() -> None:
+    parsed = parse_config(policy_config(scope={"decks": ["Mining", "Mining"]}))
+    assert "duplicates" in str(parsed.issues[0])
+
+    parsed = parse_config(
+        policy_config(conditions=[{"type": "card_state", "states": ["new", "new"]}])
+    )
+    assert "states" in str(parsed.issues[0])
 
 
 def test_previous_rule_object_schema_is_rejected() -> None:

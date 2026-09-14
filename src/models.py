@@ -129,6 +129,13 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def _reject_unknown_keys(data: dict[str, Any], allowed: set[str], path: str) -> None:
+    unknown = sorted(set(data) - allowed, key=str)
+    if unknown:
+        key = unknown[0]
+        raise ValueError(f"{path}.{key}: unknown field")
+
+
 def _required_string(data: dict[str, Any], key: str, path: str) -> str:
     value = data.get(key)
     if not isinstance(value, str) or not value.strip():
@@ -157,6 +164,7 @@ def _parse_simple_rule(
         raise ValueError(f"{path}: must be an object")
     rule_type = value.get("type")
     if rule_type == "age":
+        _reject_unknown_keys(value, {"type", "days", "source", "operator"}, path)
         days = _nonnegative_int(value, "days", path)
         source = value.get("source")
         if source not in {"first_review", "card_created"}:
@@ -166,24 +174,28 @@ def _parse_simple_rule(
             raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
         return AgeRule(days=days, source=source, operator=operator)
     if rule_type == "interval":
+        _reject_unknown_keys(value, {"type", "days", "operator"}, path)
         operator = value.get("operator")
         if operator not in {"gt", "gte", "eq", "lte", "lt"}:
             raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
         return IntervalRule(days=_nonnegative_int(value, "days", path), operator=operator)
     if rule_type == "card_state":
+        _reject_unknown_keys(value, {"type", "states"}, path)
         states = value.get("states")
         valid_states = {"new", "learning", "review", "relearning"}
         if (
             not isinstance(states, list)
             or not states
             or any(state not in valid_states for state in states)
+            or len(states) != len(set(states))
         ):
             raise ValueError(
-                f"{path}.states: must be a non-empty array containing 'new', 'learning', "
-                "'review', or 'relearning'"
+                f"{path}.states: must be a non-empty array of unique values containing "
+                "'new', 'learning', 'review', or 'relearning'"
             )
-        return CardStateRule(tuple(dict.fromkeys(states)))
+        return CardStateRule(tuple(states))
     if rule_type == "review_history":
+        _reject_unknown_keys(value, {"type", "operator"}, path)
         operator = value.get("operator")
         if operator not in {"exists", "not_exists"}:
             raise ValueError(f"{path}.operator: must be 'exists' or 'not_exists'")
@@ -208,6 +220,7 @@ def _parse_action(value: object, path: str) -> tuple[Action, ...]:
         raise ValueError(f"{path}: must be an object")
     action_type = value.get("type")
     if action_type == "tag":
+        _reject_unknown_keys(value, {"type", "tags"}, path)
         tags = value.get("tags")
         if (
             not isinstance(tags, list)
@@ -215,12 +228,18 @@ def _parse_action(value: object, path: str) -> tuple[Action, ...]:
             or any(not isinstance(tag, str) or not tag.strip() for tag in tags)
         ):
             raise ValueError(f"{path}.tags: must be a non-empty array of strings")
-        return tuple(TagAction(tag) for tag in dict.fromkeys(tag.strip() for tag in tags))
+        normalized_tags = [tag.strip() for tag in tags]
+        if len(normalized_tags) != len(set(normalized_tags)):
+            raise ValueError(f"{path}.tags: must not contain duplicates")
+        return tuple(TagAction(tag) for tag in normalized_tags)
     if action_type == "suspend":
+        _reject_unknown_keys(value, {"type"}, path)
         return (SuspendAction(),)
     if action_type == "move":
+        _reject_unknown_keys(value, {"type", "deck"}, path)
         return (MoveAction(deck=_required_string(value, "deck", path)),)
     if action_type == "delete_card":
+        _reject_unknown_keys(value, {"type"}, path)
         return (DeleteCardAction(),)
     raise ValueError(f"{path}.type: unknown action type {action_type!r}")
 
@@ -228,12 +247,15 @@ def _parse_action(value: object, path: str) -> tuple[Action, ...]:
 def _parse_scope(value: object, path: str) -> Scope:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
+    _reject_unknown_keys(value, {"decks", "include_subdecks", "include_suspended"}, path)
     decks = value.get("decks")
     if not isinstance(decks, list) or not decks:
         raise ValueError(f"{path}.decks: must be a non-empty array")
     if any(not isinstance(deck, str) or not deck.strip() for deck in decks):
         raise ValueError(f"{path}.decks: every deck must be a non-empty string")
-    normalized = tuple(dict.fromkeys(deck.strip() for deck in decks))
+    normalized = tuple(deck.strip() for deck in decks)
+    if len(normalized) != len(set(normalized)):
+        raise ValueError(f"{path}.decks: must not contain duplicates")
     return Scope(
         decks=normalized,
         include_subdecks=_bool(value, "include_subdecks", default=True, path=path),
@@ -245,6 +267,11 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     path = f"policies[{index}]"
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
+    _reject_unknown_keys(
+        value,
+        {"id", "name", "mode", "scope", "match", "conditions", "actions"},
+        path,
+    )
     policy_id = _required_string(value, "id", path)
     name = _required_string(value, "name", path)
     mode = value.get("mode")
@@ -277,25 +304,41 @@ def parse_policy(value: object, index: int = 0) -> Policy:
 def parse_config(value: object) -> ParsedConfig:
     issues: list[ConfigIssue] = []
     if not isinstance(value, dict):
-        value = {}
+        value = {
+            "config_version": CONFIG_VERSION,
+            "notify_after_automatic_run": True,
+            "debug_logging": False,
+            "policies": [],
+        }
         issues.append(ConfigIssue("config", "must be an object; no policies were loaded"))
+    else:
+        allowed = {
+            "config_version",
+            "notify_after_automatic_run",
+            "debug_logging",
+            "policies",
+        }
+        issues.extend(
+            ConfigIssue(str(key), "unknown setting")
+            for key in sorted(set(value) - allowed, key=str)
+        )
 
-    version = value.get("config_version", CONFIG_VERSION)
+    version = value.get("config_version")
     if not _is_int(version) or version != CONFIG_VERSION:
         issues.append(ConfigIssue("config_version", f"must be {CONFIG_VERSION}"))
         version = CONFIG_VERSION
 
-    notify = value.get("notify_after_automatic_run", True)
+    notify = value.get("notify_after_automatic_run")
     if not isinstance(notify, bool):
         issues.append(ConfigIssue("notify_after_automatic_run", "must be a boolean"))
         notify = True
 
-    debug_logging = value.get("debug_logging", False)
+    debug_logging = value.get("debug_logging")
     if not isinstance(debug_logging, bool):
         issues.append(ConfigIssue("debug_logging", "must be a boolean"))
         debug_logging = False
 
-    raw_policies = value.get("policies", [])
+    raw_policies = value.get("policies")
     if not isinstance(raw_policies, list):
         issues.append(ConfigIssue("policies", "must be an array; no policies were loaded"))
         raw_policies = []

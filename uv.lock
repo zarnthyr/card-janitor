@@ -110,6 +110,7 @@ source = { editable = "." }
 [package.dev-dependencies]
 dev = [
     { name = "aqt" },
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "ruff" },
 ]
@@ -119,6 +120,7 @@ dev = [
 [package.metadata.requires-dev]
 dev = [
     { name = "aqt", specifier = ">=26.8" },
+    { name = "jsonschema", specifier = ">=4.26" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "ruff", specifier = ">=0.15.16" },
 ]
