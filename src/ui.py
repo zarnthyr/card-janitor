@@ -956,7 +956,6 @@ class CardJanitorDialog(QDialog):
             self.COLUMN_STATE,
             self.COLUMN_SCOPE,
             self.COLUMN_RULE,
-            self.COLUMN_ACTIONS,
         )
         widths = {column: header.sectionSize(column) for column in columns}
         for column in columns:
