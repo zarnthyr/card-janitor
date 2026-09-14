@@ -44,7 +44,46 @@ Each policy has three parts:
 * Conditions — age, interval, card state, or review history, combined with AND/OR
 * Actions — tag, suspend, move, or delete the qualifying cards
 
-First-review age is derived from genuine answer entries in Anki's review log. Cards without first-review history do not qualify for that condition. Card-creation age is available separately.
+### Conditions
+
+| Condition | What it matches | Important detail |
+| --- | --- | --- |
+| Age since first review | Whole days since the card's first genuine answer | Cards without review history do not match |
+| Age since creation | Whole days since the card's original creation timestamp | Imported cards may retain much older creation dates |
+| Current interval | The card's current scheduled interval in days | Supports greater than, at least, exactly, at most, and less than comparisons |
+| Card state | New, Learning, Review, or Relearning cards | One or more states can be selected |
+| Review history | Whether the card has ever received a genuine answer | History remains after a studied card is reset to New |
+
+A policy can require **all** conditions to match (AND), or allow **any** condition
+to match (OR). Nested combinations such as `A AND (B OR C)` are not currently
+supported.
+
+### Scope and actions
+
+Scope limits a policy to one or more decks. It can optionally include their
+subdecks and cards that are already suspended. Filtered-deck cards are excluded.
+
+Matching cards can be:
+
+* tagged — tags belong to notes, so sibling cards share them
+* suspended
+* moved to another existing deck
+* deleted — deletion must be the policy's only action
+
+Compatible actions from overlapping policies are combined. Cards are skipped
+and reported when policies specify conflicting move destinations or combine
+deletion with another action.
+
+### Example policies
+
+Card Janitor can, for example:
+
+* delete cards that remain unstudied 30 days after their original creation
+* suspend cards one year after their first review
+* move mature cards to a retirement deck once their interval reaches 365 days
+
+Use **Browse** in the policy manager to inspect the cards a policy currently
+matches before running it.
 
 > [!WARNING]
 > Card-creation age is derived from the timestamp encoded in Anki's card ID. Imported
