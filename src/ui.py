@@ -196,7 +196,7 @@ class DashboardRow:
 
 
 def _warning_panel(text: str, parent: QWidget, *, destructive: bool = False) -> QLabel:
-    panel = QLabel(text, parent)
+    panel = QLabel(f"⚠️ {text}", parent)
     panel.setWordWrap(True)
     if destructive:
         background = "rgba(210, 45, 45, 42)"
@@ -250,7 +250,9 @@ class CardStatePicker(QPushButton):
 
     def _update_text(self) -> None:
         selected = [label for label, value in CARD_STATES if value in self._states]
-        self.setText(", ".join(selected) if selected else "Choose states")
+        summary = ", ".join(selected) if selected else "Choose states"
+        self.setText(summary)
+        self.setToolTip(summary)
 
     def _state_toggled(self, state: str, _checked: bool) -> None:
         selected = tuple(
@@ -278,27 +280,27 @@ class RuleConditionRow(QWidget):
         self.kind.addItem("Current interval", "interval")
         self.kind.addItem("Card state", "card_state")
         self.kind.addItem("Review history", "review_history")
-        self.kind.setMinimumWidth(190)
+        self.kind.setMinimumWidth(165)
         self.operator = QComboBox(self)
         self.fixed_operator = QLabel("is", self)
         self.operator_stack = QStackedWidget(self)
-        self.operator_stack.setMinimumWidth(125)
+        self.operator_stack.setMinimumWidth(115)
         self.operator_stack.addWidget(self.operator)
         self.operator_stack.addWidget(self.fixed_operator)
         self.days = QSpinBox(self)
         self.days.setRange(0, 100000)
         self.days.setSuffix(" days")
-        self.days.setMinimumWidth(220)
+        self.days.setMinimumWidth(140)
         self.states = CardStatePicker(self)
-        self.states.setMinimumWidth(220)
+        self.states.setMinimumWidth(140)
         self.value_stack = QStackedWidget(self)
-        self.value_stack.setMinimumWidth(220)
+        self.value_stack.setMinimumWidth(140)
         self.value_stack.addWidget(self.days)
         self.value_stack.addWidget(self.states)
         self.no_value = QWidget(self)
         self.value_stack.addWidget(self.no_value)
         self.remove_button = QPushButton("Remove", self)
-        self.remove_button.setMinimumWidth(80)
+        self.remove_button.setMinimumWidth(75)
         for widget in (
             self.number_label,
             self.kind,
@@ -398,11 +400,10 @@ class PolicyEditorDialog(QDialog):
         index = self.state.findData(state)
         self.state.setCurrentIndex(index if index >= 0 else self.state.findData("manual"))
         self.automatic_warning = _warning_panel(
-            "<b>Automatic policies run without confirmation.</b><br>"
-            "Use On demand first if you want to review the matching cards.",
+            "This policy runs once per Anki day <b>without confirmation</b>.",
             self,
         )
-        form.addRow(self.automatic_warning)
+        form.insertRow(0, self.automatic_warning)
         form.addRow("Mode", self.state)
         layout.addWidget(general_group)
 
@@ -452,13 +453,13 @@ class PolicyEditorDialog(QDialog):
         match_row.addStretch()
         self.add_condition_button = QPushButton("Add Condition", self)
         match_row.addWidget(self.add_condition_button)
-        conditions_group_layout.addLayout(match_row)
         self.creation_age_warning = _warning_panel(
-            "⚠ Imported cards retain their original creation dates and may qualify "
-            "immediately. Review the matching cards before using Automatic mode.",
+            "Imported cards retain their <b>original creation dates</b> and "
+            "<b>may qualify immediately</b>.",
             self,
         )
         conditions_group_layout.addWidget(self.creation_age_warning)
+        conditions_group_layout.addLayout(match_row)
         self.conditions_scroll = QScrollArea(self)
         self.conditions_scroll.setWidgetResizable(True)
         self.conditions_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -467,7 +468,7 @@ class PolicyEditorDialog(QDialog):
         self.conditions_scroll.setMaximumHeight(230)
         self.conditions_container = QWidget(self.conditions_scroll)
         self.conditions_layout = QVBoxLayout()
-        self.conditions_layout.setContentsMargins(0, 0, 0, 0)
+        self.conditions_layout.setContentsMargins(8, 8, 8, 8)
         self.conditions_container.setLayout(self.conditions_layout)
         self.conditions_scroll.setWidget(self.conditions_container)
         conditions_group_layout.addWidget(self.conditions_scroll)
@@ -506,12 +507,12 @@ class PolicyEditorDialog(QDialog):
         self.move_deck.addItems(deck_names)
         self.delete = QCheckBox("Delete cards", self)
         self.delete_warning = _warning_panel(
-            "<b>Matching cards will be DELETED from your collection.</b><br>"
-            "Review them carefully and consider backing up your collection before "
-            "running this policy.",
+            "Matching cards will be <b>DELETED</b> from your collection. "
+            "Consider backing up your collection first.",
             self,
             destructive=True,
         )
+        actions_group_layout.addWidget(self.delete_warning)
         tags = [action.tag for action in source_actions if isinstance(action, TagAction)]
         if tags:
             self.tag_enabled.setChecked(True)
@@ -531,8 +532,7 @@ class PolicyEditorDialog(QDialog):
         actions_grid.addWidget(self.suspend, 1, 0)
         actions_grid.addWidget(self.move_enabled, 2, 0)
         actions_grid.addWidget(self.move_deck, 2, 1)
-        actions_grid.addWidget(self.delete_warning, 3, 0, 1, 2)
-        actions_grid.addWidget(self.delete, 4, 0)
+        actions_grid.addWidget(self.delete, 3, 0)
         actions_group_layout.addLayout(actions_grid)
         layout.addWidget(actions_group)
         qconnect(self.delete.toggled, self._update_action_controls)
@@ -578,6 +578,8 @@ class PolicyEditorDialog(QDialog):
         spacing = max(0, self.conditions_layout.spacing())
         height = sum(max(1, row.sizeHint().height()) for row in self._conditions)
         height += spacing * max(0, len(self._conditions) - 1)
+        margins = self.conditions_layout.contentsMargins()
+        height += margins.top() + margins.bottom()
         self.conditions_container.setMinimumHeight(height)
 
     def _update_condition_warning(self, _value: object = None) -> None:
