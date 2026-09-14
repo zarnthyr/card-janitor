@@ -4,6 +4,8 @@ Configurable policy-based cleanup for Anki cards.
 
 Applies cleanup policies according to deck scope, age, interval, card state, or review history, either on demand or automatically once per day.
 
+![Card Janitor policy manager](./assets/banner.png)
+
 > [!WARNING]
 > Card Janitor can make destructive collection changes, including permanently
 > deleting cards. Back up your collection before use. Begin with **On demand**
