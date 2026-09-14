@@ -124,7 +124,7 @@ CONDITION_HELP = {
 
 MENU_ATTR = "_card_janitor_action"
 CONFIG_EDITOR_ATTR = "_card_janitor_config_editor"
-MANUAL_DIALOG_ATTR = "_card_janitor_dialog"
+ON_DEMAND_DIALOG_ATTR = "_card_janitor_dialog"
 LAST_AUTOMATIC_DAY_PROFILE_KEY = "card_janitor_last_automatic_day"
 
 
@@ -212,13 +212,13 @@ def _describe_rule(rule: Rule, *, nested: bool = False) -> str:
 
 
 def _configured_use(state: str) -> str:
-    if state == "manual":
+    if state == "on_demand":
         return "On demand"
     return "Automatic"
 
 
 def _mode_tooltip(state: str) -> str:
-    if state == "manual":
+    if state == "on_demand":
         return "On demand: runs only when you click Clean Up in Card Janitor."
     return "Automatic: runs once per day without confirmation and can also be run on demand."
 
@@ -444,11 +444,11 @@ class PolicyEditorDialog(QDialog):
         self.name = QLineEdit(policy.name if policy else _raw_string(raw, "name"), self)
         form.addRow("Name", self.name)
         self.state = QComboBox(self)
-        self.state.addItem("On demand", "manual")
+        self.state.addItem("On demand", "on_demand")
         self.state.addItem("Automatic", "automatic")
-        state = policy.state if policy else raw.get("state", "manual")
+        state = policy.state if policy else raw.get("state", "on_demand")
         index = self.state.findData(state)
-        self.state.setCurrentIndex(index if index >= 0 else self.state.findData("manual"))
+        self.state.setCurrentIndex(index if index >= 0 else self.state.findData("on_demand"))
         self.automatic_warning = _warning_panel(
             "This policy runs once per day <b>without confirmation</b>.",
             self,
@@ -1308,7 +1308,7 @@ class CardJanitorDialog(QDialog):
             _open_cards_in_browser(card_ids)
 
     def _refresh(self) -> None:
-        refresh_manual_dialog(self)
+        refresh_on_demand_dialog(self)
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self._parsed.config, self)
@@ -1323,7 +1323,7 @@ class CardJanitorDialog(QDialog):
             return
         self._running = True
         self.run_button.setEnabled(False)
-        execute_manual_reports(self, self.checked_reports())
+        execute_on_demand_reports(self, self.checked_reports())
 
     def _selected_record(self) -> PolicyRecord | None:
         row = self.table.currentRow()
@@ -1404,24 +1404,24 @@ def _applied_message(count: int) -> str:
 def _open_cards_in_browser(card_ids: set[int]) -> None:
     node = SearchNode(parsable_text="cid:" + ",".join(str(card_id) for card_id in sorted(card_ids)))
     browser = aqt.dialogs.open("Browser", mw, search=(node,))
-    dialog = getattr(mw, MANUAL_DIALOG_ATTR, None)
+    dialog = getattr(mw, ON_DEMAND_DIALOG_ATTR, None)
     if isinstance(dialog, CardJanitorDialog):
         qconnect(browser.destroyed, lambda _object=None: _restore_dashboard(dialog))
 
 
 def _restore_dashboard(dialog: CardJanitorDialog) -> None:
-    if getattr(mw, MANUAL_DIALOG_ATTR, None) is dialog and dialog.isVisible():
+    if getattr(mw, ON_DEMAND_DIALOG_ATTR, None) is dialog and dialog.isVisible():
         dialog.raise_()
         dialog.activateWindow()
 
 
-def _show_manual_dialog(parsed: ParsedConfig, reports: tuple[PolicyReport, ...]) -> None:
+def _show_on_demand_dialog(parsed: ParsedConfig, reports: tuple[PolicyReport, ...]) -> None:
     dialog = CardJanitorDialog(parsed, reports)
-    setattr(mw, MANUAL_DIALOG_ATTR, dialog)
+    setattr(mw, ON_DEMAND_DIALOG_ATTR, dialog)
 
     def clear_reference(_result: int) -> None:
-        if getattr(mw, MANUAL_DIALOG_ATTR, None) is dialog:
-            setattr(mw, MANUAL_DIALOG_ATTR, None)
+        if getattr(mw, ON_DEMAND_DIALOG_ATTR, None) is dialog:
+            setattr(mw, ON_DEMAND_DIALOG_ATTR, None)
 
     qconnect(dialog.finished, clear_reference)
     dialog.show()
@@ -1430,7 +1430,7 @@ def _show_manual_dialog(parsed: ParsedConfig, reports: tuple[PolicyReport, ...])
 
 
 def open_card_janitor() -> None:
-    existing = getattr(mw, MANUAL_DIALOG_ATTR, None)
+    existing = getattr(mw, ON_DEMAND_DIALOG_ATTR, None)
     if isinstance(existing, CardJanitorDialog) and existing.isVisible():
         existing.raise_()
         existing.activateWindow()
@@ -1441,7 +1441,7 @@ def open_card_janitor() -> None:
 
     def on_success(reports: tuple[PolicyReport, ...]) -> None:
         if mw.col is collection:
-            _show_manual_dialog(parsed, reports)
+            _show_on_demand_dialog(parsed, reports)
 
     QueryOp(
         parent=mw,
@@ -1450,14 +1450,14 @@ def open_card_janitor() -> None:
     ).run_in_background()
 
 
-def refresh_manual_dialog(dialog: CardJanitorDialog) -> None:
+def refresh_on_demand_dialog(dialog: CardJanitorDialog) -> None:
     parsed = _load_configured()
     checked = dialog.checked_keys()
     known = dialog.row_keys()
     policies = parsed.config.policies
 
     def on_success(reports: tuple[PolicyReport, ...]) -> None:
-        if getattr(mw, MANUAL_DIALOG_ATTR, None) is dialog and dialog.isVisible():
+        if getattr(mw, ON_DEMAND_DIALOG_ATTR, None) is dialog and dialog.isVisible():
             dialog.set_dashboard(parsed, reports, checked, known)
 
     QueryOp(
@@ -1468,13 +1468,13 @@ def refresh_manual_dialog(dialog: CardJanitorDialog) -> None:
 
 
 def close_card_janitor() -> None:
-    dialog = getattr(mw, MANUAL_DIALOG_ATTR, None)
+    dialog = getattr(mw, ON_DEMAND_DIALOG_ATTR, None)
     if isinstance(dialog, CardJanitorDialog):
         dialog.close()
-    setattr(mw, MANUAL_DIALOG_ATTR, None)
+    setattr(mw, ON_DEMAND_DIALOG_ATTR, None)
 
 
-def execute_manual_reports(
+def execute_on_demand_reports(
     dialog: CardJanitorDialog,
     reports: tuple[PolicyReport, ...],
 ) -> None:
@@ -1500,11 +1500,11 @@ def execute_manual_reports(
             )
             for report in fresh_reports
         )
-        return execute_plan(col, build_execution_plan(filtered), "Card Janitor: Manual Run")
+        return execute_plan(col, build_execution_plan(filtered), "Card Janitor: On-Demand Run")
 
     def on_applied(result: ExecutionResult) -> None:
         debug(
-            "manual run complete",
+            "on-demand run complete",
             affected_cards=result.affected_cards,
             conflicts=result.conflicts,
         )

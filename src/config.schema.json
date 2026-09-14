@@ -36,8 +36,8 @@
         "id": {"type": "string", "minLength": 1},
         "name": {"type": "string", "minLength": 1},
         "state": {
-          "enum": ["manual", "automatic"],
-          "description": "manual is On demand; automatic also runs once per day without confirmation"
+          "enum": ["on_demand", "automatic"],
+          "description": "on_demand runs only when requested in Card Janitor; automatic also runs once per day without confirmation"
         },
         "scope": {
           "$ref": "#/$defs/scope",

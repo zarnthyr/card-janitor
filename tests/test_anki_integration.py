@@ -44,9 +44,9 @@ def test_dashboard_uses_current_query_op_constructor(
 
     created: list[FakeQueryOp] = []
 
-    manual = SimpleNamespace(state="manual")
+    on_demand = SimpleNamespace(state="on_demand")
     automatic = SimpleNamespace(state="automatic")
-    parsed = SimpleNamespace(config=SimpleNamespace(policies=(manual, automatic)))
+    parsed = SimpleNamespace(config=SimpleNamespace(policies=(on_demand, automatic)))
     evaluated: list[tuple[object, tuple[object, ...]]] = []
     monkeypatch.setattr(ui, "mw", SimpleNamespace(col="current collection"))
     monkeypatch.setattr(ui, "_load_configured", lambda: parsed)
@@ -64,7 +64,7 @@ def test_dashboard_uses_current_query_op_constructor(
     assert callable(created[0].success)
     assert created[0].started
     created[0].op("collection")
-    assert evaluated == [("collection", (manual, automatic))]
+    assert evaluated == [("collection", (on_demand, automatic))]
 
 
 @pytest.mark.parametrize(
@@ -136,7 +136,7 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         policy = Policy(
             id="mining",
             name="Mining",
-            state="manual",
+            state="on_demand",
             scope=Scope(("Mining",)),
             rule=AgeRule(1, "first_review", "gte"),
             actions=(TagAction("retired"), SuspendAction()),
@@ -172,7 +172,7 @@ def test_delete_action_can_be_undone(tmp_path: Path) -> None:
         policy = Policy(
             id="delete",
             name="Delete",
-            state="manual",
+            state="on_demand",
             scope=Scope(("Cleanup",)),
             rule=AgeRule(0, "card_created", "gte"),
             actions=(DeleteCardAction(),),

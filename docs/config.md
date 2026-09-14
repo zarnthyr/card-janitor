@@ -4,10 +4,10 @@ Add and edit policies in the Card Janitor window. Use **Settings** to configure
 notifications and debug logging. Choose **Edit JSON** to edit the underlying
 configuration directly.
 
-Invalid configuration fails closed: no on-demand or automatic cleanup runs
-while a validation error is present. Invalid policies remain visible in Card
-Janitor and can be repaired with **Edit**. Invalid add-on-wide settings can be
-repaired through **Settings** or **Edit JSON**.
+If any setting or policy is invalid, Card Janitor will not run cleanup until
+the problem is fixed. Invalid policies remain visible in Card Janitor and can
+be repaired with **Edit**. Invalid add-on-wide settings can be repaired through
+**Settings** or **Edit JSON**.
 
 Deck names are resolved when a policy is evaluated. A missing or filtered move
 destination is an error.
@@ -31,29 +31,29 @@ cannot be undone with Anki's Undo command.
       "debug_logging": false,
       "policies": [
         {
-          "id": "old-studied-cards",
-          "name": "Old studied cards",
-          "state": "manual",
+          "id": "mature-cards",
+          "name": "Mature cards",
+          "state": "on_demand",
           "scope": {
             "decks": ["My Deck"],
             "include_subdecks": true,
             "include_suspended": false
           },
           "rule": {
-            "type": "age",
+            "type": "interval",
             "days": 365,
-            "from": "first_review",
             "operator": "gte"
           },
           "actions": [
-            {"type": "tag", "tag": "cleaned_up"},
-            {"type": "suspend"}
+            {"type": "tag", "tag": "retired"},
+            {"type": "suspend"},
+            {"type": "move", "deck": "Retired"}
           ]
         }
       ]
     }
 
-In JSON, `state: "manual"` is the **On demand** mode shown in the policy editor.
+In JSON, `state: "on_demand"` is the **On demand** mode shown in the policy editor.
 Keep this mode while testing. Card Janitor evaluates every configured policy
 and shows its scope, conditions, actions, and the number of cards it would
 clean up.
@@ -68,7 +68,7 @@ that day's automatic cleanup.
 
 Policy modes are:
 
-- `manual` — runs only when you start cleanup from Card Janitor
+- `on_demand` — runs only when you start cleanup from Card Janitor
 - `automatic` — runs once per day without confirmation and can also be run on demand
 
 Automatic cleanup runs when a profile opens if it has not yet run that day. It
@@ -100,7 +100,7 @@ in the card ID.
 > first evaluation. Anki does not expose a reliable per-card local-import timestamp.
 
 Use creation-age conditions only for cards whose provenance you understand. Keep the
-policy in On demand (`manual`) mode and inspect its matching cards before changing it to
+policy in On demand (`on_demand`) mode and inspect its matching cards before changing it to
 `automatic`. Card Janitor does not attempt to rewrite card IDs. If you use another
 add-on to normalize creation dates, back up the collection first and verify that the
 tool safely updates all related references.
@@ -163,7 +163,7 @@ to greater than, at least, exactly, at most, and less than.
 - `{"type": "move", "deck": "Retired"}` moves the card to an existing normal deck.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
 
-`delete_card` must be the policy's only action. It can use `state: "automatic"`, but automatic deletion runs without confirmation. On-demand deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the example uses `state: "manual"` with tag and suspend actions.
+`delete_card` must be the policy's only action. It can use `state: "automatic"`, but automatic deletion runs without confirmation. On-demand deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the example uses `state: "on_demand"` with reversible tag, suspend, and move actions.
 
 ## Scope behavior
 
@@ -172,14 +172,3 @@ to greater than, at least, exactly, at most, and less than.
 ## Overlapping policies
 
 Compatible actions are merged and deduplicated during on-demand and automatic execution. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
-
-## Keyboard navigation
-
-In Card Janitor, use the arrow keys to highlight a policy, Space to toggle its
-checkbox, Enter to edit it, and Delete or Backspace to remove it after
-confirmation. Tab and Shift+Tab move between the table and buttons. Cleanup has
-no global shortcut and requires the **Clean Up** button.
-
-The policy editor initially focuses the name field. Tab and Shift+Tab move
-through its controls in visual order; standard Space, arrow-key, and Enter
-behavior applies to checkboxes, lists, selectors, and dialog buttons.

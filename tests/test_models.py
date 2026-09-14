@@ -17,7 +17,7 @@ def policy_config(**overrides: object) -> dict:
     policy = {
         "id": "mining",
         "name": "Mining",
-        "state": "manual",
+        "state": "on_demand",
         "scope": {"decks": ["Mining"], "include_subdecks": True},
         "rule": {
             "type": "age",
@@ -136,7 +136,7 @@ def test_automatic_notification_setting_must_be_boolean() -> None:
 
 def test_policy_state_is_validated() -> None:
     parsed = parse_config(policy_config(state="notify"))
-    assert str(parsed.issues[0]) == "policies[0].state: must be 'manual' or 'automatic'"
+    assert str(parsed.issues[0]) == "policies[0].state: must be 'on_demand' or 'automatic'"
     assert not parsed.config.policies
 
 
@@ -144,7 +144,7 @@ def test_policy_state_is_required() -> None:
     raw = policy_config()
     del raw["policies"][0]["state"]
     parsed = parse_config(raw)
-    assert str(parsed.issues[0]) == "policies[0].state: must be 'manual' or 'automatic'"
+    assert str(parsed.issues[0]) == "policies[0].state: must be 'on_demand' or 'automatic'"
     assert not parsed.config.policies
 
 
