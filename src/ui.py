@@ -412,7 +412,7 @@ class PolicyEditorDialog(QDialog):
 
         scope_group = QGroupBox("Scope", self)
         scope_layout = QVBoxLayout(scope_group)
-        scope_layout.addWidget(QLabel("Select one or more decks.", self))
+        scope_layout.addWidget(QLabel("Select one or more decks", self))
         self.decks = QListWidget(self)
         self.decks.setAlternatingRowColors(True)
         self.decks.setMinimumHeight(130)
@@ -555,7 +555,7 @@ class PolicyEditorDialog(QDialog):
     def _add_condition(self, rule: Rule | None) -> None:
         row = RuleConditionRow(rule, self)
         self._conditions.append(row)
-        self.conditions_layout.addWidget(row)
+        self.conditions_layout.addWidget(row, alignment=Qt.AlignmentFlag.AlignTop)
         qconnect(row.remove_button.clicked, lambda: self._remove_condition(row))
         qconnect(row.kind.currentIndexChanged, self._update_condition_warning)
         self._renumber_conditions()
