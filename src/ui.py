@@ -937,9 +937,15 @@ class SettingsDialog(QDialog):
                 debug_logging=self.debug_logging.isChecked(),
             )
         except ConfigWriteError as exc:
+            error("failed to save settings", reason=str(exc))
             showWarning(str(exc), parent=self)
             return
         configure_logging(debug_logging=self.debug_logging.isChecked())
+        debug(
+            "settings saved",
+            notify_after_automatic_run=self.notify.isChecked(),
+            debug_logging=self.debug_logging.isChecked(),
+        )
         self.accept()
 
 
@@ -1353,8 +1359,10 @@ class CardJanitorDialog(QDialog):
         try:
             remove_policy(index=record.index)
         except ConfigWriteError as exc:
+            error("failed to remove policy", policy_name=name, reason=str(exc))
             showWarning(str(exc), parent=self)
             return
+        debug("policy removed", policy_name=name)
         self._refresh()
 
     def _open_editor(self, record: PolicyRecord | None) -> None:
@@ -1369,9 +1377,19 @@ class CardJanitorDialog(QDialog):
             return
         try:
             save_policy(editor.result_policy, index=record.index if record is not None else None)
-        except ValueError as exc:
+        except ConfigWriteError as exc:
+            error(
+                "failed to save policy",
+                policy_id=editor.result_policy.id,
+                reason=str(exc),
+            )
             showWarning(str(exc), parent=self)
             return
+        debug(
+            "policy saved",
+            policy_id=editor.result_policy.id,
+            operation="updated" if record is not None else "added",
+        )
         self._refresh()
 
 
@@ -1505,6 +1523,7 @@ def execute_manual_reports(
 def open_json_settings(*, parent: QWidget, on_close: Callable[[], None] | None = None) -> None:
     config = load_raw_config()
     if not isinstance(config, dict):
+        error("cannot open JSON settings", reason="configuration is not an object")
         showWarning("The add-on configuration is not a JSON object.", parent=parent)
         return
     editor_parent = QDialog(parent)
@@ -1649,6 +1668,7 @@ def install_menu() -> None:
             mw.form.menuTools.removeAction(existing)
 
     action = QAction("Card Janitor…", mw)
+    action.setStatusTip("Manage cleanup policies and run Card Janitor.")
     qconnect(action.triggered, open_card_janitor)
     mw.form.menuTools.addAction(action)
     setattr(mw, MENU_ATTR, action)
