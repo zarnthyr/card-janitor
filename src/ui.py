@@ -196,7 +196,7 @@ class DashboardRow:
 
 
 def _warning_panel(text: str, parent: QWidget, *, destructive: bool = False) -> QLabel:
-    panel = QLabel(f"⚠️ {text}", parent)
+    panel = QLabel(f"⚠ {text}", parent)
     panel.setWordWrap(True)
     if destructive:
         background = "rgba(210, 45, 45, 42)"
@@ -400,7 +400,7 @@ class PolicyEditorDialog(QDialog):
         index = self.state.findData(state)
         self.state.setCurrentIndex(index if index >= 0 else self.state.findData("manual"))
         self.automatic_warning = _warning_panel(
-            "This policy runs once per Anki day <b>without confirmation</b>.",
+            "This policy runs once per day <b>without confirmation</b>.",
             self,
         )
         form.insertRow(0, self.automatic_warning)
@@ -422,6 +422,7 @@ class PolicyEditorDialog(QDialog):
                 Qt.CheckState.Checked if deck_name in deck_values else Qt.CheckState.Unchecked
             )
         scope_layout.addWidget(self.decks)
+        scope_layout.addSpacing(6)
         self.include_subdecks = QCheckBox("Include subdecks", self)
         self.include_subdecks.setToolTip(
             "Include every child of each checked deck, even when those child decks are not "
@@ -464,7 +465,7 @@ class PolicyEditorDialog(QDialog):
         self.conditions_scroll.setWidgetResizable(True)
         self.conditions_scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.conditions_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.conditions_scroll.setMinimumHeight(70)
+        self.conditions_scroll.setMinimumHeight(100)
         self.conditions_scroll.setMaximumHeight(230)
         self.conditions_container = QWidget(self.conditions_scroll)
         self.conditions_layout = QVBoxLayout()
@@ -507,8 +508,7 @@ class PolicyEditorDialog(QDialog):
         self.move_deck.addItems(deck_names)
         self.delete = QCheckBox("Delete cards", self)
         self.delete_warning = _warning_panel(
-            "Matching cards will be <b>DELETED</b> from your collection. "
-            "Consider backing up your collection first.",
+            "Matching cards will be <b>DELETED</b> from your collection.",
             self,
             destructive=True,
         )
@@ -576,11 +576,15 @@ class PolicyEditorDialog(QDialog):
 
     def _update_conditions_extent(self) -> None:
         spacing = max(0, self.conditions_layout.spacing())
-        height = sum(max(1, row.sizeHint().height()) for row in self._conditions)
+        row_heights = [max(1, row.sizeHint().height()) for row in self._conditions]
+        height = sum(row_heights)
         height += spacing * max(0, len(self._conditions) - 1)
         margins = self.conditions_layout.contentsMargins()
         height += margins.top() + margins.bottom()
         self.conditions_container.setMinimumHeight(height)
+        two_rows_height = max(row_heights, default=40) * 2 + spacing
+        two_rows_height += margins.top() + margins.bottom()
+        self.conditions_scroll.setMinimumHeight(two_rows_height)
 
     def _update_condition_warning(self, _value: object = None) -> None:
         show_creation_warning = any(
