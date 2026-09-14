@@ -409,7 +409,7 @@ class PolicyEditorDialog(QDialog):
 
         scope_group = QGroupBox("Scope", self)
         scope_layout = QVBoxLayout(scope_group)
-        scope_layout.addWidget(QLabel("Apply this policy to one or more decks:", self))
+        scope_layout.addWidget(QLabel("Select one or more decks.", self))
         self.decks = QListWidget(self)
         self.decks.setAlternatingRowColors(True)
         self.decks.setMinimumHeight(130)
@@ -455,7 +455,7 @@ class PolicyEditorDialog(QDialog):
         self.add_condition_button = QPushButton("Add Condition", self)
         match_row.addWidget(self.add_condition_button)
         self.creation_age_warning = _warning_panel(
-            "Imported cards retain their <b>original creation dates</b> and "
+            "Imported cards retain their original creation dates and "
             "<b>may qualify immediately</b>.",
             self,
         )
