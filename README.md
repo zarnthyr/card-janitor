@@ -46,6 +46,11 @@ Each policy has three parts:
 * Conditions — age, interval, card state, or review history, combined with AND/OR
 * Actions — tag, suspend, move, or delete the qualifying cards
 
+### Scope
+
+Scope limits a policy to one or more decks. It can optionally include their
+subdecks and cards that are already suspended. Filtered-deck cards are excluded.
+
 ### Conditions
 
 > [!WARNING]
@@ -68,10 +73,7 @@ A policy can require **all** conditions to match (AND), or allow **any** conditi
 to match (OR). Nested combinations such as `A AND (B OR C)` are not currently
 supported.
 
-### Scope and actions
-
-Scope limits a policy to one or more decks. It can optionally include their
-subdecks and cards that are already suspended. Filtered-deck cards are excluded.
+### Actions
 
 Matching cards can be:
 
