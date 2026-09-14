@@ -915,7 +915,35 @@ class CardJanitorDialog(QDialog):
         qconnect(self.add_button.clicked, self._add_policy)
         qconnect(self.edit_button.clicked, self._edit_policy)
         qconnect(self.remove_button.clicked, self._remove_policy)
-        layout.addWidget(self.table)
+
+        self.empty_page = QWidget(self)
+        empty_layout = QVBoxLayout(self.empty_page)
+        empty_layout.setContentsMargins(24, 24, 24, 24)
+        empty_layout.addStretch()
+        empty_title = QLabel("<b>No policies yet</b>", self.empty_page)
+        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(empty_title)
+        empty_description = QLabel(
+            "Add a policy to define which cards Card Janitor should clean up.",
+            self.empty_page,
+        )
+        empty_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_description.setWordWrap(True)
+        empty_layout.addWidget(empty_description)
+        empty_layout.addSpacing(8)
+        self.empty_add_button = QPushButton("Add Policy…", self.empty_page)
+        self.empty_add_button.setToolTip("Create a cleanup policy.")
+        qconnect(self.empty_add_button.clicked, self._add_policy)
+        empty_layout.addWidget(
+            self.empty_add_button,
+            alignment=Qt.AlignmentFlag.AlignHCenter,
+        )
+        empty_layout.addStretch()
+
+        self.content_stack = QStackedWidget(self)
+        self.content_stack.addWidget(self.table)
+        self.content_stack.addWidget(self.empty_page)
+        layout.addWidget(self.content_stack)
 
         self.summary = QLabel(self)
         self.summary.setWordWrap(True)
@@ -1047,6 +1075,7 @@ class CardJanitorDialog(QDialog):
         QTimer.singleShot(0, self.table.resizeRowsToContents)
         if self._rows:
             self.table.selectRow(0)
+        self.content_stack.setCurrentWidget(self.table if self._rows else self.empty_page)
         self._update_summary()
         self._update_buttons()
 
@@ -1093,6 +1122,7 @@ class CardJanitorDialog(QDialog):
         super().keyPressEvent(event)
 
     def _update_summary(self) -> None:
+        self.summary.setVisible(True)
         reports = self.checked_reports()
         global_issues = [
             issue for issue in self._parsed.issues if not issue.path.startswith("policies[")
@@ -1106,7 +1136,7 @@ class CardJanitorDialog(QDialog):
             self.run_button.setEnabled(False)
             return
         if not self._rows:
-            self.summary.setText("No policies have been added. Add a policy to get started.")
+            self.summary.setVisible(False)
             self.view_button.setEnabled(False)
             self.run_button.setEnabled(False)
             return
