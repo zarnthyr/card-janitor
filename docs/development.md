@@ -7,7 +7,7 @@ make build
 make inspect
 ```
 
-The project targets Python 3.10+ and uses the Anki 26.08 development packages. Runtime dependencies are limited to APIs bundled with Anki.
+The project targets Python 3.10+ and uses the Anki 26.09 development packages. Runtime dependencies are limited to APIs bundled with Anki.
 
 For manual testing, install `card-janitor.ankiaddon` in Anki and begin with an
 On demand policy (`mode: "on_demand"`). Open **Card Janitor…** to add or edit
