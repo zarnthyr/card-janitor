@@ -31,11 +31,11 @@ cannot be undone with Anki's Undo command.
       "debug_logging": false,
       "policies": [
         {
-          "id": "mature-cards",
-          "name": "Mature cards",
+          "id": "retire-mature-cards",
+          "name": "Retire Mature Cards",
           "mode": "on_demand",
           "scope": {
-            "decks": ["My Deck"],
+            "decks": ["Mining"],
             "include_subdecks": true,
             "include_suspended": false
           },
