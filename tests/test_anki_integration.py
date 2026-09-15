@@ -8,9 +8,10 @@ from types import SimpleNamespace
 import pytest
 from anki.collection import Collection
 from aqt.operations import QueryOp
-from card_janitor import ui
+from card_janitor import automatic, ui
 from card_janitor.actions import build_execution_plan, execute_plan
 from card_janitor.evaluator import evaluate_policy
+from card_janitor.execution import execute_approved_reports
 from card_janitor.models import (
     AgeRule,
     DeleteCardAction,
@@ -81,7 +82,7 @@ def test_automatic_completion_message(
     notify: bool, affected: int, conflicts: int, expected: str
 ) -> None:
     assert (
-        ui._automatic_completion_message(
+        automatic._automatic_completion_message(
             notify=notify,
             affected_cards=affected,
             conflicts=conflicts,
@@ -100,7 +101,7 @@ def test_automatic_completion_message(
 )
 def test_daily_automatic_run_is_due(last_day: object, expected: bool) -> None:
     assert (
-        ui.automatic_run_is_due(
+        automatic.automatic_run_is_due(
             today=10,
             last_automatic_day=last_day,
         )
@@ -119,7 +120,7 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         note["Back"] = "meaning"
         collection.add_note(note, deck_id)
         card_id = int(collection.card_ids_of_note(note.id)[0])
-        first_review = card_id + 1000
+        first_review = card_id - 1000
         collection.db.execute(
             "insert into revlog values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             first_review,
@@ -138,13 +139,18 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
             name="Mining",
             mode="on_demand",
             scope=Scope(("Mining",)),
-            rule=AgeRule(1, "first_review", "gte"),
+            rule=AgeRule(0, "first_review", "gte"),
             actions=(TagAction("retired"), SuspendAction()),
         )
         report = evaluate_policy(collection, policy, now_ms=first_review + 86_400_000)
         assert [card.card_id for card in report.actionable] == [card_id]
 
-        result = execute_plan(collection, build_execution_plan((report,)), "Clean test card")
+        result = execute_approved_reports(
+            collection,
+            (report,),
+            {policy.id: {card_id}},
+            "Clean test card",
+        )
         assert result.affected_cards == 1
         assert collection.get_card(card_id).queue == -1
         assert collection.get_note(note.id).has_tag("retired")

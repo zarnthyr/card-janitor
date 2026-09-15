@@ -7,8 +7,9 @@ import contextlib
 
 from aqt import gui_hooks
 
+from .automatic import run_automatic_policies
 from .log import exception
-from .ui import close_card_janitor, run_automatic_policies, safe_install_menu
+from .ui import close_card_janitor, safe_install_menu
 
 
 def _callback_key(callback: object) -> tuple[object, object]:
