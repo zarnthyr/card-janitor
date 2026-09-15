@@ -66,6 +66,7 @@ ignore = [
 "src/models.py" = ["EM102", "PERF203", "TRY003", "TRY004", "TRY301"]
 "src/package.py" = ["EM102", "TRY003"]
 "tests/**/*.py" = ["INP001", "PLR2004", "S101"]
+"tests/manual/*.py" = ["INP001", "PLR2004", "S101", "T201"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

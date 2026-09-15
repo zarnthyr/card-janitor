@@ -1,4 +1,4 @@
-.PHONY: all build check clean dev-install dev-uninstall format inspect lint sync test
+.PHONY: all build check clean dev-install dev-seed dev-uninstall format inspect lint sync test
 
 all: check build
 
@@ -15,6 +15,9 @@ clean:
 
 dev-install:
 	uv run python -c "from package import install_development_addon; install_development_addon()"
+
+dev-seed:
+	uv run python tests/manual/seed_dev_profile.py
 
 dev-uninstall:
 	uv run python -c "from package import uninstall_development_addon; uninstall_development_addon()"

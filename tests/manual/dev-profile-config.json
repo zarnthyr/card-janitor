@@ -1,0 +1,94 @@
+{
+  "config_version": 1,
+  "notify_after_automatic_run": true,
+  "debug_logging": true,
+  "policies": [
+    {
+      "id": "dev-old-reviews",
+      "name": "Dev — Old Reviews",
+      "mode": "on_demand",
+      "scope": {
+        "decks": ["Card Janitor Test::Source"],
+        "include_subdecks": true,
+        "include_suspended": true
+      },
+      "match": "all",
+      "conditions": [
+        {"type": "age", "days": 365, "source": "first_review", "operator": "gte"}
+      ],
+      "actions": [
+        {"type": "tag", "tags": ["cj_test_old"]},
+        {"type": "suspend"}
+      ]
+    },
+    {
+      "id": "dev-long-intervals",
+      "name": "Dev — Long Intervals",
+      "mode": "on_demand",
+      "scope": {
+        "decks": ["Card Janitor Test::Source"],
+        "include_subdecks": true,
+        "include_suspended": true
+      },
+      "match": "all",
+      "conditions": [
+        {"type": "interval", "days": 365, "operator": "gte"}
+      ],
+      "actions": [
+        {"type": "move", "deck": "Card Janitor Test::Retired"}
+      ]
+    },
+    {
+      "id": "dev-never-studied",
+      "name": "Dev — Never Studied",
+      "mode": "on_demand",
+      "scope": {
+        "decks": ["Card Janitor Test::Source"],
+        "include_subdecks": true,
+        "include_suspended": true
+      },
+      "match": "all",
+      "conditions": [
+        {"type": "age", "days": 0, "source": "card_created", "operator": "gte"},
+        {"type": "review_history", "operator": "not_exists"}
+      ],
+      "actions": [
+        {"type": "tag", "tags": ["cj_test_never_studied"]}
+      ]
+    },
+    {
+      "id": "dev-learning-states",
+      "name": "Dev — Learning States",
+      "mode": "on_demand",
+      "scope": {
+        "decks": ["Card Janitor Test::Source"],
+        "include_subdecks": true,
+        "include_suspended": true
+      },
+      "match": "all",
+      "conditions": [
+        {"type": "card_state", "states": ["learning", "relearning"]}
+      ],
+      "actions": [
+        {"type": "tag", "tags": ["cj_test_learning"]}
+      ]
+    },
+    {
+      "id": "dev-delete",
+      "name": "Dev — Delete",
+      "mode": "on_demand",
+      "scope": {
+        "decks": ["Card Janitor Test::Delete"],
+        "include_subdecks": false,
+        "include_suspended": true
+      },
+      "match": "all",
+      "conditions": [
+        {"type": "review_history", "operator": "not_exists"}
+      ],
+      "actions": [
+        {"type": "delete_card"}
+      ]
+    }
+  ]
+}
