@@ -35,6 +35,7 @@ REQUIRED_PACKAGE_FILES = {
     "manifest.json",
     "models.py",
     "presentation.py",
+    "policies.md",
     "ui.py",
 }
 FORBIDDEN_NAMES = {"package.py"}
@@ -71,6 +72,7 @@ def prepare_build() -> None:
     for name in ("manifest.json", "README.md", "LICENSE"):
         shutil.copy2(name, BUILD_DIR / name)
     shutil.copy2("docs/config.md", BUILD_DIR / "config.md")
+    shutil.copy2("docs/policies.md", BUILD_DIR / "policies.md")
 
 
 def build_files() -> list[Path]:
@@ -131,6 +133,7 @@ def development_link_sources() -> dict[str, Path]:
             "README.md": project_dir / "README.md",
             "LICENSE": project_dir / "LICENSE",
             "config.md": project_dir / "docs/config.md",
+            "policies.md": project_dir / "docs/policies.md",
         }
     )
     return links

@@ -8,6 +8,7 @@ import itertools
 import json
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import aqt
@@ -763,6 +764,10 @@ def execute_on_demand_reports(
 
 
 class CollectionConfigEditor(ConfigEditor):
+    def updateHelp(self) -> None:  # noqa: N802 - Qt/Anki virtual method
+        text = Path(__file__).with_name("policies.md").read_text(encoding="utf-8")
+        self.form.help.stdHtml(text, js=[], css=["css/addonconf.css"], context=self)
+
     def onRestoreDefaults(self) -> None:  # noqa: N802 - Qt/Anki virtual method
         self.updateText({"policies": []})
 

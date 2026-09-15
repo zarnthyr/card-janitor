@@ -128,7 +128,7 @@ separately for each profile.
 
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
 
-See [config.md](./docs/config.md) for the complete schema and examples.
+See [policies.md](./docs/policies.md) for the complete policy schema and examples.
 
 ## Known Limitations
 
