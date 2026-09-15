@@ -48,10 +48,10 @@ from .configuration import (
     DEFAULT_CONFIG,
     ConfigWriteError,
     load_config,
-    load_raw_config,
+    load_raw_collection_config,
     remove_policy,
     save_policy,
-    save_raw_config,
+    save_raw_collection_config,
 )
 from .dialogs import PolicyEditorDialog, SettingsDialog
 from .evaluator import evaluate_policies
@@ -192,9 +192,12 @@ class CardJanitorDialog(QDialog):
         self.edit_button.setToolTip("Edit the highlighted policy")
         self.remove_button = QPushButton("Remove…", self)
         self.remove_button.setToolTip("Remove the highlighted policy")
+        self.json_button = QPushButton("Edit Policies as JSON…", self)
+        self.json_button.setToolTip("Edit this collection's policies as JSON")
         intro.addWidget(self.add_button)
         intro.addWidget(self.edit_button)
         intro.addWidget(self.remove_button)
+        intro.addWidget(self.json_button)
         layout.addLayout(intro)
 
         self.table = QTableWidget(0, 7, self)
@@ -239,6 +242,7 @@ class CardJanitorDialog(QDialog):
         qconnect(self.add_button.clicked, self._add_policy)
         qconnect(self.edit_button.clicked, self._edit_policy)
         qconnect(self.remove_button.clicked, self._remove_policy)
+        qconnect(self.json_button.clicked, self._open_policy_json)
 
         self.empty_page = QWidget(self)
         empty_layout = QVBoxLayout(self.empty_page)
@@ -308,6 +312,7 @@ class CardJanitorDialog(QDialog):
             self.add_button,
             self.edit_button,
             self.remove_button,
+            self.json_button,
             self.table,
             self.empty_add_button,
             self.settings_button,
@@ -565,11 +570,11 @@ class CardJanitorDialog(QDialog):
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self._parsed.config, self)
-        result = dialog.exec()
-        if result == QDialog.DialogCode.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             self._refresh()
-        elif dialog.edit_json_requested:
-            open_json_settings(parent=self, on_close=self._refresh)
+
+    def _open_policy_json(self) -> None:
+        open_policy_json(parent=self, on_close=self._refresh)
 
     def _run(self) -> None:
         if self._running:
@@ -757,9 +762,9 @@ def execute_on_demand_reports(
     CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
 
 
-class AdvancedConfigEditor(ConfigEditor):
+class CollectionConfigEditor(ConfigEditor):
     def onRestoreDefaults(self) -> None:  # noqa: N802 - Qt/Anki virtual method
-        self.updateText(DEFAULT_CONFIG.copy())
+        self.updateText({"policies": []})
 
     def accept(self) -> None:
         text = self.form.editor.toPlainText()
@@ -769,15 +774,15 @@ class AdvancedConfigEditor(ConfigEditor):
         except (TypeError, ValueError) as exc:
             showWarning(f"Invalid JSON: {exc}", parent=self)
             return
-        parsed = parse_config(config)
+        parsed = parse_config({**DEFAULT_CONFIG, **config} if isinstance(config, dict) else config)
         if parsed.issues:
             details = "\n".join(f"• {issue}" for issue in parsed.issues)
             showWarning(f"Card Janitor configuration has errors:\n\n{details}", parent=self)
             return
         try:
-            save_raw_config(config)
+            save_raw_collection_config(config)
         except ConfigWriteError as exc:
-            error("failed to save advanced configuration", reason=str(exc))
+            error("failed to save collection configuration", reason=str(exc))
             showWarning(str(exc), parent=self)
             return
         self.conf = config
@@ -785,15 +790,15 @@ class AdvancedConfigEditor(ConfigEditor):
         QDialog.accept(self)
 
 
-def open_json_settings(*, parent: QWidget, on_close: Callable[[], None] | None = None) -> None:
-    config = load_raw_config()
+def open_policy_json(*, parent: QWidget, on_close: Callable[[], None] | None = None) -> None:
+    config = load_raw_collection_config()
     if not isinstance(config, dict):
-        error("cannot open JSON settings", reason="configuration is not an object")
-        showWarning("The add-on configuration is not a JSON object", parent=parent)
+        error("cannot open policy JSON", reason="collection configuration is not an object")
+        showWarning("The collection configuration is not a JSON object", parent=parent)
         return
     editor_parent = QDialog(parent)
     editor_parent.mgr = mw.addonManager
-    editor = AdvancedConfigEditor(editor_parent, ADDON_MODULE, config)
+    editor = CollectionConfigEditor(editor_parent, ADDON_MODULE, config)
     setattr(mw, CONFIG_EDITOR_ATTR, (editor_parent, editor))
 
     def editor_closed(_result: int) -> None:

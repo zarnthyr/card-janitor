@@ -48,6 +48,11 @@ def load_raw_config() -> object:
     return combined
 
 
+def load_raw_collection_config() -> object:
+    """Return Card Janitor data stored in the current collection."""
+    return {"policies": deepcopy(load_raw_policies())}
+
+
 def load_config() -> ParsedConfig:
     return parse_config(load_raw_config())
 
@@ -59,8 +64,8 @@ def _write_policies(policies: object) -> None:
     mw.col.set_config(COLLECTION_POLICIES_KEY, policies)
 
 
-def save_raw_config(config: object) -> None:
-    """Split a combined advanced configuration into its two storage locations."""
+def save_raw_collection_config(config: object) -> None:
+    """Save collection-scoped Card Janitor data without changing settings."""
     if not isinstance(config, dict):
         message = "The configuration is not a JSON object"
         raise ConfigWriteError(message)
@@ -68,9 +73,7 @@ def save_raw_config(config: object) -> None:
     if not isinstance(policies, list):
         message = "The policies setting is not an array"
         raise ConfigWriteError(message)
-    settings = {key: deepcopy(config[key]) for key in DEFAULT_SETTINGS if key in config}
     _write_policies(deepcopy(policies))
-    mw.addonManager.writeConfig(ADDON_MODULE, settings)
 
 
 def migrate_global_policies() -> bool:

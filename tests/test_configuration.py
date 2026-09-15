@@ -65,6 +65,16 @@ def test_load_raw_config_combines_global_settings_and_collection_policies(
     assert configuration.load_raw_config() == {**settings, "policies": policies}
 
 
+def test_load_raw_collection_config_reads_only_collection_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    policies = [{"broken": True}]
+    collection = FakeCollection({configuration.COLLECTION_POLICIES_KEY: policies})
+    monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, []))
+
+    assert configuration.load_raw_collection_config() == {"policies": policies}
+
+
 def test_save_policy_replaces_only_target_collection_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -129,33 +139,19 @@ def test_save_settings_does_not_change_collection_policies(
     assert collection.writes == []
 
 
-def test_save_raw_config_splits_settings_and_policies(
+def test_save_raw_collection_config_changes_only_collection_policies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     policies = [{"name": "Current collection"}]
-    combined = {
-        "config_version": 1,
-        "notify_after_automatic_run": False,
-        "debug_logging": True,
-        "policies": policies,
-    }
+    collection_config = {"policies": policies}
     collection = FakeCollection()
     writes: list[tuple[str, object]] = []
     monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, writes))
 
-    configuration.save_raw_config(combined)
+    configuration.save_raw_collection_config(collection_config)
 
     assert collection.values[configuration.COLLECTION_POLICIES_KEY] == policies
-    assert writes == [
-        (
-            "card_janitor",
-            {
-                "config_version": 1,
-                "notify_after_automatic_run": False,
-                "debug_logging": True,
-            },
-        )
-    ]
+    assert writes == []
 
 
 def test_migrate_global_policies_moves_them_to_current_collection(

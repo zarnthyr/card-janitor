@@ -2,24 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": [
-    "config_version",
-    "notify_after_automatic_run",
-    "debug_logging",
-    "policies"
-  ],
+  "required": ["policies"],
   "properties": {
-    "config_version": {
-      "const": 1
-    },
-    "notify_after_automatic_run": {
-      "type": "boolean",
-      "description": "Show a summary when cards are cleaned up automatically"
-    },
-    "debug_logging": {
-      "type": "boolean",
-      "description": "Print policy evaluation diagnostics to the terminal"
-    },
     "policies": {
       "type": "array",
       "items": {

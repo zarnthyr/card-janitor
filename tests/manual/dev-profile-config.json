@@ -1,7 +1,4 @@
 {
-  "config_version": 1,
-  "notify_after_automatic_run": true,
-  "debug_logging": true,
   "policies": [
     {
       "id": "dev-old-reviews",

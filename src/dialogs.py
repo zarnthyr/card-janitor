@@ -697,7 +697,6 @@ def _best_effort_actions(raw: object) -> tuple[Action, ...]:
 class SettingsDialog(QDialog):
     def __init__(self, config: AddonConfig, parent: QWidget) -> None:
         super().__init__(parent)
-        self._edit_json_requested = False
         self.setWindowTitle("Card Janitor Settings")
 
         layout = QVBoxLayout(self)
@@ -724,29 +723,15 @@ class SettingsDialog(QDialog):
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
         )
-        self.json_button = buttons.addButton(
-            "Edit JSON…",
-            QDialogButtonBox.ButtonRole.ActionRole,
-        )
-        qconnect(self.json_button.clicked, self._request_json_editor)
         qconnect(buttons.accepted, self._save)
         qconnect(buttons.rejected, self.reject)
         layout.addWidget(buttons)
         save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         QWidget.setTabOrder(self.notify, self.debug_logging)
-        QWidget.setTabOrder(self.debug_logging, self.json_button)
-        QWidget.setTabOrder(self.json_button, save_button)
+        QWidget.setTabOrder(self.debug_logging, save_button)
         QWidget.setTabOrder(save_button, cancel_button)
         QTimer.singleShot(0, self.notify.setFocus)
-
-    @property
-    def edit_json_requested(self) -> bool:
-        return self._edit_json_requested
-
-    def _request_json_editor(self) -> None:
-        self._edit_json_requested = True
-        self.reject()
 
     def _save(self) -> None:
         try:

@@ -1,8 +1,8 @@
 # Configuration
 
 Add and edit policies in the Card Janitor window. Use **Settings** to configure
-notifications and debug logging. Choose **Edit JSON** to edit the underlying
-settings and the current collection's policies together.
+notifications and debug logging. Choose **Edit Policies as JSON** in Card
+Janitor to edit the current collection's policy data directly.
 
 Policies are stored in the current Anki collection and sync with it. Notification
 and debug settings are add-on-wide and shared by profiles on this installation.
@@ -10,7 +10,8 @@ and debug settings are add-on-wide and shared by profiles on this installation.
 If any setting or policy is invalid, Card Janitor will not run cleanup until
 the problem is fixed. Invalid policies remain visible in Card Janitor and can
 be repaired with **Edit**. Invalid add-on-wide settings can be repaired through
-**Settings** when the field is available there, or through **Edit JSON**.
+**Settings** when the field is available there, or in Anki's Add-ons
+configuration editor.
 
 Deck names are resolved when a policy is evaluated. A missing or filtered move
 destination is an error.
@@ -29,9 +30,6 @@ command.
 ## Example
 
     {
-      "config_version": 1,
-      "notify_after_automatic_run": true,
-      "debug_logging": false,
       "policies": [
         {
           "id": "retire-mature-cards",
@@ -77,13 +75,11 @@ Automatic cleanup runs when a profile opens if it has not yet run that day. It
 also runs when Anki's day changes while the application remains open. Use Card
 Janitor whenever you want to run policies on demand.
 
-Set `notify_after_automatic_run` to `false` to suppress successful automatic-run
-summaries. No summary is shown when no cards were changed.
-Configuration errors and action conflicts are still reported.
-
-Set `debug_logging` to `true` to print policy evaluation counts and timing to
-the terminal. Configuration errors and unexpected exceptions are always
-printed, regardless of this setting.
+In **Settings**, turn off automatic-run notifications to suppress successful
+automatic-run summaries. No summary is shown when no cards were changed.
+Configuration errors and action conflicts are still reported. Enable debug
+logging there to print policy evaluation counts and timing to the terminal.
+Configuration errors and unexpected exceptions are always printed.
 
 ## Conditions
 
