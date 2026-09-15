@@ -76,11 +76,17 @@ def test_dashboard_uses_current_query_op_constructor(
 @pytest.mark.parametrize(
     ("notify", "affected", "conflicts", "expected"),
     [
-        (True, 1, 0, "Card Janitor cleaned up 1 card."),
-        (True, 3, 0, "Card Janitor cleaned up 3 cards."),
+        (True, 1, 0, "Card Janitor cleaned up 1 card"),
+        (True, 3, 0, "Card Janitor cleaned up 3 cards"),
         (True, 0, 0, ""),
         (False, 3, 0, ""),
-        (False, 3, 2, "2 conflicting cards were skipped."),
+        (False, 3, 2, "2 conflicting cards were skipped"),
+        (
+            True,
+            3,
+            2,
+            "Card Janitor cleaned up 3 cards. 2 conflicting cards were skipped.",
+        ),
     ],
 )
 def test_automatic_completion_message(

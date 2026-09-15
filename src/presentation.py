@@ -38,7 +38,7 @@ CARD_STATES = (
 )
 CONDITION_HELP = {
     "age_first_review": (
-        "Elapsed whole days since the card's earliest genuine answer in Anki's review log."
+        "Elapsed whole days since the card's earliest genuine answer in Anki's review log"
     ),
     "age_card_created": (
         "Elapsed whole days since the original creation timestamp stored in the card ID. "
@@ -48,7 +48,7 @@ CONDITION_HELP = {
     "card_state": (
         "The card's current scheduling state. This does not indicate whether it has review history."
     ),
-    "review_history": "Whether Anki's review log contains a genuine answer for the card.",
+    "review_history": "Whether Anki's review log contains a genuine answer for the card",
 }
 
 
@@ -62,7 +62,7 @@ def card_count_text(count: int) -> str:
 
 
 def applied_message(count: int) -> str:
-    return f"Card Janitor cleaned up {card_count_text(count)}."
+    return f"Card Janitor cleaned up {card_count_text(count)}"
 
 
 def describe_action(action: Action) -> str:
@@ -134,8 +134,8 @@ def configured_mode(mode: str) -> str:
 
 def mode_tooltip(mode: str) -> str:
     if mode == "on_demand":
-        return "On demand: runs only when you click Clean Up in Card Janitor."
-    return "Automatic: runs once per day without confirmation and can also be run on demand."
+        return "On demand: runs only when you click Clean Up in Card Janitor"
+    return "Automatic: runs once per day without confirmation and can also be run on demand"
 
 
 def warning_panel(text: str, parent: QWidget, *, destructive: bool = False) -> QLabel:

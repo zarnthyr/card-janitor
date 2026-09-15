@@ -124,15 +124,15 @@ class CardJanitorDialog(QDialog):
         layout = QVBoxLayout(self)
         intro = QHBoxLayout()
         intro.addWidget(
-            QLabel("Manage policies for cleaning up cards automatically or on demand.", self)
+            QLabel("Manage policies for cleaning up cards automatically or on demand", self)
         )
         intro.addStretch()
         self.add_button = QPushButton("Add…", self)
-        self.add_button.setToolTip("Create a cleanup policy.")
+        self.add_button.setToolTip("Create a cleanup policy")
         self.edit_button = QPushButton("Edit…", self)
-        self.edit_button.setToolTip("Edit the highlighted policy.")
+        self.edit_button.setToolTip("Edit the highlighted policy")
         self.remove_button = QPushButton("Remove…", self)
-        self.remove_button.setToolTip("Remove the highlighted policy.")
+        self.remove_button.setToolTip("Remove the highlighted policy")
         intro.addWidget(self.add_button)
         intro.addWidget(self.edit_button)
         intro.addWidget(self.remove_button)
@@ -143,7 +143,7 @@ class CardJanitorDialog(QDialog):
             ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "Cards")
         )
         self.table.horizontalHeaderItem(self.COLUMN_COUNT).setToolTip(
-            "Cards that still require at least one configured action."
+            "Cards that still require at least one configured action"
         )
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -183,7 +183,7 @@ class CardJanitorDialog(QDialog):
         empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(empty_title)
         empty_description = QLabel(
-            "Add a policy to define which cards Card Janitor should clean up.",
+            "Add a policy to define which cards Card Janitor should clean up",
             self.empty_page,
         )
         empty_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -191,7 +191,7 @@ class CardJanitorDialog(QDialog):
         empty_layout.addWidget(empty_description)
         empty_layout.addSpacing(8)
         self.empty_add_button = QPushButton("Add Policy…", self.empty_page)
-        self.empty_add_button.setToolTip("Create a cleanup policy.")
+        self.empty_add_button.setToolTip("Create a cleanup policy")
         qconnect(self.empty_add_button.clicked, self._add_policy)
         empty_layout.addWidget(
             self.empty_add_button,
@@ -213,22 +213,22 @@ class CardJanitorDialog(QDialog):
             "Settings…",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
-        self.settings_button.setToolTip("Configure Card Janitor.")
+        self.settings_button.setToolTip("Configure Card Janitor")
         self.refresh_button = buttons.addButton(
             "Refresh",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
-        self.refresh_button.setToolTip("Recalculate the card counts.")
+        self.refresh_button.setToolTip("Recalculate the card counts")
         self.view_button = buttons.addButton(
             "Browse",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
-        self.view_button.setToolTip("Open cards from the checked policies in Browse.")
+        self.view_button.setToolTip("Open cards from the checked policies in Browse")
         self.run_button = buttons.addButton(
             "Clean Up",
             QDialogButtonBox.ButtonRole.AcceptRole,
         )
-        self.run_button.setToolTip("Apply the actions from the checked policies.")
+        self.run_button.setToolTip("Apply the actions from the checked policies")
         if isinstance(self.run_button, QPushButton):
             self.run_button.setDefault(True)
         qconnect(self.settings_button.clicked, self._open_settings)
@@ -423,10 +423,10 @@ class CardJanitorDialog(QDialog):
             self.run_button.setEnabled(False)
             return
         if not reports:
-            message = "No policies are included in this run."
+            messages = ["No policies are included in this run"]
             if any(row.record.policy is None for row in self._rows):
-                message += " Edit policies marked Invalid to repair them."
-            self.summary.setText(message)
+                messages.append("Edit policies marked Invalid to repair them")
+            self.summary.setText(messages[0] if len(messages) == 1 else ". ".join(messages) + ".")
             self.view_button.setEnabled(False)
             self.run_button.setEnabled(False)
             return
@@ -435,25 +435,24 @@ class CardJanitorDialog(QDialog):
         candidate_ids = set(match_counts)
         overlap_count = sum(count > 1 for count in match_counts.values())
         plan = build_execution_plan(reports)
-        messages = [f"{card_count_text(plan.card_count).capitalize()} would be cleaned up."]
+        messages = [f"{card_count_text(plan.card_count).capitalize()} would be cleaned up"]
         if overlap_count:
             overlap_verb = "matches" if overlap_count == 1 else "match"
             messages.append(
-                f"{card_count_text(overlap_count).capitalize()} {overlap_verb} "
-                "more than one policy."
+                f"{card_count_text(overlap_count).capitalize()} {overlap_verb} more than one policy"
             )
         if plan.conflicted_card_ids:
             conflict_count = len(plan.conflicted_card_ids)
             conflict_verb = "has" if conflict_count == 1 else "have"
             messages.append(
                 f"{card_count_text(conflict_count).capitalize()} {conflict_verb} "
-                "conflicting actions and would be skipped."
+                "conflicting actions and would be skipped"
             )
         if errors:
             messages.append(
-                "A checked policy has an error. Uncheck it or fix the configuration before running."
+                "A checked policy has an error. Uncheck it or fix the configuration before running"
             )
-        self.summary.setText("\n".join(messages))
+        self.summary.setText(messages[0] if len(messages) == 1 else ".\n".join(messages) + ".")
         self.view_button.setEnabled(bool(candidate_ids))
         self.run_button.setEnabled(plan.card_count > 0 and not errors)
 
@@ -646,13 +645,14 @@ def execute_on_demand_reports(
             affected_cards=result.affected_cards,
             conflicts=result.conflicts,
         )
-        message = (
+        messages = [
             applied_message(result.affected_cards)
             if result.affected_cards
-            else "No cards needed cleanup."
-        )
+            else "No cards needed cleanup"
+        ]
         if result.conflicts:
-            message += f" {result.conflicts} conflicting cards were skipped."
+            messages.append(f"{result.conflicts} conflicting cards were skipped")
+        message = messages[0] if len(messages) == 1 else ". ".join(messages) + "."
         tooltip(message, parent=mw)
 
     CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
@@ -662,7 +662,7 @@ def open_json_settings(*, parent: QWidget, on_close: Callable[[], None] | None =
     config = load_raw_config()
     if not isinstance(config, dict):
         error("cannot open JSON settings", reason="configuration is not an object")
-        showWarning("The add-on configuration is not a JSON object.", parent=parent)
+        showWarning("The add-on configuration is not a JSON object", parent=parent)
         return
     editor_parent = QDialog(parent)
     editor_parent.mgr = mw.addonManager
@@ -684,7 +684,7 @@ def install_menu() -> None:
             mw.form.menuTools.removeAction(existing)
 
     action = QAction("Card Janitor…", mw)
-    action.setStatusTip("Manage cleanup policies and run Card Janitor.")
+    action.setStatusTip("Manage cleanup policies and run Card Janitor")
     qconnect(action.triggered, open_card_janitor)
     mw.form.menuTools.addAction(action)
     setattr(mw, MENU_ATTR, action)

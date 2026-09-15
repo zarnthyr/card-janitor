@@ -50,10 +50,12 @@ def _mark_daily_run(today: int) -> None:
 def _automatic_completion_message(*, notify: bool, affected_cards: int, conflicts: int) -> str:
     messages: list[str] = []
     if notify and affected_cards:
-        messages.append(applied_message(affected_cards).removesuffix("."))
+        messages.append(applied_message(affected_cards))
     if conflicts:
         messages.append(f"{conflicts} conflicting cards were skipped")
-    return " ".join(f"{message}." for message in messages)
+    if len(messages) <= 1:
+        return "".join(messages)
+    return ". ".join(messages) + "."
 
 
 def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> None:
@@ -94,7 +96,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         if errors:
             error("automatic run evaluation failed", errors=tuple(errors))
             tooltip(
-                "Card Janitor: an automatic policy has errors; open Card Janitor to repair it.",
+                "Card Janitor: an automatic policy has errors; open Card Janitor to repair it",
                 parent=mw,
             )
             return
@@ -103,8 +105,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
             _mark_daily_run(today)
             if plan.conflicted_card_ids:
                 tooltip(
-                    f"Card Janitor: {len(plan.conflicted_card_ids)} conflicting cards "
-                    "were skipped.",
+                    f"Card Janitor: {len(plan.conflicted_card_ids)} conflicting cards were skipped",
                     parent=mw,
                 )
             return

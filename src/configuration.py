@@ -38,11 +38,11 @@ def save_policy(policy: Policy, *, index: int | None = None) -> None:
     """Add or replace one policy while preserving all other raw configuration."""
     raw = load_raw_config()
     if not isinstance(raw, dict):
-        message = "The add-on configuration is not a JSON object."
+        message = "The add-on configuration is not a JSON object"
         raise ConfigWriteError(message)
     policies = raw.get("policies")
     if not isinstance(policies, list):
-        message = "The policies setting is not an array."
+        message = "The policies setting is not an array"
         raise ConfigWriteError(message)
     updated = deepcopy(raw)
     updated_policies = updated["policies"]
@@ -61,11 +61,11 @@ def remove_policy(*, index: int) -> None:
     """Remove one policy while preserving all other raw configuration."""
     raw = load_raw_config()
     if not isinstance(raw, dict):
-        message = "The add-on configuration is not a JSON object."
+        message = "The add-on configuration is not a JSON object"
         raise ConfigWriteError(message)
     policies = raw.get("policies")
     if not isinstance(policies, list):
-        message = "The policies setting is not an array."
+        message = "The policies setting is not an array"
         raise ConfigWriteError(message)
     if not 0 <= index < len(policies):
         message = "The policy no longer exists. Refresh and try again."
@@ -83,7 +83,7 @@ def save_settings(
     """Update add-on-wide settings while preserving every policy entry."""
     raw = load_raw_config()
     if not isinstance(raw, dict):
-        message = "The add-on configuration is not a JSON object."
+        message = "The add-on configuration is not a JSON object"
         raise ConfigWriteError(message)
     updated = deepcopy(raw)
     updated["config_version"] = CONFIG_VERSION

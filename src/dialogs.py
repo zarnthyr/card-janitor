@@ -113,7 +113,7 @@ class CardStatePicker(QComboBox):
         selected = [label for label, value in CARD_STATES if value in self._states]
         summary = ", ".join(selected) if selected else "Choose states"
         self.setItemText(0, summary)
-        self.setToolTip(f"Match cards whose current state is any of: {summary}.")
+        self.setToolTip(f"Match cards whose current state is any of: {summary}")
 
     def _state_toggled(self, state: str, _checked: bool) -> None:
         selected = tuple(
@@ -162,7 +162,7 @@ class RuleConditionRow(QWidget):
         self.value_stack.addWidget(self.no_value)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(75)
-        self.remove_button.setToolTip("Remove this condition.")
+        self.remove_button.setToolTip("Remove this condition")
         for widget in (
             self.number_label,
             self.kind,
@@ -216,8 +216,8 @@ class RuleConditionRow(QWidget):
                 self.operator.addItem(label, value)
             self.operator.setCurrentIndex(self.operator.findData("gte"))
             self.value_stack.setCurrentWidget(self.days)
-        self.operator.setToolTip("Choose how this condition compares the card value.")
-        self.fixed_operator.setToolTip("A card matches when its state is one of those selected.")
+        self.operator.setToolTip("Choose how this condition compares the card value")
+        self.fixed_operator.setToolTip("A card matches when its state is one of those selected")
         self.days.setToolTip(help_text)
 
     def rule(self) -> AgeRule | IntervalRule | CardStateRule | ReviewHistoryRule:
@@ -274,7 +274,7 @@ class PolicyEditorDialog(QDialog):
         index = self.mode.findData(mode)
         self.mode.setCurrentIndex(index if index >= 0 else self.mode.findData("on_demand"))
         self.automatic_warning = warning_panel(
-            "This policy runs once per day <b>without confirmation</b>.",
+            "This policy runs once per day <b>without confirmation</b>",
             self,
         )
         form.insertRow(0, self.automatic_warning)
@@ -289,7 +289,7 @@ class PolicyEditorDialog(QDialog):
         self.decks.setAlternatingRowColors(True)
         self.decks.setMinimumHeight(130)
         self.decks.setTabKeyNavigation(False)
-        self.decks.setToolTip("Select the decks whose cards this policy may clean up.")
+        self.decks.setToolTip("Select the decks whose cards this policy may clean up")
         raw_scope = raw.get("scope") if isinstance(raw.get("scope"), dict) else {}
         deck_values = policy.scope.decks if policy else _raw_string_list(raw_scope, "decks")
         for deck_name in (*deck_names, *(name for name in deck_values if name not in deck_names)):
@@ -302,11 +302,11 @@ class PolicyEditorDialog(QDialog):
         scope_layout.addSpacing(6)
         self.include_subdecks = QCheckBox("Include subdecks", self)
         self.include_subdecks.setToolTip(
-            "Also include cards in every child deck of each selected deck."
+            "Also include cards in every child deck of each selected deck"
         )
         self.include_suspended = QCheckBox("Include suspended cards", self)
         self.include_suspended.setToolTip(
-            "Allow this policy to match cards that are already suspended."
+            "Allow this policy to match cards that are already suspended"
         )
         self.include_subdecks.setChecked(
             policy.scope.include_subdecks
@@ -329,15 +329,15 @@ class PolicyEditorDialog(QDialog):
         self.match = QComboBox(self)
         self.match.addItem("All conditions (AND)", "all")
         self.match.addItem("Any condition (OR)", "any")
-        self.match.setToolTip("Require every condition to match, or allow any one to match.")
+        self.match.setToolTip("Require every condition to match, or allow any one to match")
         match_row.addWidget(self.match)
         match_row.addStretch()
         self.add_condition_button = QPushButton("Add Condition", self)
-        self.add_condition_button.setToolTip("Add another condition to this policy.")
+        self.add_condition_button.setToolTip("Add another condition to this policy")
         match_row.addWidget(self.add_condition_button)
         self.creation_age_warning = warning_panel(
             "Imported cards retain their original creation dates and "
-            "<b>may qualify immediately</b>.",
+            "<b>may qualify immediately</b>",
             self,
         )
         conditions_group_layout.addWidget(self.creation_age_warning)
@@ -389,22 +389,22 @@ class PolicyEditorDialog(QDialog):
         actions_grid.setColumnStretch(1, 1)
         source_actions = policy.actions if policy else _best_effort_actions(raw.get("actions"))
         self.tag_enabled = QCheckBox("Add tags", self)
-        self.tag_enabled.setToolTip("Add tags to the notes of matching cards.")
+        self.tag_enabled.setToolTip("Add tags to the notes of matching cards")
         self.tag = QLineEdit(self)
         self.tag.setPlaceholderText("Separate tags with spaces or commas")
-        self.tag.setToolTip("Enter one or more note tags, separated by spaces or commas.")
+        self.tag.setToolTip("Enter one or more note tags, separated by spaces or commas")
         self.suspend = QCheckBox("Suspend cards", self)
-        self.suspend.setToolTip("Suspend matching cards so Anki no longer schedules them.")
+        self.suspend.setToolTip("Suspend matching cards so Anki no longer schedules them")
         self.move_enabled = QCheckBox("Move to deck", self)
-        self.move_enabled.setToolTip("Move matching cards to another deck.")
+        self.move_enabled.setToolTip("Move matching cards to another deck")
         self.move_deck = QComboBox(self)
         self.move_deck.setEditable(True)
         self.move_deck.addItems(deck_names)
-        self.move_deck.setToolTip("Choose or enter the destination deck.")
+        self.move_deck.setToolTip("Choose or enter the destination deck")
         self.delete = QCheckBox("Delete cards", self)
-        self.delete.setToolTip("Delete matching cards from the collection.")
+        self.delete.setToolTip("Delete matching cards from the collection")
         self.delete_warning = warning_panel(
-            "Matching cards will be <b>DELETED</b> from your collection.",
+            "Matching cards will be <b>DELETED</b> from your collection",
             self,
             destructive=True,
         )
@@ -503,7 +503,7 @@ class PolicyEditorDialog(QDialog):
 
     def _remove_condition(self, row: RuleConditionRow) -> None:
         if len(self._conditions) == 1:
-            showWarning("A policy must have at least one condition.", parent=self)
+            showWarning("A policy must have at least one condition", parent=self)
             return
         index = self._conditions.index(row)
         self._conditions.remove(row)
@@ -561,10 +561,10 @@ class PolicyEditorDialog(QDialog):
             if self.decks.item(index).checkState() == Qt.CheckState.Checked
         )
         if not name:
-            showWarning("Enter a policy name.", parent=self)
+            showWarning("Enter a policy name", parent=self)
             return
         if not decks:
-            showWarning("Enter at least one deck.", parent=self)
+            showWarning("Enter at least one deck", parent=self)
             return
         simple_rules = tuple(row.rule() for row in self._conditions)
         rule: Rule = (
@@ -581,7 +581,7 @@ class PolicyEditorDialog(QDialog):
                     )
                 )
                 if not tags:
-                    showWarning("Enter one or more tags or disable the tag action.", parent=self)
+                    showWarning("Enter one or more tags or disable the tag action", parent=self)
                     return
                 actions.extend(TagAction(tag) for tag in tags)
             if self.suspend.isChecked():
@@ -589,11 +589,11 @@ class PolicyEditorDialog(QDialog):
             if self.move_enabled.isChecked():
                 deck = self.move_deck.currentText().strip()
                 if not deck:
-                    showWarning("Enter a destination deck or disable the move action.", parent=self)
+                    showWarning("Enter a destination deck or disable the move action", parent=self)
                     return
                 actions.append(MoveAction(deck))
         if not actions:
-            showWarning("Choose at least one action.", parent=self)
+            showWarning("Choose at least one action", parent=self)
             return
         raw = (
             self._record.raw
@@ -609,7 +609,7 @@ class PolicyEditorDialog(QDialog):
             if self._record is not None and self._record.policy is None:
                 policy_id = uuid4().hex
             else:
-                showWarning("Another policy has the same internal ID.", parent=self)
+                showWarning("Another policy has the same internal ID", parent=self)
                 return
         self.result_policy = Policy(
             id=policy_id,
@@ -716,7 +716,7 @@ class SettingsDialog(QDialog):
         troubleshooting_layout = QVBoxLayout(troubleshooting_group)
         self.debug_logging = QCheckBox("Enable debug logging", troubleshooting_group)
         self.debug_logging.setChecked(config.debug_logging)
-        self.debug_logging.setToolTip("Print policy evaluation details to Anki's terminal output.")
+        self.debug_logging.setToolTip("Print policy evaluation details to Anki's terminal output")
         troubleshooting_layout.addWidget(self.debug_logging)
         layout.addWidget(troubleshooting_group)
 
