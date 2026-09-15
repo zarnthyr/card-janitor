@@ -1,4 +1,4 @@
-# <img src="./assets/title.png" alt="" width="80"> Card Janitor
+# Card Janitor
 
 Configurable policy-based cleanup for Anki cards.
 
