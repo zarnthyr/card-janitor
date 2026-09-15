@@ -31,8 +31,8 @@ make dev-seed
 
 The command refuses to run against any other profile. It replaces only notes
 tagged `card_janitor_test_fixture`. Copy
-`tests/manual/dev-profile-config.json` into **Card Janitor… > Edit Policies as
-JSON…**, save it, then open Card Janitor. The five policies should report these
+`tests/manual/dev-profile-config.json` into **Card Janitor… > Edit as JSON…**,
+save it, then open Card Janitor. The five policies should report these
 counts:
 
 | Policy | Cards |

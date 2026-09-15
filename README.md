@@ -118,7 +118,7 @@ Card Janitor → Add… or Edit…
 The add-on ships with no policies, so installing it cannot modify a collection. Begin with an on-demand tag-and-suspend policy and open **Card Janitor…** to preview its results. The dashboard can open candidates in Anki's Browser or apply the configured actions.
 
 Policies can be created and repaired in the manager. **Settings…** controls
-notifications and debug logging. **Edit Policies as JSON…** opens the current
+notifications and debug logging. **Edit as JSON…** opens the current
 collection's policies for advanced editing.
 
 Policy definitions are stored in the current collection and sync with it, so

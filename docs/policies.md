@@ -1,13 +1,13 @@
 # Policy JSON
 
-Add and edit policies in the Card Janitor window. Choose **Edit Policies as
-JSON** there to edit the current collection's policy data directly.
+Add and edit policies in the Card Janitor window. Choose **Edit as JSON** there
+to edit the current collection's policy data directly.
 
 Policies are stored in the current Anki collection and sync with it.
 
 If any policy is invalid, Card Janitor will not run cleanup until the problem is
 fixed. Invalid policies remain visible in Card Janitor and can be repaired with
-**Edit** or **Edit Policies as JSON**.
+**Edit** or **Edit as JSON**.
 
 Deck names are resolved when a policy is evaluated. A missing or filtered move
 destination is an error.

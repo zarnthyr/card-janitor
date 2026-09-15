@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import aqt
+import markdown
 from anki.collection import SearchNode
 from aqt import mw
 from aqt.addons import ConfigEditor
@@ -42,6 +43,7 @@ from aqt.qt import (
     qconnect,
 )
 from aqt.utils import askUser, showWarning, tooltip
+from markdown.extensions import md_in_html
 
 from .actions import ExecutionResult, build_execution_plan
 from .configuration import (
@@ -193,12 +195,9 @@ class CardJanitorDialog(QDialog):
         self.edit_button.setToolTip("Edit the highlighted policy")
         self.remove_button = QPushButton("Remove…", self)
         self.remove_button.setToolTip("Remove the highlighted policy")
-        self.json_button = QPushButton("Edit Policies as JSON…", self)
-        self.json_button.setToolTip("Edit this collection's policies as JSON")
         intro.addWidget(self.add_button)
         intro.addWidget(self.edit_button)
         intro.addWidget(self.remove_button)
-        intro.addWidget(self.json_button)
         layout.addLayout(intro)
 
         self.table = QTableWidget(0, 7, self)
@@ -243,7 +242,6 @@ class CardJanitorDialog(QDialog):
         qconnect(self.add_button.clicked, self._add_policy)
         qconnect(self.edit_button.clicked, self._edit_policy)
         qconnect(self.remove_button.clicked, self._remove_policy)
-        qconnect(self.json_button.clicked, self._open_policy_json)
 
         self.empty_page = QWidget(self)
         empty_layout = QVBoxLayout(self.empty_page)
@@ -284,6 +282,11 @@ class CardJanitorDialog(QDialog):
             QDialogButtonBox.ButtonRole.ActionRole,
         )
         self.settings_button.setToolTip("Configure Card Janitor")
+        self.json_button = buttons.addButton(
+            "Edit as JSON…",
+            QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.json_button.setToolTip("Edit this collection's policies as JSON")
         self.refresh_button = buttons.addButton(
             "Refresh",
             QDialogButtonBox.ButtonRole.ActionRole,
@@ -302,6 +305,7 @@ class CardJanitorDialog(QDialog):
         if isinstance(self.run_button, QPushButton):
             self.run_button.setDefault(True)
         qconnect(self.settings_button.clicked, self._open_settings)
+        qconnect(self.json_button.clicked, self._open_policy_json)
         qconnect(self.refresh_button.clicked, self._refresh)
         qconnect(self.view_button.clicked, self._view_included)
         qconnect(self.run_button.clicked, self._run)
@@ -313,10 +317,10 @@ class CardJanitorDialog(QDialog):
             self.add_button,
             self.edit_button,
             self.remove_button,
-            self.json_button,
             self.table,
             self.empty_add_button,
             self.settings_button,
+            self.json_button,
             self.refresh_button,
             self.view_button,
             self.close_button,
@@ -766,7 +770,8 @@ def execute_on_demand_reports(
 class CollectionConfigEditor(ConfigEditor):
     def updateHelp(self) -> None:  # noqa: N802 - Qt/Anki virtual method
         text = Path(__file__).with_name("policies.md").read_text(encoding="utf-8")
-        self.form.help.stdHtml(text, js=[], css=["css/addonconf.css"], context=self)
+        html = markdown.markdown(text, extensions=[md_in_html.makeExtension()])
+        self.form.help.stdHtml(html, js=[], css=["css/addonconf.css"], context=self)
 
     def onRestoreDefaults(self) -> None:  # noqa: N802 - Qt/Anki virtual method
         self.updateText({"policies": []})

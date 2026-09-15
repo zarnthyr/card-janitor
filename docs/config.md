@@ -27,5 +27,5 @@ Use **Tools → Card Janitor… → Settings…** for the normal settings interf
 Anki's Add-ons configuration editor exposes the same installation-wide values
 as JSON.
 
-To edit policies as JSON, open **Tools → Card Janitor…** and choose **Edit
-Policies as JSON…**.
+To edit policies as JSON, open **Tools → Card Janitor…** and choose **Edit as
+JSON…**.
