@@ -10,6 +10,7 @@ from anki.collection import Collection
 from aqt.operations import QueryOp
 from card_janitor import automatic, ui
 from card_janitor.actions import build_execution_plan, execute_plan
+from card_janitor.dialogs import PolicyEditorDialog
 from card_janitor.evaluator import evaluate_policy
 from card_janitor.execution import execute_approved_reports
 from card_janitor.models import (
@@ -20,6 +21,10 @@ from card_janitor.models import (
     SuspendAction,
     TagAction,
 )
+
+
+def test_policy_editor_exposes_mode_tooltip_callback() -> None:
+    assert callable(PolicyEditorDialog._update_mode_tooltip)
 
 
 def test_query_op_requires_constructor_success_callback() -> None:

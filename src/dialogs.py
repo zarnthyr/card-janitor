@@ -447,7 +447,7 @@ class PolicyEditorDialog(QDialog):
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         self.cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         qconnect(self.mode.currentIndexChanged, self._update_mode_tooltip)
-        self._updatemode_tooltip()
+        self._update_mode_tooltip()
         self._update_tab_order()
         QTimer.singleShot(0, self._focus_initial)
 
@@ -456,7 +456,7 @@ class PolicyEditorDialog(QDialog):
         if self._record is not None:
             self.name.selectAll()
 
-    def _updatemode_tooltip(self, _index: int = 0) -> None:
+    def _update_mode_tooltip(self, _index: int = 0) -> None:
         help_text = mode_tooltip(self.mode.currentData())
         self.mode_label.setToolTip(help_text)
         self.mode.setToolTip(help_text)
