@@ -45,7 +45,9 @@ then open Card Janitor. The five policies should report these counts:
 The first four policies have seven unique matching cards, with two cards
 matching more than one policy. The delete policy targets a separate eighth
 card. Two unmatched cards verify that conditions exclude an in-scope card and
-deck scope excludes an out-of-scope card.
+deck scope excludes an out-of-scope card. The move action uses the separate
+top-level `Card Janitor Retired` deck, verifying that moved cards leave the test
+source hierarchy completely.
 
 Run the integration test as follows:
 

@@ -35,7 +35,7 @@
         {"type": "interval", "days": 365, "operator": "gte"}
       ],
       "actions": [
-        {"type": "move", "deck": "Card Janitor Test::Retired"}
+        {"type": "move", "deck": "Card Janitor Retired"}
       ]
     },
     {

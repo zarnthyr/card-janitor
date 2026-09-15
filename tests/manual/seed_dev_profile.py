@@ -12,7 +12,7 @@ TAG = "card_janitor_test_fixture"
 SOURCE = "Card Janitor Test::Source"
 CHILD = "Card Janitor Test::Source::Child"
 OUTSIDE = "Card Janitor Test::Outside Scope"
-RETIRED = "Card Janitor Test::Retired"
+RETIRED = "Card Janitor Retired"
 DELETE = "Card Janitor Test::Delete"
 
 
