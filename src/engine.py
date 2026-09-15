@@ -8,16 +8,16 @@ from time import time
 
 from .models import (
     Action,
-    AgeRule,
-    AllRule,
-    AnyRule,
-    CardStateRule,
+    AgeCondition,
+    AllConditions,
+    AnyConditions,
+    CardStateCondition,
+    ConditionExpression,
     DeleteCardAction,
-    IntervalRule,
+    IntervalCondition,
     MoveAction,
     Policy,
-    ReviewHistoryRule,
-    Rule,
+    ReviewHistoryCondition,
     SuspendAction,
     TagAction,
 )
@@ -78,35 +78,37 @@ def _matches_number(actual: int, operator: str, expected: int) -> bool:
     raise ValueError(f"Unsupported numeric operator: {operator!r}")
 
 
-def matches_rule(rule: Rule, card: CardFacts, now_ms: int) -> bool:  # noqa: PLR0911
-    if isinstance(rule, AgeRule):
-        timestamp = card.first_review_ms if rule.source == "first_review" else card.created_at_ms
+def matches_conditions(condition: ConditionExpression, card: CardFacts, now_ms: int) -> bool:  # noqa: PLR0911
+    if isinstance(condition, AgeCondition):
+        timestamp = (
+            card.first_review_ms if condition.source == "first_review" else card.created_at_ms
+        )
         if timestamp is None:
             return False
         elapsed_days = (now_ms - timestamp) // MILLIS_PER_DAY
-        return _matches_number(elapsed_days, rule.operator, rule.days)
-    if isinstance(rule, IntervalRule):
-        return _matches_number(card.interval, rule.operator, rule.days)
-    if isinstance(rule, CardStateRule):
+        return _matches_number(elapsed_days, condition.operator, condition.days)
+    if isinstance(condition, IntervalCondition):
+        return _matches_number(card.interval, condition.operator, condition.days)
+    if isinstance(condition, CardStateCondition):
         state = {0: "new", 1: "learning", 2: "review", 3: "relearning"}.get(card.card_type)
         if state is None:
             return False
-        return state in rule.states
-    if isinstance(rule, ReviewHistoryRule):
+        return state in condition.states
+    if isinstance(condition, ReviewHistoryCondition):
         exists = card.first_review_ms is not None
-        return exists if rule.operator == "exists" else not exists
-    if isinstance(rule, AllRule):
-        return all(matches_rule(child, card, now_ms) for child in rule.rules)
-    if isinstance(rule, AnyRule):
-        return any(matches_rule(child, card, now_ms) for child in rule.rules)
-    raise TypeError(f"Unsupported rule: {rule!r}")
+        return exists if condition.operator == "exists" else not exists
+    if isinstance(condition, AllConditions):
+        return all(matches_conditions(child, card, now_ms) for child in condition.conditions)
+    if isinstance(condition, AnyConditions):
+        return any(matches_conditions(child, card, now_ms) for child in condition.conditions)
+    raise TypeError(f"Unsupported condition: {condition!r}")
 
 
-def rule_needs_first_review(rule: Rule) -> bool:
-    if isinstance(rule, AgeRule):
-        return rule.source == "first_review"
-    if isinstance(rule, (AllRule, AnyRule)):
-        return any(rule_needs_first_review(child) for child in rule.rules)
+def conditions_need_first_review(condition: ConditionExpression) -> bool:
+    if isinstance(condition, AgeCondition):
+        return condition.source == "first_review"
+    if isinstance(condition, (AllConditions, AnyConditions)):
+        return any(conditions_need_first_review(child) for child in condition.conditions)
     return False
 
 
@@ -141,7 +143,9 @@ def evaluate_facts(
             continue
         in_scope.append(card)
 
-    qualifying = tuple(card for card in in_scope if matches_rule(policy.rule, card, now_ms))
+    qualifying = tuple(
+        card for card in in_scope if matches_conditions(policy.conditions, card, now_ms)
+    )
     actionable = tuple(
         card
         for card in qualifying
@@ -149,7 +153,7 @@ def evaluate_facts(
     )
     missing = (
         sum(card.first_review_ms is None for card in in_scope)
-        if rule_needs_first_review(policy.rule)
+        if conditions_need_first_review(policy.conditions)
         else 0
     )
     return PolicyReport(

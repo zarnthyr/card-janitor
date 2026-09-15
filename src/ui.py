@@ -68,7 +68,7 @@ from .presentation import (
     configuration_error_text,
     configured_mode,
     describe_actions,
-    describe_rule,
+    describe_conditions,
     describe_scope,
     mode_tooltip,
     policy_tooltip,
@@ -171,7 +171,7 @@ class CardJanitorDialog(QDialog):
     COLUMN_POLICY = 1
     COLUMN_MODE = 2
     COLUMN_SCOPE = 3
-    COLUMN_RULE = 4
+    COLUMN_CONDITIONS = 4
     COLUMN_ACTIONS = 5
     COLUMN_COUNT = 6
 
@@ -231,7 +231,7 @@ class CardJanitorDialog(QDialog):
         for column in (
             self.COLUMN_POLICY,
             self.COLUMN_SCOPE,
-            self.COLUMN_RULE,
+            self.COLUMN_CONDITIONS,
             self.COLUMN_ACTIONS,
         ):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
@@ -345,7 +345,7 @@ class CardJanitorDialog(QDialog):
             self.COLUMN_POLICY,
             self.COLUMN_MODE,
             self.COLUMN_SCOPE,
-            self.COLUMN_RULE,
+            self.COLUMN_CONDITIONS,
         )
         widths = {column: header.sectionSize(column) for column in columns}
         for column in columns:
@@ -401,7 +401,7 @@ class CardJanitorDialog(QDialog):
                     policy.name,
                     configured_mode(policy.mode),
                     describe_scope(policy.scope),
-                    describe_rule(policy.rule),
+                    describe_conditions(policy.conditions),
                     describe_actions(policy.actions),
                     "Error" if report is None or report.errors else str(len(report.actionable)),
                 )
@@ -768,6 +768,13 @@ def execute_on_demand_reports(
 
 
 class CollectionConfigEditor(ConfigEditor):
+    def __init__(self, parent: QDialog, addon: str, config: dict) -> None:
+        super().__init__(parent, addon, config)
+        self.setWindowTitle("Card Janitor — Edit Policies as JSON")
+        clear_button = self.form.buttonBox.button(QDialogButtonBox.StandardButton.RestoreDefaults)
+        clear_button.setText("Clear Policies")
+        clear_button.setToolTip("Replace the editor contents with an empty policy list")
+
     def updateHelp(self) -> None:  # noqa: N802 - Qt/Anki virtual method
         text = Path(__file__).with_name("policies.md").read_text(encoding="utf-8")
         html = markdown.markdown(text, extensions=[md_in_html.makeExtension()])

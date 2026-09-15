@@ -43,17 +43,17 @@ from .log import configure as configure_logging
 from .log import debug, error
 from .models import (
     Action,
-    AgeRule,
-    AllRule,
-    AnyRule,
-    CardStateRule,
+    AgeCondition,
+    AllConditions,
+    AnyConditions,
+    CardStateCondition,
+    ConditionExpression,
     DeleteCardAction,
-    IntervalRule,
+    IntervalCondition,
     MoveAction,
     Policy,
     PolicyRecord,
-    ReviewHistoryRule,
-    Rule,
+    ReviewHistoryCondition,
     Scope,
     SuspendAction,
     TagAction,
@@ -128,8 +128,10 @@ class CardStatePicker(QComboBox):
         self._update_text()
 
 
-class RuleConditionRow(QWidget):
-    def __init__(self, rule: Rule | None = None, parent: QWidget | None = None) -> None:
+class ConditionRow(QWidget):
+    def __init__(
+        self, condition: ConditionExpression | None = None, parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -173,21 +175,21 @@ class RuleConditionRow(QWidget):
             layout.addWidget(widget)
         selected_states: tuple[str, ...] | None = None
         selected_operator: str | None = None
-        if isinstance(rule, AgeRule):
-            kind = "age_first_review" if rule.source == "first_review" else "age_card_created"
+        if isinstance(condition, AgeCondition):
+            kind = "age_first_review" if condition.source == "first_review" else "age_card_created"
             self.kind.setCurrentIndex(self.kind.findData(kind))
-            self.days.setValue(rule.days)
-            selected_operator = rule.operator
-        elif isinstance(rule, IntervalRule):
+            self.days.setValue(condition.days)
+            selected_operator = condition.operator
+        elif isinstance(condition, IntervalCondition):
             self.kind.setCurrentIndex(self.kind.findData("interval"))
-            self.days.setValue(rule.days)
-            selected_operator = rule.operator
-        elif isinstance(rule, CardStateRule):
+            self.days.setValue(condition.days)
+            selected_operator = condition.operator
+        elif isinstance(condition, CardStateCondition):
             self.kind.setCurrentIndex(self.kind.findData("card_state"))
-            selected_states = rule.states
-        elif isinstance(rule, ReviewHistoryRule):
+            selected_states = condition.states
+        elif isinstance(condition, ReviewHistoryCondition):
             self.kind.setCurrentIndex(self.kind.findData("review_history"))
-            selected_operator = rule.operator
+            selected_operator = condition.operator
         else:
             self.days.setValue(365)
         qconnect(self.kind.currentIndexChanged, self._update_controls)
@@ -220,17 +222,19 @@ class RuleConditionRow(QWidget):
         self.fixed_operator.setToolTip("A card matches when its state is one of those selected")
         self.days.setToolTip(help_text)
 
-    def rule(self) -> AgeRule | IntervalRule | CardStateRule | ReviewHistoryRule:
+    def condition(
+        self,
+    ) -> AgeCondition | IntervalCondition | CardStateCondition | ReviewHistoryCondition:
         kind = self.kind.currentData()
         if kind == "age_first_review":
-            return AgeRule(self.days.value(), "first_review", self.operator.currentData())
+            return AgeCondition(self.days.value(), "first_review", self.operator.currentData())
         if kind == "age_card_created":
-            return AgeRule(self.days.value(), "card_created", self.operator.currentData())
+            return AgeCondition(self.days.value(), "card_created", self.operator.currentData())
         if kind == "interval":
-            return IntervalRule(self.days.value(), self.operator.currentData())
+            return IntervalCondition(self.days.value(), self.operator.currentData())
         if kind == "card_state":
-            return CardStateRule(self.states.states())
-        return ReviewHistoryRule(self.operator.currentData())
+            return CardStateCondition(self.states.states())
+        return ReviewHistoryCondition(self.operator.currentData())
 
     def focus_widgets(self) -> tuple[QWidget, ...]:
         return (self.kind, self.operator, self.days, self.states, self.remove_button)
@@ -247,7 +251,7 @@ class PolicyEditorDialog(QDialog):
         self._record = record
         self._existing_ids = existing_ids
         self.result_policy: Policy | None = None
-        self._conditions: list[RuleConditionRow] = []
+        self._conditions: list[ConditionRow] = []
         self.setWindowTitle("Add Policy" if record is None else "Edit Policy")
         self.resize(650, 680)
         raw = record.raw if record is not None and isinstance(record.raw, dict) else {}
@@ -355,12 +359,14 @@ class PolicyEditorDialog(QDialog):
         self.conditions_container.setLayout(self.conditions_layout)
         self.conditions_scroll.setWidget(self.conditions_container)
         conditions_group_layout.addWidget(self.conditions_scroll)
-        source_rule = policy.rule if policy else None
-        if isinstance(source_rule, (AllRule, AnyRule)):
+        source_conditions = policy.conditions if policy else None
+        if isinstance(source_conditions, (AllConditions, AnyConditions)):
             self.match.setCurrentIndex(
-                self.match.findData("all" if isinstance(source_rule, AllRule) else "any")
+                self.match.findData(
+                    "all" if isinstance(source_conditions, AllConditions) else "any"
+                )
             )
-            rules = source_rule.rules
+            conditions = source_conditions.conditions
         else:
             raw_match = raw.get("match")
             self.match.setCurrentIndex(
@@ -368,15 +374,15 @@ class PolicyEditorDialog(QDialog):
             )
             raw_conditions = raw.get("conditions")
             condition_values = raw_conditions if isinstance(raw_conditions, list) else ()
-            rules = tuple(
+            conditions = tuple(
                 condition
-                for condition in (_best_effort_rule(item) for item in condition_values)
+                for condition in (_best_effort_condition(item) for item in condition_values)
                 if condition is not None
             )
-            if not rules:
-                rules = (AgeRule(365, "first_review", "gte"),)
-        for rule in rules:
-            self._add_condition(rule)
+            if not conditions:
+                conditions = (AgeCondition(365, "first_review", "gte"),)
+        for condition in conditions:
+            self._add_condition(condition)
         qconnect(self.add_condition_button.clicked, lambda: self._add_condition(None))
         self._update_condition_warning()
         layout.addWidget(conditions_group)
@@ -488,8 +494,8 @@ class PolicyEditorDialog(QDialog):
         for current, following in itertools.pairwise(widgets):
             QWidget.setTabOrder(current, following)
 
-    def _add_condition(self, rule: Rule | None) -> None:
-        row = RuleConditionRow(rule, self)
+    def _add_condition(self, condition: ConditionExpression | None) -> None:
+        row = ConditionRow(condition, self)
         self._conditions.append(row)
         self.conditions_layout.addWidget(row, alignment=Qt.AlignmentFlag.AlignTop)
         qconnect(row.remove_button.clicked, lambda: self._remove_condition(row))
@@ -501,7 +507,7 @@ class PolicyEditorDialog(QDialog):
             self._update_tab_order()
             row.kind.setFocus()
 
-    def _remove_condition(self, row: RuleConditionRow) -> None:
+    def _remove_condition(self, row: ConditionRow) -> None:
         if len(self._conditions) == 1:
             showWarning("A policy must have at least one condition", parent=self)
             return
@@ -566,9 +572,11 @@ class PolicyEditorDialog(QDialog):
         if not decks:
             showWarning("Enter at least one deck", parent=self)
             return
-        simple_rules = tuple(row.rule() for row in self._conditions)
-        rule: Rule = (
-            AllRule(simple_rules) if self.match.currentData() == "all" else AnyRule(simple_rules)
+        simple_conditions = tuple(row.condition() for row in self._conditions)
+        condition: ConditionExpression = (
+            AllConditions(simple_conditions)
+            if self.match.currentData() == "all"
+            else AnyConditions(simple_conditions)
         )
         actions: list[Action] = []
         if self.delete.isChecked():
@@ -620,7 +628,7 @@ class PolicyEditorDialog(QDialog):
                 include_subdecks=self.include_subdecks.isChecked(),
                 include_suspended=self.include_suspended.isChecked(),
             ),
-            rule=rule,
+            conditions=condition,
             actions=tuple(actions),
         )
         self.accept()
@@ -644,7 +652,7 @@ def _raw_bool(raw: object, key: str, *, default: bool) -> bool:
     return value if isinstance(value, bool) else default
 
 
-def _best_effort_rule(raw: object) -> Rule | None:
+def _best_effort_condition(raw: object) -> ConditionExpression | None:
     if not isinstance(raw, dict):
         return None
     kind = raw.get("type")
@@ -653,14 +661,14 @@ def _best_effort_rule(raw: object) -> Rule | None:
         days = 365
     if kind == "age":
         source = raw.get("source")
-        return AgeRule(
+        return AgeCondition(
             days,
             source if source in {"first_review", "card_created"} else "first_review",
             raw.get("operator") if raw.get("operator") in NUMERIC_OPERATOR_SYMBOLS else "gte",
         )
     if kind == "interval":
         operator = raw.get("operator")
-        return IntervalRule(days, operator if operator in NUMERIC_OPERATOR_SYMBOLS else "gte")
+        return IntervalCondition(days, operator if operator in NUMERIC_OPERATOR_SYMBOLS else "gte")
     if kind == "card_state":
         raw_states = raw.get("states")
         states = tuple(
@@ -669,9 +677,9 @@ def _best_effort_rule(raw: object) -> Rule | None:
             if isinstance(raw_states, list) and value in raw_states
         )
         if states:
-            return CardStateRule(states)
+            return CardStateCondition(states)
     if kind == "review_history" and raw.get("operator") in {"exists", "not_exists"}:
-        return ReviewHistoryRule(raw["operator"])
+        return ReviewHistoryCondition(raw["operator"])
     return None
 
 

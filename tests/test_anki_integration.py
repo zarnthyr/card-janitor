@@ -14,7 +14,7 @@ from card_janitor.dialogs import PolicyEditorDialog
 from card_janitor.evaluator import evaluate_policy
 from card_janitor.execution import execute_approved_reports
 from card_janitor.models import (
-    AgeRule,
+    AgeCondition,
     DeleteCardAction,
     Policy,
     Scope,
@@ -150,7 +150,7 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
             name="Mining",
             mode="on_demand",
             scope=Scope(("Mining",)),
-            rule=AgeRule(0, "first_review", "gte"),
+            conditions=AgeCondition(0, "first_review", "gte"),
             actions=(TagAction("retired"), SuspendAction()),
         )
         report = evaluate_policy(collection, policy, now_ms=first_review + 86_400_000)
@@ -191,7 +191,7 @@ def test_delete_action_can_be_undone(tmp_path: Path) -> None:
             name="Delete",
             mode="on_demand",
             scope=Scope(("Cleanup",)),
-            rule=AgeRule(0, "card_created", "gte"),
+            conditions=AgeCondition(0, "card_created", "gte"),
             actions=(DeleteCardAction(),),
         )
         report = evaluate_policy(collection, policy, now_ms=card_id)

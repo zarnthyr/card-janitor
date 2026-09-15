@@ -27,39 +27,46 @@ class Scope:
 
 
 @dataclass(frozen=True)
-class AgeRule:
+class AgeCondition:
     days: int
     source: Literal["first_review", "card_created"]
     operator: NumericOperator
 
 
 @dataclass(frozen=True)
-class IntervalRule:
+class IntervalCondition:
     days: int
     operator: NumericOperator
 
 
 @dataclass(frozen=True)
-class CardStateRule:
+class CardStateCondition:
     states: tuple[CardState, ...]
 
 
 @dataclass(frozen=True)
-class ReviewHistoryRule:
+class ReviewHistoryCondition:
     operator: Literal["exists", "not_exists"]
 
 
 @dataclass(frozen=True)
-class AllRule:
-    rules: tuple[Rule, ...]
+class AllConditions:
+    conditions: tuple[ConditionExpression, ...]
 
 
 @dataclass(frozen=True)
-class AnyRule:
-    rules: tuple[Rule, ...]
+class AnyConditions:
+    conditions: tuple[ConditionExpression, ...]
 
 
-Rule: TypeAlias = AgeRule | IntervalRule | CardStateRule | ReviewHistoryRule | AllRule | AnyRule
+ConditionExpression: TypeAlias = (
+    AgeCondition
+    | IntervalCondition
+    | CardStateCondition
+    | ReviewHistoryCondition
+    | AllConditions
+    | AnyConditions
+)
 
 
 @dataclass(frozen=True)
@@ -94,7 +101,7 @@ class Policy:
     name: str
     mode: PolicyMode
     scope: Scope
-    rule: Rule
+    conditions: ConditionExpression
     actions: tuple[Action, ...]
 
 
@@ -157,13 +164,13 @@ def _nonnegative_int(data: dict[str, Any], key: str, path: str) -> int:
     return value
 
 
-def _parse_simple_rule(
+def _parse_simple_condition(
     value: object, path: str
-) -> AgeRule | IntervalRule | CardStateRule | ReviewHistoryRule:
+) -> AgeCondition | IntervalCondition | CardStateCondition | ReviewHistoryCondition:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
-    rule_type = value.get("type")
-    if rule_type == "age":
+    condition_type = value.get("type")
+    if condition_type == "age":
         _reject_unknown_keys(value, {"type", "days", "source", "operator"}, path)
         days = _nonnegative_int(value, "days", path)
         source = value.get("source")
@@ -172,14 +179,14 @@ def _parse_simple_rule(
         operator = value.get("operator")
         if operator not in {"gt", "gte", "eq", "lte", "lt"}:
             raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
-        return AgeRule(days=days, source=source, operator=operator)
-    if rule_type == "interval":
+        return AgeCondition(days=days, source=source, operator=operator)
+    if condition_type == "interval":
         _reject_unknown_keys(value, {"type", "days", "operator"}, path)
         operator = value.get("operator")
         if operator not in {"gt", "gte", "eq", "lte", "lt"}:
             raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
-        return IntervalRule(days=_nonnegative_int(value, "days", path), operator=operator)
-    if rule_type == "card_state":
+        return IntervalCondition(days=_nonnegative_int(value, "days", path), operator=operator)
+    if condition_type == "card_state":
         _reject_unknown_keys(value, {"type", "states"}, path)
         states = value.get("states")
         valid_states = {"new", "learning", "review", "relearning"}
@@ -193,26 +200,26 @@ def _parse_simple_rule(
                 f"{path}.states: must be a non-empty array of unique values containing "
                 "'new', 'learning', 'review', or 'relearning'"
             )
-        return CardStateRule(tuple(states))
-    if rule_type == "review_history":
+        return CardStateCondition(tuple(states))
+    if condition_type == "review_history":
         _reject_unknown_keys(value, {"type", "operator"}, path)
         operator = value.get("operator")
         if operator not in {"exists", "not_exists"}:
             raise ValueError(f"{path}.operator: must be 'exists' or 'not_exists'")
-        return ReviewHistoryRule(operator)
-    raise ValueError(f"{path}.type: unknown rule type {rule_type!r}")
+        return ReviewHistoryCondition(operator)
+    raise ValueError(f"{path}.type: unknown condition type {condition_type!r}")
 
 
-def _parse_conditions(value: object, match: object, path: str) -> Rule:
+def _parse_conditions(value: object, match: object, path: str) -> ConditionExpression:
     if match not in {"all", "any"}:
         raise ValueError(f"{path}.match: must be 'all' or 'any'")
     if not isinstance(value, list) or not value:
         raise ValueError(f"{path}.conditions: must be a non-empty array")
     conditions = tuple(
-        _parse_simple_rule(condition, f"{path}.conditions[{index}]")
+        _parse_simple_condition(condition, f"{path}.conditions[{index}]")
         for index, condition in enumerate(value)
     )
-    return AllRule(conditions) if match == "all" else AnyRule(conditions)
+    return AllConditions(conditions) if match == "all" else AnyConditions(conditions)
 
 
 def _parse_action(value: object, path: str) -> tuple[Action, ...]:
@@ -296,7 +303,7 @@ def parse_policy(value: object, index: int = 0) -> Policy:
         name=name,
         mode=mode,
         scope=_parse_scope(value.get("scope"), f"{path}.scope"),
-        rule=_parse_conditions(value.get("conditions"), value.get("match"), path),
+        conditions=_parse_conditions(value.get("conditions"), value.get("match"), path),
         actions=actions,
     )
 
@@ -374,24 +381,24 @@ def parse_config(value: object) -> ParsedConfig:
     )
 
 
-def condition_to_dict(rule: Rule) -> dict[str, Any]:
-    if isinstance(rule, AgeRule):
+def condition_to_dict(condition: ConditionExpression) -> dict[str, Any]:
+    if isinstance(condition, AgeCondition):
         return {
             "type": "age",
-            "days": rule.days,
-            "source": rule.source,
-            "operator": rule.operator,
+            "days": condition.days,
+            "source": condition.source,
+            "operator": condition.operator,
         }
-    if isinstance(rule, IntervalRule):
-        return {"type": "interval", "days": rule.days, "operator": rule.operator}
-    if isinstance(rule, CardStateRule):
+    if isinstance(condition, IntervalCondition):
+        return {"type": "interval", "days": condition.days, "operator": condition.operator}
+    if isinstance(condition, CardStateCondition):
         return {
             "type": "card_state",
-            "states": list(rule.states),
+            "states": list(condition.states),
         }
-    if isinstance(rule, ReviewHistoryRule):
-        return {"type": "review_history", "operator": rule.operator}
-    raise AssertionError(f"unknown rule: {rule!r}")
+    if isinstance(condition, ReviewHistoryCondition):
+        return {"type": "review_history", "operator": condition.operator}
+    raise AssertionError(f"unknown condition: {condition!r}")
 
 
 def action_to_dict(action: Action) -> dict[str, Any]:
@@ -407,12 +414,12 @@ def action_to_dict(action: Action) -> dict[str, Any]:
 
 
 def policy_to_dict(policy: Policy) -> dict[str, Any]:
-    if isinstance(policy.rule, (AllRule, AnyRule)):
-        match = "all" if isinstance(policy.rule, AllRule) else "any"
-        conditions = policy.rule.rules
+    if isinstance(policy.conditions, (AllConditions, AnyConditions)):
+        match = "all" if isinstance(policy.conditions, AllConditions) else "any"
+        conditions = policy.conditions.conditions
     else:
         match = "all"
-        conditions = (policy.rule,)
+        conditions = (policy.conditions,)
     serialized_actions: list[dict[str, Any]] = []
     tags = list(
         dict.fromkeys(action.tag for action in policy.actions if isinstance(action, TagAction))

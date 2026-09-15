@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from card_janitor import configuration
-from card_janitor.models import AgeRule, Policy, Scope, SuspendAction
+from card_janitor.models import AgeCondition, Policy, Scope, SuspendAction
 
 
 class FakeCollection:
@@ -45,7 +45,7 @@ def sample_policy() -> Policy:
         name="Fixed",
         mode="on_demand",
         scope=Scope(("Mining",)),
-        rule=AgeRule(365, "first_review", "gte"),
+        conditions=AgeCondition(365, "first_review", "gte"),
         actions=(SuspendAction(),),
     )
 

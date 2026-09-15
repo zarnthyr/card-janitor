@@ -8,17 +8,17 @@ from card_janitor.engine import (
     ResolvedAction,
     action_is_satisfied,
     evaluate_facts,
-    matches_rule,
+    matches_conditions,
 )
 from card_janitor.models import (
     Action,
-    AgeRule,
-    AnyRule,
-    CardStateRule,
-    IntervalRule,
+    AgeCondition,
+    AnyConditions,
+    CardStateCondition,
+    ConditionExpression,
+    IntervalCondition,
     Policy,
-    ReviewHistoryRule,
-    Rule,
+    ReviewHistoryCondition,
     Scope,
     SuspendAction,
     TagAction,
@@ -43,7 +43,7 @@ def facts(**overrides: object) -> CardFacts:
 
 
 def policy(
-    rule: Rule | None = None,
+    conditions: ConditionExpression | None = None,
     actions: tuple[Action, ...] | None = None,
     scope: Scope | None = None,
 ) -> Policy:
@@ -52,45 +52,49 @@ def policy(
         name="Test",
         mode="on_demand",
         scope=scope or Scope(("Mining",)),
-        rule=rule or AgeRule(365, "first_review", "gte"),
+        conditions=conditions or AgeCondition(365, "first_review", "gte"),
         actions=actions or (SuspendAction(),),
     )
 
 
 def test_first_review_age_uses_elapsed_days_inclusively() -> None:
-    rule = AgeRule(365, "first_review", "gte")
+    condition = AgeCondition(365, "first_review", "gte")
     card = facts(first_review_ms=5000)
-    assert not matches_rule(rule, card, 5000 + 365 * MILLIS_PER_DAY - 1)
-    assert matches_rule(rule, card, 5000 + 365 * MILLIS_PER_DAY)
+    assert not matches_conditions(condition, card, 5000 + 365 * MILLIS_PER_DAY - 1)
+    assert matches_conditions(condition, card, 5000 + 365 * MILLIS_PER_DAY)
 
 
 def test_first_review_age_does_not_approximate_missing_history() -> None:
     for operator in ("gt", "gte", "eq", "lte", "lt"):
-        assert not matches_rule(
-            AgeRule(1, "first_review", operator), facts(first_review_ms=None), 10**12
+        assert not matches_conditions(
+            AgeCondition(1, "first_review", operator), facts(first_review_ms=None), 10**12
         )
 
 
-def test_any_rule_matches_either_child() -> None:
-    rule = AnyRule((AgeRule(365, "first_review", "gte"), IntervalRule(180, "gte")))
-    assert matches_rule(rule, facts(interval=180), 2000 + MILLIS_PER_DAY)
+def test_any_conditions_matches_either_child() -> None:
+    condition = AnyConditions(
+        (AgeCondition(365, "first_review", "gte"), IntervalCondition(180, "gte"))
+    )
+    assert matches_conditions(condition, facts(interval=180), 2000 + MILLIS_PER_DAY)
 
 
-def test_interval_rule_uses_current_interval_without_requiring_revlog() -> None:
-    assert matches_rule(IntervalRule(180, "gte"), facts(interval=180, first_review_ms=None), 0)
+def test_interval_condition_uses_current_interval_without_requiring_revlog() -> None:
+    assert matches_conditions(
+        IntervalCondition(180, "gte"), facts(interval=180, first_review_ms=None), 0
+    )
 
 
 def test_card_state_membership_uses_card_type_even_when_buried() -> None:
-    rule = CardStateRule(("new", "learning"))
-    assert matches_rule(rule, facts(card_type=0, queue=-2), 0)
-    assert not matches_rule(rule, facts(card_type=2), 0)
+    condition = CardStateCondition(("new", "learning"))
+    assert matches_conditions(condition, facts(card_type=0, queue=-2), 0)
+    assert not matches_conditions(condition, facts(card_type=2), 0)
 
 
 def test_review_history_uses_genuine_answer_entries() -> None:
-    rule = ReviewHistoryRule("not_exists")
-    assert matches_rule(rule, facts(card_type=0, first_review_ms=None), 0)
-    assert not matches_rule(rule, facts(card_type=0, first_review_ms=2000), 0)
-    assert matches_rule(ReviewHistoryRule("exists"), facts(first_review_ms=2000), 0)
+    condition = ReviewHistoryCondition("not_exists")
+    assert matches_conditions(condition, facts(card_type=0, first_review_ms=None), 0)
+    assert not matches_conditions(condition, facts(card_type=0, first_review_ms=2000), 0)
+    assert matches_conditions(ReviewHistoryCondition("exists"), facts(first_review_ms=2000), 0)
 
 
 @pytest.mark.parametrize(
@@ -98,21 +102,21 @@ def test_review_history_uses_genuine_answer_entries() -> None:
     [("gt", False), ("gte", True), ("eq", True), ("lte", True), ("lt", False)],
 )
 def test_numeric_operators(operator: str, expected: bool) -> None:
-    assert matches_rule(IntervalRule(30, operator), facts(interval=30), 0) is expected
+    assert matches_conditions(IntervalCondition(30, operator), facts(interval=30), 0) is expected
 
 
 def test_exact_age_matches_one_completed_day_bucket() -> None:
-    rule = AgeRule(30, "first_review", "eq")
+    condition = AgeCondition(30, "first_review", "eq")
     card = facts(first_review_ms=5000)
-    assert matches_rule(rule, card, 5000 + 30 * MILLIS_PER_DAY)
-    assert matches_rule(rule, card, 5000 + 31 * MILLIS_PER_DAY - 1)
-    assert not matches_rule(rule, card, 5000 + 31 * MILLIS_PER_DAY)
+    assert matches_conditions(condition, card, 5000 + 30 * MILLIS_PER_DAY)
+    assert matches_conditions(condition, card, 5000 + 31 * MILLIS_PER_DAY - 1)
+    assert not matches_conditions(condition, card, 5000 + 31 * MILLIS_PER_DAY)
 
 
 def test_scope_excludes_suspended_and_filtered_by_default() -> None:
     cards = [facts(), facts(card_id=2, queue=-1), facts(card_id=3, original_deck_id=1)]
     report = evaluate_facts(
-        policy(rule=IntervalRule(1, "gte")),
+        policy(conditions=IntervalCondition(1, "gte")),
         cards,
         {1},
         (ResolvedAction(SuspendAction()),),
@@ -126,7 +130,7 @@ def test_actionable_excludes_cards_with_all_actions_satisfied() -> None:
     configured = policy(
         actions=(TagAction("retired"), SuspendAction()),
         scope=Scope(("Mining",), include_suspended=True),
-        rule=IntervalRule(1, "gte"),
+        conditions=IntervalCondition(1, "gte"),
     )
     actions = (ResolvedAction(TagAction("retired")), ResolvedAction(SuspendAction()))
     report = evaluate_facts(configured, [card], {1}, actions, now_ms=10**12)

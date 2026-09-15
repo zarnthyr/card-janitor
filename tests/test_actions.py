@@ -4,7 +4,7 @@
 from card_janitor.actions import build_execution_plan
 from card_janitor.engine import CardFacts, PolicyReport, ResolvedAction
 from card_janitor.models import (
-    IntervalRule,
+    IntervalCondition,
     MoveAction,
     Policy,
     Scope,
@@ -24,7 +24,7 @@ def report(actions: tuple[ResolvedAction, ...], value: CardFacts | None = None) 
         name="Policy",
         mode="automatic",
         scope=Scope(("Mining",)),
-        rule=IntervalRule(1, "gte"),
+        conditions=IntervalCondition(1, "gte"),
         actions=tuple(a.action for a in actions),
     )
     return PolicyReport(policy, (item,), (item,), 0, actions)

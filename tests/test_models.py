@@ -2,12 +2,12 @@
 # License: GNU AGPL v3 or later
 
 from card_janitor.models import (
-    AgeRule,
-    AllRule,
-    CardStateRule,
+    AgeCondition,
+    AllConditions,
+    CardStateCondition,
     DeleteCardAction,
     MoveAction,
-    ReviewHistoryRule,
+    ReviewHistoryCondition,
     TagAction,
     parse_config,
     policy_to_dict,
@@ -53,11 +53,11 @@ def test_parses_flat_compound_policy() -> None:
     )
     parsed = parse_config(raw)
     assert not parsed.issues
-    rule = parsed.config.policies[0].rule
-    assert isinstance(rule, AllRule)
-    assert rule.rules == (
-        AgeRule(days=365, source="first_review", operator="gte"),
-        CardStateRule(states=("new",)),
+    condition = parsed.config.policies[0].conditions
+    assert isinstance(condition, AllConditions)
+    assert condition.conditions == (
+        AgeCondition(days=365, source="first_review", operator="gte"),
+        CardStateCondition(states=("new",)),
     )
 
 
@@ -74,7 +74,7 @@ def test_rejects_nested_compound_policy() -> None:
         ],
     )
     parsed = parse_config(raw)
-    assert "unknown rule type" in str(parsed.issues[0])
+    assert "unknown condition type" in str(parsed.issues[0])
     assert parsed.policy_records[0].policy is None
     assert parsed.policy_records[0].raw is raw["policies"][0]
 
@@ -225,27 +225,31 @@ def test_wrong_config_version_fails_closed() -> None:
     assert str(parsed.issues[0]) == "config_version: must be 1"
 
 
-def test_removed_answer_rules_are_rejected() -> None:
-    for rule_type in ("answer_count", "successful_answers"):
-        parsed = parse_config(policy_config(conditions=[{"type": rule_type, "count": 3}]))
-        assert "unknown rule type" in str(parsed.issues[0])
+def test_removed_answer_conditions_are_rejected() -> None:
+    for condition_type in ("answer_count", "successful_answers"):
+        parsed = parse_config(policy_config(conditions=[{"type": condition_type, "count": 3}]))
+        assert "unknown condition type" in str(parsed.issues[0])
         assert not parsed.config.policies
 
 
-def test_review_history_rule_parses() -> None:
+def test_review_history_condition_parses() -> None:
     parsed = parse_config(
         policy_config(conditions=[{"type": "review_history", "operator": "not_exists"}])
     )
     assert not parsed.issues
-    assert parsed.config.policies[0].rule == AllRule((ReviewHistoryRule("not_exists"),))
+    assert parsed.config.policies[0].conditions == AllConditions(
+        (ReviewHistoryCondition("not_exists"),)
+    )
 
 
-def test_card_state_rule_parses() -> None:
+def test_card_state_condition_parses() -> None:
     parsed = parse_config(
         policy_config(conditions=[{"type": "card_state", "states": ["new", "learning"]}])
     )
     assert not parsed.issues
-    assert parsed.config.policies[0].rule == AllRule((CardStateRule(("new", "learning")),))
+    assert parsed.config.policies[0].conditions == AllConditions(
+        (CardStateCondition(("new", "learning")),)
+    )
 
 
 def test_numeric_operator_is_required() -> None:

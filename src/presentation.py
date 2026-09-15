@@ -7,16 +7,16 @@ from aqt.qt import QLabel, QWidget
 
 from .models import (
     Action,
-    AgeRule,
-    AllRule,
-    AnyRule,
-    CardStateRule,
+    AgeCondition,
+    AllConditions,
+    AnyConditions,
+    CardStateCondition,
+    ConditionExpression,
     DeleteCardAction,
-    IntervalRule,
+    IntervalCondition,
     MoveAction,
     Policy,
-    ReviewHistoryRule,
-    Rule,
+    ReviewHistoryCondition,
     Scope,
     SuspendAction,
     TagAction,
@@ -103,28 +103,32 @@ def policy_tooltip(policy: Policy) -> str:
         decks += " and its subdecks" if len(policy.scope.decks) == 1 else " and their subdecks"
     return (
         f"Cards in {decks} will be cleaned up when:\n"
-        f"{describe_rule(policy.rule)}\n\n"
+        f"{describe_conditions(policy.conditions)}\n\n"
         f"Actions:\n{describe_actions(policy.actions)}"
     )
 
 
-def describe_rule(rule: Rule, *, nested: bool = False) -> str:
-    if isinstance(rule, AgeRule):
-        source = "Age since first review" if rule.source == "first_review" else "Age since creation"
-        return f"{source} {NUMERIC_OPERATOR_SYMBOLS[rule.operator]} {rule.days} days"
-    if isinstance(rule, IntervalRule):
-        return f"Interval {NUMERIC_OPERATOR_SYMBOLS[rule.operator]} {rule.days} days"
-    if isinstance(rule, CardStateRule):
-        states = ", ".join(state.capitalize() for state in rule.states)
+def describe_conditions(condition: ConditionExpression, *, nested: bool = False) -> str:
+    if isinstance(condition, AgeCondition):
+        source = (
+            "Age since first review" if condition.source == "first_review" else "Age since creation"
+        )
+        return f"{source} {NUMERIC_OPERATOR_SYMBOLS[condition.operator]} {condition.days} days"
+    if isinstance(condition, IntervalCondition):
+        return f"Interval {NUMERIC_OPERATOR_SYMBOLS[condition.operator]} {condition.days} days"
+    if isinstance(condition, CardStateCondition):
+        states = ", ".join(state.capitalize() for state in condition.states)
         return f"Card state is {states}"
-    if isinstance(rule, ReviewHistoryRule):
-        operator = "exists" if rule.operator == "exists" else "does not exist"
+    if isinstance(condition, ReviewHistoryCondition):
+        operator = "exists" if condition.operator == "exists" else "does not exist"
         return f"Review history {operator}"
-    if isinstance(rule, (AllRule, AnyRule)):
-        operator = "\nAND " if isinstance(rule, AllRule) else "\nOR "
-        description = operator.join(describe_rule(child, nested=True) for child in rule.rules)
+    if isinstance(condition, (AllConditions, AnyConditions)):
+        operator = "\nAND " if isinstance(condition, AllConditions) else "\nOR "
+        description = operator.join(
+            describe_conditions(child, nested=True) for child in condition.conditions
+        )
         return f"({description})" if nested else description
-    message = f"unknown cleanup rule: {rule!r}"
+    message = f"unknown cleanup condition: {condition!r}"
     raise AssertionError(message)
 
 

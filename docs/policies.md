@@ -71,6 +71,12 @@ Automatic cleanup runs when a profile opens if it has not yet run that day. It
 also runs when Anki's day changes while the application remains open. Use Card
 Janitor whenever you want to run policies on demand.
 
+## Scope
+
+`decks` must contain one or more exact deck names. `include_subdecks` includes
+all descendants of each named deck. Suspended cards are excluded by default.
+Buried cards remain eligible because burial is temporary.
+
 ## Conditions
 
 ### Age
@@ -147,10 +153,6 @@ to greater than, at least, exactly, at most, and less than.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
 
 `delete_card` must be the policy's only action. It can use `mode: "automatic"`, but automatic deletion runs without confirmation. On-demand deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the example uses `mode: "on_demand"` with reversible tag, suspend, and move actions.
-
-## Scope behavior
-
-`decks` must contain one or more exact deck names. `include_subdecks` includes all descendants of each named deck. Suspended cards are excluded by default. Buried cards remain eligible because burial is temporary.
 
 ## Multiple profiles
 
