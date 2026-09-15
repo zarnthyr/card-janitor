@@ -25,9 +25,13 @@ from aqt.qt import (
     QHeaderView,
     QKeyEvent,
     QLabel,
+    QPainter,
     QPushButton,
+    QRect,
     QSignalBlocker,
     QStackedWidget,
+    QStyle,
+    QStyleOptionButton,
     Qt,
     QTableWidget,
     QTableWidgetItem,
@@ -108,6 +112,57 @@ class DashboardRow:
     report: PolicyReport | None
 
 
+class CheckBoxHeader(QHeaderView):
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(Qt.Orientation.Horizontal, parent)
+        self._check_state = Qt.CheckState.Unchecked
+        self._check_enabled = False
+        self.setSectionsClickable(True)
+
+    @property
+    def check_state(self) -> Qt.CheckState:
+        return self._check_state
+
+    def set_check_state(self, state: Qt.CheckState, *, enabled: bool) -> None:
+        if self._check_state == state and self._check_enabled == enabled:
+            return
+        self._check_state = state
+        self._check_enabled = enabled
+        self.viewport().update()
+
+    def paintSection(  # noqa: N802
+        self,
+        painter: QPainter,
+        rect: QRect,
+        logical_index: int,
+    ) -> None:
+        super().paintSection(painter, rect, logical_index)
+        if logical_index != CardJanitorDialog.COLUMN_RUN:
+            return
+
+        option = QStyleOptionButton()
+        option.initFrom(self)
+        if not self._check_enabled:
+            option.state &= ~QStyle.StateFlag.State_Enabled
+        if self._check_state == Qt.CheckState.Checked:
+            option.state |= QStyle.StateFlag.State_On
+        elif self._check_state == Qt.CheckState.PartiallyChecked:
+            option.state |= QStyle.StateFlag.State_NoChange
+        else:
+            option.state |= QStyle.StateFlag.State_Off
+
+        style = self.style()
+        width = style.pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth, option, self)
+        height = style.pixelMetric(QStyle.PixelMetric.PM_IndicatorHeight, option, self)
+        option.rect = QRect(
+            rect.x() + (rect.width() - width) // 2,
+            rect.y() + (rect.height() - height) // 2,
+            width,
+            height,
+        )
+        style.drawControl(QStyle.ControlElement.CE_CheckBox, option, painter, self)
+
+
 class CardJanitorDialog(QDialog):
     COLUMN_RUN = 0
     COLUMN_POLICY = 1
@@ -143,8 +198,13 @@ class CardJanitorDialog(QDialog):
         layout.addLayout(intro)
 
         self.table = QTableWidget(0, 7, self)
+        self.table_header = CheckBoxHeader(self.table)
+        self.table.setHorizontalHeader(self.table_header)
         self.table.setHorizontalHeaderLabels(
             ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "Cards")
+        )
+        self.table.horizontalHeaderItem(self.COLUMN_RUN).setToolTip(
+            "Include or exclude all valid policies"
         )
         self.table.horizontalHeaderItem(self.COLUMN_COUNT).setToolTip(
             "Cards that still require at least one configured action"
@@ -173,6 +233,7 @@ class CardJanitorDialog(QDialog):
         ):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         qconnect(self.table.itemChanged, self._on_item_changed)
+        qconnect(self.table_header.sectionClicked, self._on_header_clicked)
         qconnect(self.table.itemSelectionChanged, self._update_buttons)
         qconnect(self.table.itemDoubleClicked, self._on_item_double_clicked)
         qconnect(self.add_button.clicked, self._add_policy)
@@ -358,6 +419,7 @@ class CardJanitorDialog(QDialog):
         if self._rows:
             self.table.selectRow(0)
         self.content_stack.setCurrentWidget(self.table if self._rows else self.empty_page)
+        self._sync_header_check_state()
         self._update_summary()
         self._update_buttons()
 
@@ -379,7 +441,40 @@ class CardJanitorDialog(QDialog):
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() == self.COLUMN_RUN:
+            self._sync_header_check_state()
             self._update_summary()
+
+    def _on_header_clicked(self, logical_index: int) -> None:
+        if logical_index != self.COLUMN_RUN or not self._rows:
+            return
+        target = (
+            Qt.CheckState.Unchecked
+            if self.table_header.check_state == Qt.CheckState.Checked
+            else Qt.CheckState.Checked
+        )
+        signal_blocker = QSignalBlocker(self.table)
+        for row in range(len(self._rows)):
+            item = self.table.item(row, self.COLUMN_RUN)
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                item.setCheckState(target)
+        del signal_blocker
+        self._sync_header_check_state()
+        self._update_summary()
+
+    def _sync_header_check_state(self) -> None:
+        items = [
+            self.table.item(row, self.COLUMN_RUN)
+            for row in range(len(self._rows))
+            if self.table.item(row, self.COLUMN_RUN).flags() & Qt.ItemFlag.ItemIsUserCheckable
+        ]
+        checked = sum(item.checkState() == Qt.CheckState.Checked for item in items)
+        if not checked:
+            state = Qt.CheckState.Unchecked
+        elif checked == len(items):
+            state = Qt.CheckState.Checked
+        else:
+            state = Qt.CheckState.PartiallyChecked
+        self.table_header.set_check_state(state, enabled=bool(items))
 
     def _on_item_double_clicked(self, item: QTableWidgetItem) -> None:
         if item.column() != self.COLUMN_RUN:
