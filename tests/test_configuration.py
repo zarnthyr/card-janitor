@@ -25,10 +25,14 @@ def fake_main_window(
     collection: FakeCollection,
     settings: object,
     settings_writes: list[tuple[str, object]],
+    *,
+    user_settings: object | None = None,
 ) -> SimpleNamespace:
+    metadata = {"config": settings if user_settings is None else user_settings}
     return SimpleNamespace(
         col=collection,
         addonManager=SimpleNamespace(
+            addonMeta=lambda _module: metadata,
             getConfig=lambda _module: settings,
             writeConfig=lambda module, value: settings_writes.append((module, value)),
         ),
@@ -180,3 +184,27 @@ def test_migrate_global_policies_moves_them_to_current_collection(
             },
         )
     ]
+
+
+def test_migration_ignores_stale_default_after_collection_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stale_defaults = {
+        "config_version": 1,
+        "notify_after_automatic_run": True,
+        "debug_logging": False,
+        "policies": [{"name": "Stale default"}],
+    }
+    collection = FakeCollection(
+        {configuration.COLLECTION_POLICIES_KEY: [{"name": "Migrated policies"}]}
+    )
+    writes: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        configuration,
+        "mw",
+        fake_main_window(collection, stale_defaults, writes, user_settings={}),
+    )
+
+    assert not configuration.migrate_global_policies()
+    assert collection.writes == []
+    assert writes == []

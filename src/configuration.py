@@ -84,6 +84,16 @@ def migrate_global_policies() -> bool:
     policies = settings["policies"]
     missing = object()
     existing = mw.col.get_config(COLLECTION_POLICIES_KEY, missing)
+    if existing is not missing and existing != policies:
+        metadata = mw.addonManager.addonMeta(ADDON_MODULE)
+        user_settings = metadata.get("config", {}) if isinstance(metadata, dict) else {}
+        user_policies = user_settings.get("policies", missing)
+        if user_policies is missing:
+            # The collection write completed on an earlier attempt. The remaining
+            # policy list comes from an obsolete development config.json default.
+            return False
+        policies = user_policies
+
     if existing is missing:
         _write_policies(deepcopy(policies))
     elif existing != policies:
