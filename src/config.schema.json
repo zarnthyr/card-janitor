@@ -18,6 +18,10 @@
     "debug_logging": {
       "type": "boolean",
       "description": "Print policy evaluation diagnostics to the terminal"
+    },
+    "policies": {
+      "type": "array",
+      "description": "Deprecated legacy policy storage; policies are automatically moved into the current collection"
     }
   }
 }

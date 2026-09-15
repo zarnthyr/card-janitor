@@ -19,6 +19,18 @@ def test_configuration_schema_and_default_config_are_valid() -> None:
     Draft202012Validator(schema).validate(config)
 
 
+def test_configuration_schema_accepts_legacy_policies_for_migration() -> None:
+    schema = json.loads((ROOT / "src/config.schema.json").read_text(encoding="utf-8"))
+    legacy_config = {
+        "config_version": 1,
+        "notify_after_automatic_run": True,
+        "debug_logging": False,
+        "policies": [{"legacy": "preserved for repair"}],
+    }
+
+    Draft202012Validator(schema).validate(legacy_config)
+
+
 def test_schema_accepts_documented_example() -> None:
     schema = json.loads((ROOT / "src/advanced.schema.json").read_text(encoding="utf-8"))
     help_text = (ROOT / "docs/config.md").read_text(encoding="utf-8")
