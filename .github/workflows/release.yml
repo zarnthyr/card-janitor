@@ -1,0 +1,95 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag to build, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish release
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      UV_PYTHON: "3.10"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Validate release tag
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must look like v0.1.0; got $RELEASE_TAG"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-suffix: release
+
+      - name: Install Qt system dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libegl1
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Validate project version
+        run: |
+          python - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+          match = re.search(r'(?m)^version = "([^"]+)"$', pyproject)
+
+          if not match:
+              raise SystemExit("Could not find project version in pyproject.toml")
+
+          project_version = match.group(1)
+          tag_version = os.environ["RELEASE_TAG"].removeprefix("v")
+
+          if project_version != tag_version:
+              raise SystemExit(
+                  f"Release tag {os.environ['RELEASE_TAG']} does not match "
+                  f"pyproject.toml version {project_version}"
+              )
+          PY
+
+      - name: Run checks
+        run: make check
+
+      - name: Build add-on
+        run: make clean build
+
+      - name: Inspect package
+        run: make inspect
+
+      - name: Publish GitHub release
+        run: |
+          gh release create "$RELEASE_TAG" \
+            card-janitor.ankiaddon \
+            --verify-tag \
+            --title "Card Janitor $RELEASE_TAG" \
+            --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

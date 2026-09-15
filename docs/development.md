@@ -84,3 +84,38 @@ development installation and its local configuration with:
 ```bash
 make dev-uninstall
 ```
+
+## GitHub workflows
+
+Pull requests and pushes to `main` run the CI workflow. CI checks formatting,
+linting, and tests on Python 3.10 through 3.13, then builds and inspects the
+add-on package once. The resulting `.ankiaddon` file is uploaded as a workflow
+artifact.
+
+Version tags such as `v0.1.0` run the release workflow. The workflow verifies
+that the tag matches the version in `pyproject.toml`, repeats the checks, and
+publishes a GitHub Release with `card-janitor.ankiaddon` attached. An existing
+tag can also be rebuilt from the workflow's manual trigger.
+
+## Release process
+
+1. Update the version in `pyproject.toml`
+2. Confirm the README and policy documentation describe the supported behavior
+3. Run `make clean all inspect`
+4. Install that packaged artifact in the expendable `dev` profile and complete
+   the manual integration test
+5. Commit the version and documentation changes
+6. Push `main` and confirm CI passes
+7. Create and push a signed version tag matching `pyproject.toml`
+
+For the first release, the final commands are:
+
+```bash
+git tag -s v0.1.0 -m "Card Janitor v0.1.0"
+git push origin main
+git push origin v0.1.0
+```
+
+Pushing the tag publishes the GitHub Release automatically. Do not move or
+reuse a published version tag; increment the project version for the next
+release.

@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-suffix: python-${{ matrix.python-version }}
+
+      - name: Install Qt system dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libegl1
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run checks
+        run: make check
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    needs: check
+    env:
+      UV_PYTHON: "3.10"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.10"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v8.2.0
+        with:
+          enable-cache: true
+          cache-suffix: package
+
+      - name: Install Qt system dependencies
+        run: sudo apt-get update && sudo apt-get install --yes libegl1
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Build add-on
+        run: make build
+
+      - name: Inspect package
+        run: make inspect
+
+      - name: Upload add-on artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: card-janitor
+          path: card-janitor.ankiaddon
