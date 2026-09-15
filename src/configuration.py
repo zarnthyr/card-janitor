@@ -11,68 +11,123 @@ from aqt import mw
 from .models import CONFIG_VERSION, ParsedConfig, Policy, parse_config, policy_to_dict
 
 ADDON_MODULE = "card_janitor"
-DEFAULT_CONFIG: dict[str, Any] = {
+COLLECTION_POLICIES_KEY = "card_janitor_policies"
+DEFAULT_SETTINGS: dict[str, Any] = {
     "config_version": CONFIG_VERSION,
     "notify_after_automatic_run": True,
     "debug_logging": False,
-    "policies": [],
 }
+DEFAULT_CONFIG: dict[str, Any] = {**DEFAULT_SETTINGS, "policies": []}
 
 
 class ConfigWriteError(ValueError):
-    """Raised when the raw document cannot safely be updated."""
+    """Raised when configuration cannot safely be updated."""
+
+
+def load_raw_settings() -> object:
+    if mw is None:
+        return DEFAULT_SETTINGS.copy()
+    config = mw.addonManager.getConfig(ADDON_MODULE)
+    return DEFAULT_SETTINGS.copy() if config is None else config
+
+
+def load_raw_policies() -> object:
+    if mw is None or getattr(mw, "col", None) is None:
+        return []
+    return mw.col.get_config(COLLECTION_POLICIES_KEY, [])
 
 
 def load_raw_config() -> object:
-    if mw is None:
-        return DEFAULT_CONFIG.copy()
-    config = mw.addonManager.getConfig(ADDON_MODULE)
-    return DEFAULT_CONFIG.copy() if config is None else config
+    """Combine add-on-wide settings with the current collection's policies."""
+    settings = load_raw_settings()
+    if not isinstance(settings, dict):
+        return settings
+    combined = deepcopy(settings)
+    combined.pop("policies", None)
+    combined["policies"] = deepcopy(load_raw_policies())
+    return combined
 
 
 def load_config() -> ParsedConfig:
     return parse_config(load_raw_config())
 
 
-def save_policy(policy: Policy, *, index: int | None = None) -> None:
-    """Add or replace one policy while preserving all other raw configuration."""
-    raw = load_raw_config()
-    if not isinstance(raw, dict):
-        message = "The add-on configuration is not a JSON object"
+def _write_policies(policies: object) -> None:
+    if mw is None or getattr(mw, "col", None) is None:
+        message = "No collection is open"
         raise ConfigWriteError(message)
-    policies = raw.get("policies")
+    mw.col.set_config(COLLECTION_POLICIES_KEY, policies)
+
+
+def save_raw_config(config: object) -> None:
+    """Split a combined advanced configuration into its two storage locations."""
+    if not isinstance(config, dict):
+        message = "The configuration is not a JSON object"
+        raise ConfigWriteError(message)
+    policies = config.get("policies")
     if not isinstance(policies, list):
         message = "The policies setting is not an array"
         raise ConfigWriteError(message)
-    updated = deepcopy(raw)
-    updated_policies = updated["policies"]
+    settings = {key: deepcopy(config[key]) for key in DEFAULT_SETTINGS if key in config}
+    _write_policies(deepcopy(policies))
+    mw.addonManager.writeConfig(ADDON_MODULE, settings)
+
+
+def migrate_global_policies() -> bool:
+    """Move former add-on-wide policies into the open collection."""
+    settings = load_raw_settings()
+    if not isinstance(settings, dict) or "policies" not in settings:
+        return False
+    if mw is None or getattr(mw, "col", None) is None:
+        return False
+
+    policies = settings["policies"]
+    missing = object()
+    existing = mw.col.get_config(COLLECTION_POLICIES_KEY, missing)
+    if existing is missing:
+        _write_policies(deepcopy(policies))
+    elif existing != policies:
+        message = (
+            "Policies already exist in this collection and differ from the add-on-wide policies"
+        )
+        raise ConfigWriteError(message)
+
+    updated = deepcopy(settings)
+    del updated["policies"]
+    mw.addonManager.writeConfig(ADDON_MODULE, updated)
+    return True
+
+
+def save_policy(policy: Policy, *, index: int | None = None) -> None:
+    """Add or replace one policy while preserving all other collection policies."""
+    policies = load_raw_policies()
+    if not isinstance(policies, list):
+        message = "The policies setting is not an array"
+        raise ConfigWriteError(message)
+    updated = deepcopy(policies)
     serialized = policy_to_dict(policy)
     if index is None:
-        updated_policies.append(serialized)
-    elif 0 <= index < len(updated_policies):
-        updated_policies[index] = serialized
+        updated.append(serialized)
+    elif 0 <= index < len(updated):
+        updated[index] = serialized
     else:
         message = "The policy no longer exists. Refresh and try again."
         raise ConfigWriteError(message)
-    mw.addonManager.writeConfig(ADDON_MODULE, updated)
+    _write_policies(updated)
 
 
 def remove_policy(*, index: int) -> None:
-    """Remove one policy while preserving all other raw configuration."""
-    raw = load_raw_config()
-    if not isinstance(raw, dict):
-        message = "The add-on configuration is not a JSON object"
-        raise ConfigWriteError(message)
-    policies = raw.get("policies")
+    """Remove one policy while preserving all other collection policies."""
+    policies = load_raw_policies()
     if not isinstance(policies, list):
         message = "The policies setting is not an array"
         raise ConfigWriteError(message)
     if not 0 <= index < len(policies):
         message = "The policy no longer exists. Refresh and try again."
         raise ConfigWriteError(message)
-    updated = deepcopy(raw)
-    del updated["policies"][index]
-    mw.addonManager.writeConfig(ADDON_MODULE, updated)
+    updated = deepcopy(policies)
+    del updated[index]
+    _write_policies(updated)
 
 
 def save_settings(
@@ -80,12 +135,13 @@ def save_settings(
     notify_after_automatic_run: bool,
     debug_logging: bool,
 ) -> None:
-    """Update add-on-wide settings while preserving every policy entry."""
-    raw = load_raw_config()
+    """Update add-on-wide settings without changing collection policies."""
+    raw = load_raw_settings()
     if not isinstance(raw, dict):
         message = "The add-on configuration is not a JSON object"
         raise ConfigWriteError(message)
     updated = deepcopy(raw)
+    updated.pop("policies", None)
     updated["config_version"] = CONFIG_VERSION
     updated["notify_after_automatic_run"] = notify_after_automatic_run
     updated["debug_logging"] = debug_logging

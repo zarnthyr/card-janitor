@@ -121,10 +121,10 @@ Policies can be created and repaired in the manager. **Settings…** controls
 notifications and debug logging. Its **Edit JSON…** button
 opens the underlying configuration for advanced editing.
 
-Policy definitions and settings are shared across Anki profiles. Automatic
-cleanup is tracked separately for each profile and runs against the decks in
-the profile being opened. Verify every Automatic policy's deck scope before
-using Card Janitor with another profile.
+Policy definitions are stored in the current collection and sync with it, so
+each profile has its own policies. Notification and debug settings are shared
+across profiles on the same Anki installation. Automatic cleanup is tracked
+separately for each profile.
 
 Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
 
@@ -136,7 +136,7 @@ See [config.md](./docs/config.md) for the complete schema and examples.
 * First-review age cannot recover review history that was deleted or omitted during import
 * Anki does not store a reliable per-card timestamp for when a card was imported into the current collection
 * Decks are configured by name, so renamed or missing decks cause that policy to fail closed
-* Policies and settings are shared across Anki profiles
+* Notification and debug settings are shared across Anki profiles on the same installation
 
 ## Development
 

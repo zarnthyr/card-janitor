@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import contextlib
 
-from aqt import gui_hooks
+from aqt import gui_hooks, mw
+from aqt.utils import showWarning
 
 from .automatic import run_automatic_policies
-from .log import exception
+from .configuration import ConfigWriteError, migrate_global_policies
+from .log import debug, exception
 from .ui import close_card_janitor, safe_install_menu
 
 
@@ -34,6 +36,18 @@ def _replace_hook(hook: object, callback: object) -> None:
 def on_profile_loaded() -> None:
     try:
         safe_install_menu()
+        try:
+            migrated = migrate_global_policies()
+        except ConfigWriteError:
+            exception("failed to migrate policies into collection configuration")
+            showWarning(
+                "Card Janitor could not move existing policies into this collection. "
+                "Automatic cleanup was not run.",
+                parent=mw,
+            )
+            return
+        if migrated:
+            debug("migrated policies into collection configuration")
         run_automatic_policies(trigger="profile_open")
     except Exception:
         exception("profile-open callback failed")

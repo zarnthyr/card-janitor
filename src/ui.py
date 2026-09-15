@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import json
 from collections import Counter
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -40,17 +41,20 @@ from aqt.utils import askUser, showWarning, tooltip
 from .actions import ExecutionResult, build_execution_plan
 from .configuration import (
     ADDON_MODULE,
+    DEFAULT_CONFIG,
     ConfigWriteError,
     load_config,
     load_raw_config,
     remove_policy,
     save_policy,
+    save_raw_config,
 )
 from .dialogs import PolicyEditorDialog, SettingsDialog
 from .evaluator import evaluate_policies
 from .execution import execute_approved_reports
 from .log import configure as configure_logging
 from .log import debug, error, exception
+from .models import parse_config
 from .presentation import (
     applied_message,
     card_count_text,
@@ -658,6 +662,34 @@ def execute_on_demand_reports(
     CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
 
 
+class AdvancedConfigEditor(ConfigEditor):
+    def onRestoreDefaults(self) -> None:  # noqa: N802 - Qt/Anki virtual method
+        self.updateText(DEFAULT_CONFIG.copy())
+
+    def accept(self) -> None:
+        text = self.form.editor.toPlainText()
+        text = aqt.gui_hooks.addon_config_editor_will_update_json(text, ADDON_MODULE)
+        try:
+            config = json.loads(text)
+        except (TypeError, ValueError) as exc:
+            showWarning(f"Invalid JSON: {exc}", parent=self)
+            return
+        parsed = parse_config(config)
+        if parsed.issues:
+            details = "\n".join(f"• {issue}" for issue in parsed.issues)
+            showWarning(f"Card Janitor configuration has errors:\n\n{details}", parent=self)
+            return
+        try:
+            save_raw_config(config)
+        except ConfigWriteError as exc:
+            error("failed to save advanced configuration", reason=str(exc))
+            showWarning(str(exc), parent=self)
+            return
+        self.conf = config
+        self.onClose()
+        QDialog.accept(self)
+
+
 def open_json_settings(*, parent: QWidget, on_close: Callable[[], None] | None = None) -> None:
     config = load_raw_config()
     if not isinstance(config, dict):
@@ -666,7 +698,7 @@ def open_json_settings(*, parent: QWidget, on_close: Callable[[], None] | None =
         return
     editor_parent = QDialog(parent)
     editor_parent.mgr = mw.addonManager
-    editor = ConfigEditor(editor_parent, ADDON_MODULE, config)
+    editor = AdvancedConfigEditor(editor_parent, ADDON_MODULE, config)
     setattr(mw, CONFIG_EDITOR_ATTR, (editor_parent, editor))
 
     def editor_closed(_result: int) -> None:

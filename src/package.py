@@ -20,6 +20,7 @@ REQUIRED_PACKAGE_FILES = {
     "README.md",
     "__init__.py",
     "actions.py",
+    "advanced.schema.json",
     "addon.py",
     "automatic.py",
     "config.json",
@@ -124,6 +125,7 @@ def development_link_sources() -> dict[str, Path]:
     links = {path.name: path for path in source_dir.glob("*.py") if path.name != "package.py"}
     links.update(
         {
+            "advanced.schema.json": source_dir / "advanced.schema.json",
             "config.schema.json": source_dir / "config.schema.json",
             "manifest.json": project_dir / "manifest.json",
             "README.md": project_dir / "README.md",

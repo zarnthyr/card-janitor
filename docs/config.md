@@ -2,7 +2,10 @@
 
 Add and edit policies in the Card Janitor window. Use **Settings** to configure
 notifications and debug logging. Choose **Edit JSON** to edit the underlying
-configuration directly.
+settings and the current collection's policies together.
+
+Policies are stored in the current Anki collection and sync with it. Notification
+and debug settings are add-on-wide and shared by profiles on this installation.
 
 If any setting or policy is invalid, Card Janitor will not run cleanup until
 the problem is fixed. Invalid policies remain visible in Card Janitor and can
@@ -19,9 +22,9 @@ begin in On demand mode, and inspect matching cards with **Browse** before
 running cleanup. Automatic policies run without confirmation.
 
 Each cleanup run is recorded as one entry in Anki's collection undo history.
-Policy and settings changes are stored in the add-on configuration, outside the
-collection undo system. Removing a policy therefore requires confirmation but
-cannot be undone with Anki's Undo command.
+Policy configuration changes do not create collection undo entries. Removing a
+policy therefore requires confirmation but cannot be undone with Anki's Undo
+command.
 
 ## Example
 
@@ -165,12 +168,12 @@ to greater than, at least, exactly, at most, and less than.
 
 ## Multiple profiles
 
-Anki stores add-on configuration outside individual profiles, so policy
-definitions and settings are shared across every profile. The daily automatic
-run marker is stored per profile: opening a second profile can run the same
-Automatic policies against decks with matching names in that profile. Verify
-policy scopes before enabling Automatic mode in a multi-profile setup. A deck
-that does not exist in the current profile is reported as a policy error.
+Policy definitions are stored in the current collection, so each profile has its
+own policies and they follow that collection through AnkiWeb sync. Add-on-wide
+settings such as notifications and debug logging remain shared by profiles on the
+same Anki installation. The daily automatic-run marker is tracked separately for
+each profile. A configured deck that no longer exists in its collection is
+reported as a policy error.
 
 ## Overlapping policies
 
