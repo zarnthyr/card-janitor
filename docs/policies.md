@@ -62,6 +62,12 @@ Every policy is included by default in the dashboard. The checkboxes affect
 only the current run. Change `mode` to `automatic` to also run a policy once
 per day without approval. Each run is recorded in Anki's undo history.
 
+Opening cleanup waits for Anki's opening collection sync attempt to finish when
+automatic sync is enabled; otherwise it runs immediately. A failed or cancelled
+sync leaves cleanup using the local collection. Cleanup changes reach other
+devices on the next sync. Interrupted cleanup may apply some actions before
+failing; use the named Anki Undo entry to revert completed changes.
+
 The window remains open while you inspect cards. **Browse** opens the union
 from all checked policies. Select a row and use **Edit** to change that policy;
 **Refresh** recalculates the table. Running a policy on demand does not count as
@@ -154,6 +160,9 @@ tool safely updates all related references.
 
 ### Current interval
 
+Both age and interval conditions support whole-number day values from 0 through
+100,000, matching the editor's supported range.
+
     {"type": "interval", "days": 180, "operator": "gte"}
 
 Compares Anki's current interval, in days, with `days`. New cards normally have
@@ -176,6 +185,9 @@ or `not_exists` to match cards without one. A previously reviewed card that was
 later reset to New still has review history.
 
 ### Note tags
+
+Each tag-array entry must be one tag, without whitespace or commas inside its
+name.
 
     {"type": "tags", "operator": "contains_any", "tags": ["leech"]}
 
@@ -313,3 +325,11 @@ reported as a policy error.
 ## Overlapping policies
 
 Compatible actions are merged and deduplicated during on-demand and automatic execution. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
+
+When checked policies conflict, click the dashboard's skipped-card summary to
+see the affected card IDs, involved policies, and reasons. **Browse** in that
+window opens the skipped cards. The main **Browse** button still includes all
+candidate cards from checked policies, including conflicts; cleanup totals
+exclude conflicting cards. Already-satisfied actions can still conflict with
+another policy's intended changes. A conflict affecting a note-wide action
+skips all affected cards of that note together.

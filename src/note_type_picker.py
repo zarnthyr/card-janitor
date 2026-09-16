@@ -19,6 +19,8 @@ from aqt.qt import (
     qconnect,
 )
 
+from .picker_state import NoteTypeSelection
+
 MAX_SUMMARY_LENGTH = 55
 
 
@@ -30,7 +32,7 @@ class NoteTypePicker(QPushButton):
         parent: QWidget,
     ) -> None:
         super().__init__(parent)
-        self._selected = None if selected is None else set(selected)
+        self._state = NoteTypeSelection(names, selected)
         self._menu = QMenu(self)
         self._container = QWidget(self._menu)
         layout = QVBoxLayout(self._container)
@@ -48,7 +50,7 @@ class NoteTypePicker(QPushButton):
         self.tree.addTopLevelItem(self._root)
         self._root.setExpanded(True)
         self._items = {}
-        for name in sorted(set(names) | (self._selected or set()), key=str.casefold):
+        for name in self._state.names:
             item = QTreeWidgetItem([name])
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             item.setToolTip(0, name)
@@ -65,7 +67,7 @@ class NoteTypePicker(QPushButton):
         self._refresh()
 
     def selected(self) -> tuple[str, ...] | None:
-        return None if self._selected is None else tuple(sorted(self._selected, key=str.casefold))
+        return self._state.selected()
 
     def _resize_popup(self) -> None:
         width = min(self.width(), self.screen().availableGeometry().width())
@@ -88,32 +90,24 @@ class NoteTypePicker(QPushButton):
 
     def _clicked(self, item: QTreeWidgetItem, _column: int) -> None:
         if item is self._root:
-            self._selected = set() if self._selected is None else None
+            self._state.toggle_all()
         else:
-            if self._selected is None:
-                self._selected = set(self._items)
-            name = item.text(0)
-            if name in self._selected:
-                self._selected.remove(name)
-            else:
-                self._selected.add(name)
+            self._state.toggle(item.text(0))
         self._refresh()
 
     def _refresh(self) -> None:
         self._root.setCheckState(
             0,
             Qt.CheckState.Checked
-            if self._selected is None
+            if self.selected() is None
             else Qt.CheckState.PartiallyChecked
-            if self._selected
+            if self.selected()
             else Qt.CheckState.Unchecked,
         )
         for name, item in self._items.items():
             item.setCheckState(
                 0,
-                Qt.CheckState.Checked
-                if self._selected is None or name in self._selected
-                else Qt.CheckState.Unchecked,
+                Qt.CheckState.Checked if self._state.contains(name) else Qt.CheckState.Unchecked,
             )
         selected = self.selected()
         if selected is None:

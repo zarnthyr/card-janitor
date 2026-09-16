@@ -108,6 +108,22 @@ def test_all_cards_condition_matches_every_card() -> None:
     assert matches_conditions(AllCardsCondition(), facts(), 0)
 
 
+def test_report_retains_satisfied_intentions_for_conflict_detection() -> None:
+    satisfied = facts(card_id=1, queue=-1)
+    pending = facts(card_id=2)
+    outside = facts(card_id=3, deck_id=9)
+    action = ResolvedAction(SuspendAction())
+    value = evaluate_facts(
+        policy(AllCardsCondition(), scope=Scope((DeckSelector("Mining"),), include_suspended=True)),
+        [satisfied, pending, outside],
+        {1},
+        (action,),
+    )
+    assert value.qualifying == (satisfied, pending)
+    assert value.actionable == (pending,)
+    assert value.card_actions == ((satisfied, (action,)), (pending, (action,)))
+
+
 def test_first_review_age_does_not_approximate_missing_history() -> None:
     for operator in ("gt", "gte", "eq", "lte", "lt"):
         assert not matches_conditions(

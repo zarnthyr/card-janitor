@@ -7,7 +7,7 @@ make build
 make inspect
 ```
 
-The project targets Python 3.11+ and uses the Anki 26.09 development packages. Runtime dependencies are limited to APIs bundled with Anki.
+The project targets Python 3.11+ and uses the Anki 26.8.1 development packages pinned in `uv.lock`. Runtime dependencies are limited to APIs bundled with Anki.
 
 For manual testing, install `card-janitor.ankiaddon` in Anki and begin with an
 On demand policy (`mode: "on_demand"`). Open **Card Janitor…** to add or edit
@@ -136,9 +136,12 @@ For the current release, the final commands are:
 ```bash
 git tag -s v0.2.0 -m "Card Janitor v0.2.0"
 git push origin main
-git push origin v0.1.0
+git push origin v0.2.0
 ```
 
 Pushing the tag publishes the GitHub Release automatically. Do not move or
 reuse a published version tag; increment the project version for the next
 release.
+
+Manually rerunning the workflow for an existing release replaces its add-on
+asset without moving the tag or recreating the release notes.

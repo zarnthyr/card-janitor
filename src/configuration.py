@@ -8,7 +8,7 @@ from typing import Any
 
 from aqt import mw
 
-from .models import CONFIG_VERSION, ParsedConfig, Policy, parse_config, policy_to_dict
+from .models import CONFIG_VERSION, ParsedConfig, Policy, PolicyRecord, parse_config, policy_to_dict
 
 ADDON_MODULE = "card_janitor"
 COLLECTION_POLICIES_KEY = "card_janitor_policies"
@@ -64,7 +64,7 @@ def _write_policies(policies: object) -> None:
     mw.col.set_config(COLLECTION_POLICIES_KEY, policies)
 
 
-def save_raw_collection_config(config: object) -> None:
+def save_raw_collection_config(config: object, *, expected_policies: object) -> None:
     """Save collection-scoped Card Janitor data without changing settings."""
     if not isinstance(config, dict):
         message = "The configuration is not a JSON object"
@@ -73,71 +73,51 @@ def save_raw_collection_config(config: object) -> None:
     if not isinstance(policies, list):
         message = "The policies setting is not an array"
         raise ConfigWriteError(message)
+    if load_raw_policies() != expected_policies:
+        message = "Policies changed while the editor was open. Reopen it and try again."
+        raise ConfigWriteError(message)
     _write_policies(deepcopy(policies))
 
 
-def migrate_global_policies() -> bool:
-    """Move former add-on-wide policies into the open collection."""
-    settings = load_raw_settings()
-    if not isinstance(settings, dict) or "policies" not in settings:
-        return False
-    if mw is None or getattr(mw, "col", None) is None:
-        return False
-
-    policies = settings["policies"]
-    missing = object()
-    existing = mw.col.get_config(COLLECTION_POLICIES_KEY, missing)
-    if existing is not missing and existing != policies:
-        metadata = mw.addonManager.addonMeta(ADDON_MODULE)
-        user_settings = metadata.get("config", {}) if isinstance(metadata, dict) else {}
-        user_policies = user_settings.get("policies", missing)
-        if user_policies is missing:
-            # The collection write completed on an earlier attempt. The remaining
-            # policy list comes from an obsolete development config.json default.
-            return False
-        policies = user_policies
-
-    if existing is missing:
-        _write_policies(deepcopy(policies))
-    elif existing != policies:
-        message = (
-            "Policies already exist in this collection and differ from the add-on-wide policies"
-        )
+def _checked_index(policies: list[object], record: PolicyRecord) -> int:
+    if not 0 <= record.index < len(policies) or policies[record.index] != record.raw:
+        message = "The policy changed while the editor was open. Refresh and try again."
         raise ConfigWriteError(message)
-
-    updated = deepcopy(settings)
-    del updated["policies"]
-    mw.addonManager.writeConfig(ADDON_MODULE, updated)
-    return True
+    return record.index
 
 
-def save_policy(policy: Policy, *, index: int | None = None) -> None:
+def save_policy(policy: Policy, *, record: PolicyRecord | None = None) -> None:
     """Add or replace one policy while preserving all other collection policies."""
     policies = load_raw_policies()
     if not isinstance(policies, list):
         message = "The policies setting is not an array"
         raise ConfigWriteError(message)
     updated = deepcopy(policies)
+    index = _checked_index(updated, record) if record is not None else None
+    if any(
+        position != index
+        and isinstance(raw, dict)
+        and isinstance(raw.get("id"), str)
+        and raw["id"].strip().casefold() == policy.id.casefold()
+        for position, raw in enumerate(updated)
+    ):
+        message = "Another policy already has this ID. Refresh and try again."
+        raise ConfigWriteError(message)
     serialized = policy_to_dict(policy)
     if index is None:
         updated.append(serialized)
-    elif 0 <= index < len(updated):
-        updated[index] = serialized
     else:
-        message = "The policy no longer exists. Refresh and try again."
-        raise ConfigWriteError(message)
+        updated[index] = serialized
     _write_policies(updated)
 
 
-def remove_policy(*, index: int) -> None:
+def remove_policy(*, record: PolicyRecord) -> None:
     """Remove one policy while preserving all other collection policies."""
     policies = load_raw_policies()
     if not isinstance(policies, list):
         message = "The policies setting is not an array"
         raise ConfigWriteError(message)
-    if not 0 <= index < len(policies):
-        message = "The policy no longer exists. Refresh and try again."
-        raise ConfigWriteError(message)
+    index = _checked_index(policies, record)
     updated = deepcopy(policies)
     del updated[index]
     _write_policies(updated)

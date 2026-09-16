@@ -72,13 +72,20 @@ class NoteFacts:
 
 @dataclass(frozen=True)
 class PolicyReport:
+    """Evaluation results with desired actions for every targeted card.
+
+    card_actions includes satisfied intentions for conflict detection, whereas
+    actionable contains only cards requiring a change. Note-wide actions may
+    target siblings outside qualifying (the in-scope matching cards).
+    """
+
     policy: Policy
     qualifying: tuple[CardFacts, ...]
     actionable: tuple[CardFacts, ...]
     missing_first_review: int
     resolved_actions: tuple[ResolvedAction, ...]
+    card_actions: tuple[tuple[CardFacts, tuple[ResolvedAction, ...]], ...]
     errors: tuple[str, ...] = ()
-    card_actions: tuple[tuple[CardFacts, tuple[ResolvedAction, ...]], ...] = ()
 
 
 def _matches_number(actual: int, operator: str, expected: int) -> bool:
@@ -172,6 +179,16 @@ def conditions_need_first_review(condition: ConditionExpression) -> bool:
     return False
 
 
+def conditions_need_history(condition: ConditionExpression) -> bool:
+    if isinstance(condition, (ReviewHistoryCondition, SiblingReviewHistoryCondition)):
+        return True
+    if isinstance(condition, AgeCondition):
+        return condition.source == "first_review"
+    if isinstance(condition, (AllConditions, AnyConditions)):
+        return any(conditions_need_history(child) for child in condition.conditions)
+    return False
+
+
 def action_is_satisfied(  # noqa: PLR0911
     action: ResolvedAction, card: CardFacts
 ) -> bool:
@@ -240,4 +257,5 @@ def evaluate_facts(
         actionable=actionable,
         missing_first_review=missing,
         resolved_actions=resolved_actions,
+        card_actions=tuple((card, resolved_actions) for card in qualifying),
     )

@@ -113,6 +113,9 @@ that require an action.
 Compatible actions from overlapping policies are combined. Cards are skipped
 and reported when policies specify conflicting move destinations or combine
 deletion with another action.
+Click the skipped-card summary to inspect involved policies and conflict
+reasons. Cleanup totals exclude conflicts; **Browse** includes them so you can
+inspect all candidates. The conflict window's **Browse** shows only skipped cards.
 
 ### Example policies
 
@@ -133,7 +136,7 @@ would currently clean up. The editor evaluates its current unsaved settings.
 | On demand  | Runs only when you start cleanup from Card Janitor          |
 | Automatic  | Runs once per day without confirmation and can also be run on demand |
 
-Automatic cleanup runs when a profile opens if it has not yet run that day, and when Anki's day changes while the application remains open. It does not use background polling. Its completion notification can be disabled independently.
+Automatic cleanup runs when a profile opens if it has not yet run that day, and when Anki's day changes while the application remains open. When opening auto-sync is enabled, cleanup waits for that sync attempt to finish and then uses the local collection, even if sync failed or was cancelled. Cleanup changes are uploaded on the next sync. It does not use background polling. Its completion notification can be disabled independently.
 
 ## Configuration
 

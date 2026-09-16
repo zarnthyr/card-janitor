@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from anki.collection import OpChanges
 
 from .engine import action_is_satisfied
+from .log import exception
 from .models import (
     DeleteCardAction,
     DeleteNoteAction,
@@ -18,13 +19,20 @@ from .models import (
     SuspendAction,
     TagAction,
     UnsuspendAction,
-    action_targets_note,
+    action_expands_to_siblings,
 )
 
 if TYPE_CHECKING:
     from anki.collection import Collection
 
     from .engine import PolicyReport, ResolvedAction
+
+
+@dataclass(frozen=True)
+class ConflictDetail:
+    card_id: int
+    policies: tuple[str, ...]
+    reasons: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -39,6 +47,7 @@ class ExecutionPlan:
     delete_note_ids: tuple[int, ...]
     conflicted_card_ids: tuple[int, ...]
     planned_card_ids: tuple[int, ...]
+    conflict_details: tuple[ConflictDetail, ...]
 
     @property
     def card_count(self) -> int:
@@ -65,6 +74,10 @@ class ExecutionResult:
     conflicts: int
 
 
+class CleanupError(RuntimeError):
+    """Cleanup failed; earlier backend operations may have completed."""
+
+
 def build_execution_plan(  # noqa: PLR0912
     reports: tuple[PolicyReport, ...], col: Collection | None = None
 ) -> ExecutionPlan:
@@ -72,25 +85,36 @@ def build_execution_plan(  # noqa: PLR0912
     desired_card_actions: dict[int, set[ResolvedAction]] = {}
     card_notes: dict[int, int] = {}
     note_wide_ids: set[int] = set()
+    card_policies: dict[int, set[str]] = {}
+    note_policies: dict[int, set[str]] = {}
     for report in reports:
-        desired = report.card_actions or tuple(
-            (card, report.resolved_actions) for card in report.qualifying
-        )
+        desired = report.card_actions
         per_card = {card.card_id: actions for card, actions in desired}
         for card, actions in desired:
+            card_policies.setdefault(card.card_id, set()).add(report.policy.name)
+            note_policies.setdefault(card.note_id, set()).add(report.policy.name)
             card_notes[card.card_id] = card.note_id
             desired_card_actions.setdefault(card.card_id, set()).update(actions)
-            if any(action_targets_note(action.action) for action in actions):
+            if any(action_expands_to_siblings(action.action) for action in actions):
                 note_wide_ids.add(card.note_id)
         for card in report.actionable:
             card_notes[card.card_id] = card.note_id
             card_actions.setdefault(card.card_id, set()).update(
-                action
-                for action in per_card.get(card.card_id, report.resolved_actions)
-                if not action_is_satisfied(action, card)
+                action for action in per_card[card.card_id] if not action_is_satisfied(action, card)
             )
 
     conflicts: set[int] = set()
+    reasons: dict[int, set[str]] = {}
+
+    def mark_conflict(
+        ids: set[int] | tuple[int, ...], reason: str, policies: set[str] | None = None
+    ) -> None:
+        for card_id in ids:
+            conflicts.add(card_id)
+            reasons.setdefault(card_id, set()).add(reason)
+            if policies is not None:
+                card_policies[card_id].update(policies)
+
     for card_id, actions in desired_card_actions.items():
         move_targets = {
             action.target_deck_id for action in actions if isinstance(action.action, MoveAction)
@@ -100,12 +124,13 @@ def build_execution_plan(  # noqa: PLR0912
         )
         has_suspend = any(isinstance(action.action, SuspendAction) for action in actions)
         has_unsuspend = any(isinstance(action.action, UnsuspendAction) for action in actions)
-        if card_id in card_actions and (
-            len(move_targets) > 1
-            or (has_delete and len(actions) > 1)
-            or (has_suspend and has_unsuspend)
-        ):
-            conflicts.add(card_id)
+        if card_id in card_actions:
+            if len(move_targets) > 1:
+                mark_conflict((card_id,), "Move actions specify different destination decks")
+            if has_delete and len(actions) > 1:
+                mark_conflict((card_id,), "Deletion is combined with another action")
+            if has_suspend and has_unsuspend:
+                mark_conflict((card_id,), "Suspend and unsuspend actions target the same card")
 
     note_actions: dict[int, set[ResolvedAction]] = {}
     all_note_actions: dict[int, set[ResolvedAction]] = {}
@@ -132,23 +157,54 @@ def build_execution_plan(  # noqa: PLR0912
             if isinstance(action.action, RemoveTagAction)
         }
         replacements = {
-            action.action.tags for action in actions if isinstance(action.action, ReplaceTagsAction)
+            frozenset(tag.casefold() for tag in action.action.tags)
+            for action in actions
+            if isinstance(action.action, ReplaceTagsAction)
         }
-        if added & removed or len(replacements) > 1 or (replacements and (added or removed)):
-            conflicts.update(note_cards.get(note_id, ()))
+        ids = note_cards.get(note_id, set())
+        if added & removed:
+            mark_conflict(
+                ids,
+                "Tags are both added and removed: " + ", ".join(sorted(added & removed)),
+                note_policies[note_id],
+            )
+        if len(replacements) > 1:
+            mark_conflict(
+                ids, "Tag replacements specify different tag sets", note_policies[note_id]
+            )
+        if replacements and (added or removed):
+            mark_conflict(
+                ids,
+                "Replacing tags is combined with adding or removing tags",
+                note_policies[note_id],
+            )
     for note_id, actions in all_note_actions.items():
         if any(isinstance(action.action, DeleteNoteAction) for action in actions) and any(
             not isinstance(action.action, DeleteNoteAction) for action in actions
         ):
-            conflicts.update(note_cards.get(note_id, ()))
+            mark_conflict(
+                note_cards.get(note_id, ()),
+                "Deleting a note is combined with another action on that note",
+                note_policies[note_id],
+            )
     # A note-wide operation is atomic: never apply it to only some siblings.
     for note_id in note_wide_ids:
         if conflicts.intersection(note_cards.get(note_id, ())):
-            conflicts.update(note_cards.get(note_id, ()))
+            inherited = {
+                reason for card_id in note_cards[note_id] for reason in reasons.get(card_id, ())
+            }
+            for reason in inherited:
+                mark_conflict(note_cards[note_id], reason, note_policies[note_id])
+            mark_conflict(
+                note_cards[note_id],
+                "All affected cards of the note are skipped together",
+                note_policies[note_id],
+            )
 
     tags: dict[str, set[int]] = {}
     remove_tags: dict[str, set[int]] = {}
     replace_tags: dict[tuple[str, ...], set[int]] = {}
+    replacement_values: dict[tuple[str, ...], tuple[str, ...]] = {}
     suspend: set[int] = set()
     unsuspend: set[int] = set()
     moves: dict[int, set[int]] = {}
@@ -164,7 +220,9 @@ def build_execution_plan(  # noqa: PLR0912
             elif isinstance(action, RemoveTagAction):
                 remove_tags.setdefault(action.tag, set()).add(card_notes[card_id])
             elif isinstance(action, ReplaceTagsAction):
-                replace_tags.setdefault(action.tags, set()).add(card_notes[card_id])
+                key = tuple(sorted(tag.casefold() for tag in action.tags))
+                replace_tags.setdefault(key, set()).add(card_notes[card_id])
+                replacement_values[key] = min(replacement_values.get(key, action.tags), action.tags)
             elif isinstance(action, SuspendAction):
                 suspend.add(card_id)
             elif isinstance(action, UnsuspendAction):
@@ -186,7 +244,8 @@ def build_execution_plan(  # noqa: PLR0912
         tags=tuple((tag, tuple(sorted(ids))) for tag, ids in sorted(tags.items())),
         remove_tags=tuple((tag, tuple(sorted(ids))) for tag, ids in sorted(remove_tags.items())),
         replace_tags=tuple(
-            (replacement, tuple(sorted(ids))) for replacement, ids in sorted(replace_tags.items())
+            (replacement_values[key], tuple(sorted(ids)))
+            for key, ids in sorted(replace_tags.items())
         ),
         suspend_card_ids=tuple(sorted(suspend)),
         unsuspend_card_ids=tuple(sorted(unsuspend)),
@@ -195,6 +254,12 @@ def build_execution_plan(  # noqa: PLR0912
         delete_note_ids=tuple(sorted(delete_notes)),
         conflicted_card_ids=tuple(sorted(conflicts)),
         planned_card_ids=tuple(sorted(planned_card_ids)),
+        conflict_details=tuple(
+            ConflictDetail(
+                card_id, tuple(sorted(card_policies[card_id])), tuple(sorted(reasons[card_id]))
+            )
+            for card_id in sorted(conflicts)
+        ),
     )
 
 
@@ -209,6 +274,27 @@ def execute_plan(col: Collection, plan: ExecutionPlan, undo_name: str) -> Execut
     affected_card_ids = set(plan.planned_card_ids)
     for note_id in plan.delete_note_ids:
         affected_card_ids.update(int(card_id) for card_id in col.card_ids_of_note(note_id))
+    try:
+        _apply_plan(col, plan)
+    except Exception as exc:
+        try:
+            col.merge_undo_entries(undo_target)
+        except Exception:
+            exception("failed to group undo entries after cleanup failure")
+            recovery = "Use Anki's Undo to revert any earlier changes individually."
+        else:
+            recovery = f"Use Anki's Undo entry {undo_name!r} to revert any completed changes."
+        message = f"Cleanup failed: {exc}\n\nEarlier changes may have been applied. {recovery}"
+        raise CleanupError(message) from exc
+    changes = col.merge_undo_entries(undo_target)
+    return ExecutionResult(
+        changes=changes,
+        affected_cards=len(affected_card_ids),
+        conflicts=len(plan.conflicted_card_ids),
+    )
+
+
+def _apply_plan(col: Collection, plan: ExecutionPlan) -> None:
     for tag, note_ids in plan.tags:
         col.tags.bulk_add(note_ids, tag)
     for tag, note_ids in plan.remove_tags:
@@ -231,9 +317,3 @@ def execute_plan(col: Collection, plan: ExecutionPlan, undo_name: str) -> Execut
         col.remove_cards_and_orphaned_notes(plan.delete_card_ids)
     if plan.delete_note_ids:
         col.remove_notes(plan.delete_note_ids)
-    changes = col.merge_undo_entries(undo_target)
-    return ExecutionResult(
-        changes=changes,
-        affected_cards=len(affected_card_ids),
-        conflicts=len(plan.conflicted_card_ids),
-    )

@@ -13,11 +13,12 @@ from .engine import (
     PolicyReport,
     ResolvedAction,
     action_is_satisfied,
+    conditions_need_history,
     conditions_need_siblings,
     evaluate_facts,
 )
 from .log import debug
-from .models import MoveAction, Policy, action_targets_note
+from .models import MoveAction, Policy, action_expands_to_siblings
 
 if TYPE_CHECKING:
     from anki.collection import Collection
@@ -68,6 +69,9 @@ def _load_facts_where(
     values: set[int],
     *,
     note_type_ids: set[int] | None = None,
+    load_history: bool = True,
+    eligible_only: bool = False,
+    include_suspended: bool = False,
 ) -> list[CardFacts]:
     if not values or note_type_ids == set():
         return []
@@ -77,6 +81,14 @@ def _load_facts_where(
     if note_type_ids is not None:
         note_filter = f"and n.mid in ({','.join('?' for _ in note_type_ids)})"
         ordered_values.extend(sorted(note_type_ids))
+    history_column = (
+        "min(case when r.ease between 1 and 4 then r.id end)" if load_history else "null"
+    )
+    history_join = "left join revlog r on r.cid = c.id" if load_history else ""
+    grouping = "group by c.id" if load_history else ""
+    eligibility = "and c.odid = 0" if eligible_only else ""
+    if eligible_only and not include_suspended:
+        eligibility += " and c.queue != -1"
     rows = col.db.all(
         f"""
 select
@@ -88,12 +100,12 @@ select
     c.type,
     c.ivl,
     n.tags,
-    min(case when r.ease between 1 and 4 then r.id end) as first_review
+    {history_column} as first_review
 from cards c
 join notes n on n.id = c.nid
-left join revlog r on r.cid = c.id
-where {column} in ({placeholders}) {note_filter}
-group by c.id
+{history_join}
+where {column} in ({placeholders}) {note_filter} {eligibility}
+{grouping}
 """,
         *ordered_values,
     )
@@ -118,12 +130,18 @@ def _load_deck_facts(
     col: Collection,
     deck_ids: set[int],
     note_type_ids: set[int] | None = None,
+    *,
+    load_history: bool = True,
+    include_suspended: bool = False,
 ) -> list[CardFacts]:
     return _load_facts_where(
         col,
-        "(case when c.odid != 0 then c.odid else c.did end)",
+        "c.did",
         deck_ids,
         note_type_ids=note_type_ids,
+        load_history=load_history,
+        eligible_only=True,
+        include_suspended=include_suspended,
     )
 
 
@@ -148,6 +166,7 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
             actionable=(),
             missing_first_review=0,
             resolved_actions=resolved_actions,
+            card_actions=(),
             errors=tuple(errors),
         )
         debug(
@@ -157,11 +176,20 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
             elapsed_ms=round((perf_counter() - started) * 1000, 2),
         )
         return report
-    facts = _load_deck_facts(col, deck_ids, note_type_ids)
+    load_history = conditions_need_history(policy.conditions)
+    facts = _load_deck_facts(
+        col,
+        deck_ids,
+        note_type_ids,
+        load_history=load_history,
+        include_suspended=policy.scope.include_suspended,
+    )
     siblings = None
     note_facts = None
     if conditions_need_siblings(policy.conditions):
-        siblings = _load_facts_where(col, "c.nid", {card.note_id for card in facts})
+        siblings = _load_facts_where(
+            col, "c.nid", {card.note_id for card in facts}, load_history=load_history
+        )
         grouped: dict[int, list[CardFacts]] = {}
         for card in siblings:
             grouped.setdefault(card.note_id, []).append(card)
@@ -181,10 +209,10 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
         now_ms=now_ms,
         note_facts=note_facts,
     )
-    if any(action_targets_note(action.action) for action in resolved_actions):
+    if any(action_expands_to_siblings(action.action) for action in resolved_actions):
         note_ids = {card.note_id for card in report.qualifying}
         siblings = (
-            _load_facts_where(col, "c.nid", note_ids)
+            _load_facts_where(col, "c.nid", note_ids, load_history=load_history)
             if siblings is None
             else [card for card in siblings if card.note_id in note_ids]
         )
@@ -195,7 +223,7 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
                 tuple(
                     action
                     for action in resolved_actions
-                    if action_targets_note(action.action) or card.card_id in trigger_ids
+                    if action_expands_to_siblings(action.action) or card.card_id in trigger_ids
                 ),
             )
             for card in siblings

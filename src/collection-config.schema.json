@@ -131,7 +131,7 @@
           "required": ["type", "days", "source", "operator"],
           "properties": {
             "type": {"const": "age"},
-            "days": {"type": "integer", "minimum": 0},
+            "days": {"type": "integer", "minimum": 0, "maximum": 100000},
             "source": {"enum": ["first_review", "card_created"]},
             "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
           }
@@ -142,7 +142,7 @@
           "required": ["type", "days", "operator"],
           "properties": {
             "type": {"const": "interval"},
-            "days": {"type": "integer", "minimum": 0},
+            "days": {"type": "integer", "minimum": 0, "maximum": 100000},
             "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
           }
         },
@@ -179,7 +179,7 @@
               "type": "array",
               "minItems": 1,
               "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
+              "items": {"type": "string", "minLength": 1, "pattern": "^\\s*[^\\s,]+\\s*$"}
             },
             "operator": {"enum": ["contains_any", "contains_all", "contains_none"]}
           }
@@ -216,7 +216,7 @@
               "type": "array",
               "minItems": 1,
               "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
+              "items": {"type": "string", "minLength": 1, "pattern": "^\\s*[^\\s,]+\\s*$"}
             }
           }
         },
@@ -229,7 +229,7 @@
             "tags": {
               "type": "array",
               "uniqueItems": true,
-              "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
+              "items": {"type": "string", "minLength": 1, "pattern": "^\\s*[^\\s,]+\\s*$"}
             }
           }
         },

@@ -86,10 +86,14 @@ jobs:
 
       - name: Publish GitHub release
         run: |
-          gh release create "$RELEASE_TAG" \
-            card-janitor.ankiaddon \
-            --verify-tag \
-            --title "Card Janitor $RELEASE_TAG" \
-            --generate-notes
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" card-janitor.ankiaddon --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              card-janitor.ankiaddon \
+              --verify-tag \
+              --title "Card Janitor $RELEASE_TAG" \
+              --generate-notes
+          fi
         env:
           GH_TOKEN: ${{ github.token }}

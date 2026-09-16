@@ -5,7 +5,14 @@ from types import SimpleNamespace
 
 import pytest
 from card_janitor import configuration
-from card_janitor.models import AgeCondition, DeckSelector, Policy, Scope, SuspendAction
+from card_janitor.models import (
+    AgeCondition,
+    DeckSelector,
+    Policy,
+    PolicyRecord,
+    Scope,
+    SuspendAction,
+)
 
 
 class FakeCollection:
@@ -25,14 +32,10 @@ def fake_main_window(
     collection: FakeCollection,
     settings: object,
     settings_writes: list[tuple[str, object]],
-    *,
-    user_settings: object | None = None,
 ) -> SimpleNamespace:
-    metadata = {"config": settings if user_settings is None else user_settings}
     return SimpleNamespace(
         col=collection,
         addonManager=SimpleNamespace(
-            addonMeta=lambda _module: metadata,
             getConfig=lambda _module: settings,
             writeConfig=lambda module, value: settings_writes.append((module, value)),
         ),
@@ -82,7 +85,7 @@ def test_save_policy_replaces_only_target_collection_entry(
     collection = FakeCollection({configuration.COLLECTION_POLICIES_KEY: policies})
     monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, []))
 
-    configuration.save_policy(sample_policy(), index=0)
+    configuration.save_policy(sample_policy(), record=PolicyRecord(0, policies[0], None, ()))
 
     written = collection.writes[0]
     assert written[0] == configuration.COLLECTION_POLICIES_KEY
@@ -98,7 +101,7 @@ def test_remove_policy_removes_only_target_collection_entry(
     collection = FakeCollection({configuration.COLLECTION_POLICIES_KEY: policies})
     monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, []))
 
-    configuration.remove_policy(index=1)
+    configuration.remove_policy(record=PolicyRecord(1, policies[1], None, ()))
 
     assert collection.writes == [
         (
@@ -148,59 +151,40 @@ def test_save_raw_collection_config_changes_only_collection_policies(
     writes: list[tuple[str, object]] = []
     monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, writes))
 
-    configuration.save_raw_collection_config(collection_config)
+    configuration.save_raw_collection_config(collection_config, expected_policies=[])
 
     assert collection.values[configuration.COLLECTION_POLICIES_KEY] == policies
     assert writes == []
 
 
-def test_migrate_global_policies_moves_them_to_current_collection(
+@pytest.mark.parametrize("operation", ["save", "remove", "json"])
+def test_stale_configuration_writes_are_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    original = [{"id": "fixed", "name": "Before sync"}]
+    current = [{"id": "different", "name": "After sync"}]
+    collection = FakeCollection({configuration.COLLECTION_POLICIES_KEY: current})
+    monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, []))
+    record = PolicyRecord(0, original[0], None, ())
+    operations = {
+        "save": lambda: configuration.save_policy(sample_policy(), record=record),
+        "remove": lambda: configuration.remove_policy(record=record),
+        "json": lambda: configuration.save_raw_collection_config(
+            {"policies": []}, expected_policies=original
+        ),
+    }
+    with pytest.raises(configuration.ConfigWriteError, match="changed"):
+        operations[operation]()
+    assert not collection.writes
+    assert collection.values[configuration.COLLECTION_POLICIES_KEY] == current
+
+
+def test_new_policy_checks_current_ids(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    policies = [{"name": "Existing"}]
-    settings = {
-        "config_version": 1,
-        "notify_after_automatic_run": True,
-        "debug_logging": False,
-        "policies": policies,
-    }
-    collection = FakeCollection()
-    writes: list[tuple[str, object]] = []
-    monkeypatch.setattr(configuration, "mw", fake_main_window(collection, settings, writes))
-
-    assert configuration.migrate_global_policies()
-    assert collection.values[configuration.COLLECTION_POLICIES_KEY] == policies
-    assert writes == [
-        (
-            "card_janitor",
-            {
-                "config_version": 1,
-                "notify_after_automatic_run": True,
-                "debug_logging": False,
-            },
-        )
-    ]
-
-
-def test_migration_ignores_stale_default_after_collection_write(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    stale_defaults = {
-        "config_version": 1,
-        "notify_after_automatic_run": True,
-        "debug_logging": False,
-        "policies": [{"name": "Stale default"}],
-    }
-    collection = FakeCollection(
-        {configuration.COLLECTION_POLICIES_KEY: [{"name": "Migrated policies"}]}
-    )
-    writes: list[tuple[str, object]] = []
-    monkeypatch.setattr(
-        configuration,
-        "mw",
-        fake_main_window(collection, stale_defaults, writes, user_settings={}),
-    )
-
-    assert not configuration.migrate_global_policies()
-    assert collection.writes == []
-    assert writes == []
+    collection = FakeCollection({configuration.COLLECTION_POLICIES_KEY: [{"id": "FIXED"}]})
+    monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, []))
+    with pytest.raises(configuration.ConfigWriteError, match="ID"):
+        configuration.save_policy(sample_policy())
+    assert not collection.writes
