@@ -100,7 +100,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
                 parent=mw,
             )
             return
-        plan = build_execution_plan(reports)
+        plan = build_execution_plan(reports, mw.col)
         if plan.is_empty:
             _mark_daily_run(today)
             if plan.conflicted_card_ids:

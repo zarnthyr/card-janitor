@@ -5,6 +5,7 @@ import pytest
 from card_janitor.engine import (
     MILLIS_PER_DAY,
     CardFacts,
+    NoteFacts,
     ResolvedAction,
     action_is_satisfied,
     evaluate_facts,
@@ -13,15 +14,25 @@ from card_janitor.engine import (
 from card_janitor.models import (
     Action,
     AgeCondition,
+    AllCardsCondition,
+    AllConditions,
     AnyConditions,
     CardStateCondition,
     ConditionExpression,
+    DeckSelector,
     IntervalCondition,
     Policy,
+    RemoveTagAction,
+    ReplaceTagsAction,
     ReviewHistoryCondition,
     Scope,
+    SiblingReviewHistoryCondition,
+    SiblingSuspensionCondition,
     SuspendAction,
+    SuspensionCondition,
     TagAction,
+    TagCondition,
+    UnsuspendAction,
 )
 
 
@@ -51,10 +62,39 @@ def policy(
         id="test",
         name="Test",
         mode="on_demand",
-        scope=scope or Scope(("Mining",)),
+        scope=scope or Scope((DeckSelector("Mining"),)),
         conditions=conditions or AgeCondition(365, "first_review", "gte"),
         actions=actions or (SuspendAction(),),
     )
+
+
+def test_sibling_conditions_handle_all_any_none_and_compound_conditions() -> None:
+    card = facts()
+    for count in (0, 1, 2):
+        note = NoteFacts(2, count, count)
+        for condition_type in (SiblingSuspensionCondition, SiblingReviewHistoryCondition):
+            for operator, expected in {
+                "all": count == 2,
+                "any": count > 0,
+                "none": count == 0,
+            }.items():
+                condition = condition_type(operator)
+                assert matches_conditions(condition, card, 3000, note=note) is expected
+                assert (
+                    matches_conditions(
+                        AllConditions((AllCardsCondition(), condition)), card, 3000, note=note
+                    )
+                    is expected
+                )
+                assert (
+                    matches_conditions(
+                        AnyConditions((condition, TagCondition(("missing",), "contains_any"))),
+                        card,
+                        3000,
+                        note=note,
+                    )
+                    is expected
+                )
 
 
 def test_first_review_age_uses_elapsed_days_inclusively() -> None:
@@ -62,6 +102,10 @@ def test_first_review_age_uses_elapsed_days_inclusively() -> None:
     card = facts(first_review_ms=5000)
     assert not matches_conditions(condition, card, 5000 + 365 * MILLIS_PER_DAY - 1)
     assert matches_conditions(condition, card, 5000 + 365 * MILLIS_PER_DAY)
+
+
+def test_all_cards_condition_matches_every_card() -> None:
+    assert matches_conditions(AllCardsCondition(), facts(), 0)
 
 
 def test_first_review_age_does_not_approximate_missing_history() -> None:
@@ -99,6 +143,22 @@ def test_review_history_uses_genuine_answer_entries() -> None:
 
 @pytest.mark.parametrize(
     ("operator", "expected"),
+    [("contains_any", True), ("contains_all", False), ("contains_none", False)],
+)
+def test_tag_conditions_are_case_insensitive(operator: str, expected: bool) -> None:
+    condition = TagCondition(("LEECH", "difficult"), operator)
+    assert matches_conditions(condition, facts(tags=frozenset({"leech"})), 0) is expected
+
+
+def test_suspension_condition_uses_queue_independently_of_card_state() -> None:
+    assert matches_conditions(SuspensionCondition("is_suspended"), facts(queue=-1, card_type=2), 0)
+    assert matches_conditions(
+        SuspensionCondition("is_not_suspended"), facts(queue=2, card_type=2), 0
+    )
+
+
+@pytest.mark.parametrize(
+    ("operator", "expected"),
     [("gt", False), ("gte", True), ("eq", True), ("lte", True), ("lt", False)],
 )
 def test_numeric_operators(operator: str, expected: bool) -> None:
@@ -129,7 +189,7 @@ def test_actionable_excludes_cards_with_all_actions_satisfied() -> None:
     card = facts(tags=frozenset({"retired"}), queue=-1)
     configured = policy(
         actions=(TagAction("retired"), SuspendAction()),
-        scope=Scope(("Mining",), include_suspended=True),
+        scope=Scope((DeckSelector("Mining"),), include_suspended=True),
         conditions=IntervalCondition(1, "gte"),
     )
     actions = (ResolvedAction(TagAction("retired")), ResolvedAction(SuspendAction()))
@@ -142,3 +202,11 @@ def test_tag_satisfaction_is_case_insensitive() -> None:
     assert action_is_satisfied(
         ResolvedAction(TagAction("Retired")), facts(tags=frozenset({"retired"}))
     )
+
+
+def test_inverse_and_replace_action_satisfaction() -> None:
+    card = facts(tags=frozenset({"leech", "difficult"}), queue=-1)
+    assert not action_is_satisfied(ResolvedAction(RemoveTagAction("LEECH")), card)
+    assert action_is_satisfied(ResolvedAction(RemoveTagAction("missing")), card)
+    assert action_is_satisfied(ResolvedAction(ReplaceTagsAction(("Difficult", "Leech"))), card)
+    assert not action_is_satisfied(ResolvedAction(UnsuspendAction()), card)

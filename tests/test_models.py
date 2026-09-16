@@ -3,15 +3,26 @@
 
 from card_janitor.models import (
     AgeCondition,
+    AllCardsCondition,
     AllConditions,
     CardStateCondition,
+    DeckSelector,
     DeleteCardAction,
+    DeleteNoteAction,
     MoveAction,
+    RemoveTagAction,
+    ReplaceTagsAction,
     ReviewHistoryCondition,
+    SiblingReviewHistoryCondition,
+    SiblingSuspensionCondition,
+    SuspensionCondition,
     TagAction,
+    TagCondition,
+    UnsuspendAction,
     parse_config,
     policy_to_dict,
 )
+from card_janitor.presentation import describe_scope, scope_tooltip
 
 
 def policy_config(**overrides: object) -> dict:
@@ -19,7 +30,7 @@ def policy_config(**overrides: object) -> dict:
         "id": "mining",
         "name": "Mining",
         "mode": "on_demand",
-        "scope": {"decks": ["Mining"], "include_subdecks": True},
+        "scope": {"decks": [{"deck": "Mining", "include_subdecks": True}]},
         "match": "all",
         "conditions": [
             {
@@ -59,6 +70,121 @@ def test_parses_flat_compound_policy() -> None:
         AgeCondition(days=365, source="first_review", operator="gte"),
         CardStateCondition(states=("new",)),
     )
+
+
+def test_mixed_deck_selectors_round_trip() -> None:
+    selectors = [
+        {"deck": "Mining", "include_subdecks": False},
+        {"deck": "Mining::Selected", "include_subdecks": True},
+    ]
+    parsed = parse_config(policy_config(scope={"decks": selectors}))
+    assert not parsed.issues
+    policy = parsed.config.policies[0]
+    assert policy.scope.selectors == (
+        DeckSelector("Mining", include_subdecks=False),
+        DeckSelector("Mining::Selected", include_subdecks=True),
+    )
+    assert policy_to_dict(policy)["scope"]["decks"] == selectors
+
+
+def test_legacy_scope_format_is_rejected() -> None:
+    parsed = parse_config(policy_config(scope={"decks": ["Mining"], "include_subdecks": True}))
+
+    assert "include_subdecks: unknown field" in str(parsed.issues[0])
+    assert not parsed.config.policies
+
+
+def test_all_decks_scope_round_trip_and_excludes_individual_selectors() -> None:
+    parsed = parse_config(policy_config(scope={"all_decks": True, "include_suspended": True}))
+    assert not parsed.issues
+    policy = parsed.config.policies[0]
+    assert policy.scope.all_decks
+    assert not policy.scope.decks
+    assert policy_to_dict(policy)["scope"] == {"all_decks": True, "include_suspended": True}
+    for scope in ({"all_decks": False}, {"all_decks": True, "decks": []}, {}):
+        assert parse_config(policy_config(scope=scope)).issues
+
+
+def test_note_type_scope_round_trip_and_validation() -> None:
+    for deck_scope in (
+        {"all_decks": True},
+        {"decks": [{"deck": "Mining", "include_subdecks": True}]},
+    ):
+        scope = {**deck_scope, "note_types": ["Cloze", " Basic "]}
+        parsed = parse_config(policy_config(scope=scope))
+        assert not parsed.issues
+        assert parsed.config.policies[0].scope.note_types == ("Basic", "Cloze")
+        assert policy_to_dict(parsed.config.policies[0])["scope"]["note_types"] == [
+            "Basic",
+            "Cloze",
+        ]
+    for names in ([], ["Basic", " Basic "], [" "], [1], None, "Basic"):
+        assert parse_config(policy_config(scope={"all_decks": True, "note_types": names})).issues
+
+
+def test_sibling_conditions_round_trip_and_validate_operators() -> None:
+    for kind, condition_type in (
+        ("sibling_suspension", SiblingSuspensionCondition),
+        ("sibling_review_history", SiblingReviewHistoryCondition),
+    ):
+        for operator in ("all", "any", "none"):
+            condition = {"type": kind, "operator": operator}
+            parsed = parse_config(
+                policy_config(
+                    scope={"all_decks": True, "include_suspended": True},
+                    conditions=[condition],
+                )
+            )
+            assert not parsed.issues
+            assert parsed.config.policies[0].conditions == AllConditions(
+                (condition_type(operator),)
+            )
+            assert policy_to_dict(parsed.config.policies[0])["conditions"] == [condition]
+        assert parse_config(
+            policy_config(conditions=[{"type": kind, "operator": "invalid"}])
+        ).issues
+    assert parse_config(
+        policy_config(conditions=[{"type": "sibling_suspension", "operator": "all"}])
+    ).issues
+
+
+def test_scope_summary_only_adds_restricted_note_types() -> None:
+    def scope(names: list[str] | None) -> object:
+        return (
+            parse_config(
+                policy_config(
+                    scope={
+                        "all_decks": True,
+                        **({"note_types": names} if names is not None else {}),
+                    }
+                )
+            )
+            .config.policies[0]
+            .scope
+        )
+
+    assert describe_scope(scope(None)) == "All decks"
+    assert describe_scope(scope(["Basic"])) == "All decks\nNote type: Basic"
+    assert describe_scope(scope(["Basic", "Cloze"])) == "All decks\n2 note types"
+    assert "Note types: Basic, Cloze" in scope_tooltip(scope(["Cloze", "Basic"]))
+
+
+def test_all_cards_condition_parses_round_trips_and_must_be_used_alone() -> None:
+    parsed = parse_config(policy_config(conditions=[{"type": "all_cards"}]))
+
+    assert not parsed.issues
+    assert parsed.config.policies[0].conditions == AllConditions((AllCardsCondition(),))
+    assert policy_to_dict(parsed.config.policies[0])["conditions"] == [{"type": "all_cards"}]
+
+    combined = parse_config(
+        policy_config(
+            conditions=[
+                {"type": "all_cards"},
+                {"type": "interval", "days": 1, "operator": "gte"},
+            ]
+        )
+    )
+    assert "must be the only condition" in str(combined.issues[0])
 
 
 def test_rejects_nested_compound_policy() -> None:
@@ -101,11 +227,37 @@ def test_delete_must_be_only_action() -> None:
     assert not parsed.config.policies
 
 
+def test_delete_note_parses_and_must_be_only_action() -> None:
+    parsed = parse_config(policy_config(actions=[{"type": "delete_note"}]))
+    assert not parsed.issues
+    assert parsed.config.policies[0].actions == (DeleteNoteAction(),)
+    assert policy_to_dict(parsed.config.policies[0])["actions"] == [{"type": "delete_note"}]
+
+    conflicting = parse_config(
+        policy_config(actions=[{"type": "delete_note"}, {"type": "suspend"}])
+    )
+    assert conflicting.issues
+    assert not conflicting.config.policies
+
+
 def test_move_action_parses() -> None:
     parsed = parse_config(policy_config(actions=[{"type": "move", "deck": "Retired"}]))
     action = parsed.config.policies[0].actions[0]
     assert action == MoveAction("Retired")
     assert not isinstance(action, DeleteCardAction)
+
+
+def test_note_actions_parse_and_round_trip() -> None:
+    for action in (
+        {"type": "suspend_note"},
+        {"type": "unsuspend_note"},
+        {"type": "move_note", "deck": "Retired"},
+    ):
+        parsed = parse_config(policy_config(actions=[action]))
+        assert not parsed.issues
+        policy = parsed.config.policies[0]
+        assert policy.actions[0].target == "note"
+        assert policy_to_dict(policy)["actions"] == [action]
 
 
 def test_tag_action_parses_multiple_tags_and_round_trips_as_one_action() -> None:
@@ -116,6 +268,98 @@ def test_tag_action_parses_multiple_tags_and_round_trips_as_one_action() -> None
 
     assert policy.actions == (TagAction("retired"), TagAction("vocabulary"))
     assert policy_to_dict(policy)["actions"] == [{"type": "tag", "tags": ["retired", "vocabulary"]}]
+
+
+def test_tag_and_suspension_conditions_parse_and_round_trip() -> None:
+    parsed = parse_config(
+        policy_config(
+            scope={
+                "decks": [{"deck": "Mining", "include_subdecks": True}],
+                "include_suspended": True,
+            },
+            conditions=[
+                {
+                    "type": "tags",
+                    "operator": "contains_any",
+                    "tags": ["leech", "difficult"],
+                },
+                {"type": "suspension", "operator": "is_suspended"},
+            ],
+        )
+    )
+
+    assert not parsed.issues
+    assert parsed.config.policies[0].conditions == AllConditions(
+        (
+            TagCondition(("leech", "difficult"), "contains_any"),
+            SuspensionCondition("is_suspended"),
+        )
+    )
+    assert policy_to_dict(parsed.config.policies[0])["conditions"] == [
+        {
+            "type": "tags",
+            "tags": ["leech", "difficult"],
+            "operator": "contains_any",
+        },
+        {"type": "suspension", "operator": "is_suspended"},
+    ]
+
+
+def test_matching_suspended_cards_requires_suspended_scope() -> None:
+    parsed = parse_config(
+        policy_config(conditions=[{"type": "suspension", "operator": "is_suspended"}])
+    )
+
+    assert "include_suspended" in str(parsed.issues[0])
+    assert not parsed.config.policies
+
+
+def test_inverse_and_replacement_actions_parse_and_round_trip() -> None:
+    parsed = parse_config(
+        policy_config(
+            scope={
+                "decks": [{"deck": "Mining", "include_subdecks": True}],
+                "include_suspended": True,
+            },
+            actions=[
+                {"type": "remove_tags", "tags": ["leech"]},
+                {"type": "unsuspend"},
+            ],
+        )
+    )
+
+    assert not parsed.issues
+    assert parsed.config.policies[0].actions == (
+        RemoveTagAction("leech"),
+        UnsuspendAction(),
+    )
+    assert policy_to_dict(parsed.config.policies[0])["actions"] == [
+        {"type": "remove_tags", "tags": ["leech"]},
+        {"type": "unsuspend"},
+    ]
+
+    replaced = parse_config(policy_config(actions=[{"type": "replace_tags", "tags": []}]))
+    assert replaced.config.policies[0].actions == (ReplaceTagsAction(()),)
+
+
+def test_conflicting_inverse_actions_are_rejected_within_policy() -> None:
+    for actions in (
+        [{"type": "suspend"}, {"type": "unsuspend"}],
+        [
+            {"type": "tag", "tags": ["leech"]},
+            {"type": "remove_tags", "tags": ["Leech"]},
+        ],
+        [
+            {"type": "replace_tags", "tags": ["only"]},
+            {"type": "tag", "tags": ["extra"]},
+        ],
+    ):
+        raw = policy_config(actions=actions)
+        if any(action["type"] == "unsuspend" for action in actions):
+            raw["policies"][0]["scope"]["include_suspended"] = True
+        parsed = parse_config(raw)
+        assert parsed.issues
+        assert not parsed.config.policies
 
 
 def test_duplicate_policy_id_is_rejected() -> None:
@@ -191,7 +435,16 @@ def test_unknown_configuration_and_policy_fields_are_rejected() -> None:
 
 
 def test_duplicate_scope_values_and_condition_states_are_rejected() -> None:
-    parsed = parse_config(policy_config(scope={"decks": ["Mining", "Mining"]}))
+    parsed = parse_config(
+        policy_config(
+            scope={
+                "decks": [
+                    {"deck": "Mining", "include_subdecks": True},
+                    {"deck": "Mining", "include_subdecks": False},
+                ]
+            }
+        )
+    )
     assert "duplicates" in str(parsed.issues[0])
 
     parsed = parse_config(

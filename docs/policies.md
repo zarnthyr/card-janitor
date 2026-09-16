@@ -3,6 +3,12 @@
 Add and edit policies in the Card Janitor window. Choose **Edit as JSON** there
 to edit the current collection's policy data directly.
 
+**Review copied or shared policies before saving.** They may enable automatic
+deletion without confirmation. Check their scope, conditions, actions, and mode;
+changing deck names alone is not enough. Set copied policies to
+`"mode": "on_demand"` and inspect affected cards with **Browse** before enabling
+`"mode": "automatic"`.
+
 Policies are stored in the current Anki collection and sync with it.
 
 If any policy is invalid, Card Janitor will not run cleanup until the problem is
@@ -32,8 +38,7 @@ command.
           "name": "Retire Mature Cards",
           "mode": "on_demand",
           "scope": {
-            "decks": ["Mining"],
-            "include_subdecks": true,
+            "decks": [{"deck": "Mining", "include_subdecks": true}],
             "include_suspended": false
           },
           "match": "all",
@@ -62,6 +67,9 @@ from all checked policies. Select a row and use **Edit** to change that policy;
 **Refresh** recalculates the table. Running a policy on demand does not count as
 that day's automatic cleanup.
 
+**Browse** in the policy editor validates and evaluates the current form without
+saving it, then opens the cards that would require an action in Anki's Browser.
+
 Policy modes are:
 
 - `on_demand` — runs only when you start cleanup from Card Janitor
@@ -73,11 +81,56 @@ Janitor whenever you want to run policies on demand.
 
 ## Scope
 
-`decks` must contain one or more exact deck names. `include_subdecks` includes
-all descendants of each named deck. Suspended cards are excluded by default.
+Use `"all_decks": true` to cover every current and future deck, or `decks` for
+individual selections. These alternatives cannot be combined. For example:
+
+    "scope": {"all_decks": true, "include_suspended": false}
+
+`decks` must contain one or more selectors, each with `deck` and
+`include_subdecks`. A recursive selector includes that deck and all current and
+future descendants; an exact selector includes only that deck. Scope is the union
+of these selectors.
+Suspended cards are excluded by default.
 Buried cards remain eligible because burial is temporary.
 
+Optionally add `note_types` to restrict scope to one or more note-type names:
+
+    "scope": {"all_decks": true, "note_types": ["Basic", "Cloze"]}
+
+Cards must satisfy both the deck selection and the note-type selection. Omit
+`note_types` for **All note types**, including types created later. An explicit
+list must be non-empty and contains only the named types; a missing or renamed
+type is reported as a policy error. The compact selector opens a checklist.
+The manager's Scope column shows a single selected type or a count when several
+are selected; hover to see the full list. All note types remains implicit there.
+
+Note-type filtering identifies triggering notes. Notes actions still affect
+their sibling cards outside the selected decks; all siblings share that note type.
+
+The editor's compact deck selector opens a collapsible tree. Clicking a deck
+cycles through deck plus descendants, deck only, and unselected. Partial checks
+indicate an exact deck or a mixed branch; expand the branch to inspect it.
+New sibling decks under a partially selected parent are excluded unless that
+parent is recursively selected.
+The expanded **All decks** root selects everything when unchecked or partial,
+and clears everything when checked. Changing an individual deck under a full
+selection leaves a partial selection of current decks; future top-level decks
+are then excluded. Selecting all current branches individually does not enable
+collection-wide coverage of future top-level decks.
+
 ## Conditions
+
+The editor's condition picker groups card properties under **Cards** and shared
+note properties, such as tags, under **Notes**. Group headings are not selectable.
+
+### All cards
+
+    {"type": "all_cards"}
+
+Matches every card allowed by the policy's scope. `all_cards` must be the
+policy's only condition.
+In the editor, choose **All cards** in the **Match** selector; condition rows
+are hidden while this option is selected. Choose AND or OR to use conditions.
 
 ### Age
 
@@ -122,6 +175,70 @@ Use `exists` to match cards with a genuine answer entry in Anki's review log,
 or `not_exists` to match cards without one. A previously reviewed card that was
 later reset to New still has review history.
 
+### Note tags
+
+    {"type": "tags", "operator": "contains_any", "tags": ["leech"]}
+
+Tag matching is case-insensitive. Use `contains_any`, `contains_all`, or
+`contains_none` to control how multiple tags are matched. Tags belong to notes,
+so every sibling card generated from a note sees the same tags.
+
+### Suspension state
+
+    {"type": "suspension", "operator": "is_suspended"}
+
+Use `is_suspended` or `is_not_suspended`. A suspended card retains its New,
+Learning, Review, or Relearning state, so suspension is separate from the card-state
+condition. A policy that uses `is_suspended` must also set
+`scope.include_suspended` to `true`.
+
+### Sibling suspension and review history
+
+    {"type": "sibling_suspension", "operator": "all"}
+    {"type": "sibling_review_history", "operator": "none"}
+
+Both conditions accept `all`, `any`, or `none`. Sibling suspension checks how
+many cards are suspended; sibling review history checks how many have a genuine
+answer in the review log. Review history still counts if a studied card is reset
+to New; manual scheduling entries do not count as studying.
+
+These are in the editor's **Notes** group. They inspect **every card of the
+note**, including the triggering card itself and siblings outside scope, even
+when those siblings are suspended, buried, or in filtered decks. Scope still
+determines which cards can trigger the policy. For example, `any` suspended can
+match an active in-scope card with a suspended out-of-scope sibling.
+
+`all` suspended requires `scope.include_suspended: true`, since the triggering
+card must also be suspended. The editor enables that setting automatically.
+
+For deleting completely unstudied notes, combine `sibling_review_history` with
+`operator: "none"` and `delete_note`. A card-level `review_history: not_exists`
+condition alone could also delete that card's studied siblings.
+
+The sibling-condition banner explains that the checks extend outside scope;
+the manager's Conditions column summarizes the selected sibling check.
+
+### Leech example
+
+Anki normally tags a leech's note and can suspend the particular card.
+Combining both conditions avoids matching non-suspended sibling cards that share the
+note's `leech` tag:
+
+    "scope": {
+      "decks": [{"deck": "Mining", "include_subdecks": true}],
+      "include_suspended": true
+    },
+    "match": "all",
+    "conditions": [
+      {"type": "tags", "operator": "contains_any", "tags": ["leech"]},
+      {"type": "suspension", "operator": "is_suspended"}
+    ]
+
+Pair this with `delete_card` to remove only the suspended leech card. Use
+`delete_note` only when you also intend to remove the note and every sibling
+card it generates. Automatic policies run during Card Janitor's daily cleanup,
+not at the instant Anki adds the leech tag.
+
 ### Combining conditions
 
     "match": "any",
@@ -131,8 +248,8 @@ later reset to New still has review history.
     ]
 
 Use `match: "any"` for OR and `match: "all"` for AND. `conditions` must contain
-at least one age, interval, card-state, or review-history condition. Nested
-AND/OR groups are not supported.
+at least one condition. `all_cards` must appear alone; the other condition types
+can be combined. Nested AND/OR groups are not supported.
 
 For example, the conditions for a stale-new-card policy are:
 
@@ -147,12 +264,42 @@ to greater than, at least, exactly, at most, and less than.
 
 ## Actions
 
-- `{"type": "tag", "tags": ["retired"]}` adds one or more tags to the note. Anki has no card-level tags, so sibling cards share them.
+- `{"type": "tag", "tags": ["retired"]}` adds one or more tags to the note. `add_tags` is also accepted as an alias.
+- `{"type": "remove_tags", "tags": ["leech"]}` removes one or more tags from the note.
+- `{"type": "replace_tags", "tags": ["reviewed"]}` replaces the note's complete tag set. An empty array clears all tags.
 - `{"type": "suspend"}` suspends the qualifying card.
+- `{"type": "unsuspend"}` unsuspends the qualifying card. The policy scope must include suspended cards.
 - `{"type": "move", "deck": "Retired"}` moves the card to an existing normal deck.
+- `{"type": "suspend_note"}` suspends all cards of each matching note.
+- `{"type": "unsuspend_note"}` unsuspends all cards of each matching note.
+- `{"type": "move_note", "deck": "Retired"}` moves all cards of each matching note to an existing normal deck.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
+- `{"type": "delete_note"}` deletes the matching card's note and every card generated from it, including sibling cards outside the selected deck scope.
 
-`delete_card` must be the policy's only action. It can use `mode: "automatic"`, but automatic deletion runs without confirmation. On-demand deletion is shown in the dashboard before execution. The shipped configuration contains no policies, and the example uses `mode: "on_demand"` with reversible tag, suspend, and move actions.
+All tag actions affect notes, so sibling cards share their result. Replacing tags is
+destructive and is highlighted in the policy editor. Overlapping policies are skipped
+as conflicts when they add and remove the same tag, replace a note's tags in
+incompatible ways, or both suspend and unsuspend a card.
+
+`delete_card` and `delete_note` must each be the policy's only action. Either can
+use `mode: "automatic"`, but automatic deletion runs without confirmation.
+On-demand deletion is shown in the dashboard before execution. The shipped
+configuration contains no policies, and the example uses `mode: "on_demand"`
+with reversible tag, suspend, and move actions.
+
+For **Notes** actions, scope and conditions identify the triggering cards. The
+action then applies to every card of their notes, including siblings outside
+the selected decks or excluded by the scope's suspension setting. Filtered
+cards cannot trigger a policy, but can be affected as siblings of a matching
+note. Note unsuspension does not require including suspended cards in scope
+unless its triggering cards are suspended.
+
+Policy counts and **Browse** include sibling cards that require an action,
+including those deleted with a note. An already satisfied triggering card does
+not prevent a note action from updating its siblings. If a sibling has a
+conflicting policy, the note-wide operation is skipped for the whole note.
+If new cards would be affected between preview and execution, the whole note
+is skipped rather than expanding the approved operation.
 
 ## Multiple profiles
 

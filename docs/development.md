@@ -32,7 +32,7 @@ make dev-seed
 The command refuses to run against any other profile. It replaces only notes
 tagged `card_janitor_test_fixture`. Copy
 `tests/manual/dev-profile-config.json` into **Card Janitor… > Edit as JSON…**,
-save it, then open Card Janitor. The five policies should report these
+save it, then open Card Janitor. The ten policies should report these
 counts:
 
 | Policy | Cards |
@@ -41,27 +41,50 @@ counts:
 | Dev — Long Intervals | 3 |
 | Dev — Never Studied | 2 |
 | Dev — Learning States | 2 |
-| Dev — Delete | 1 |
+| Dev — Repair Suspended Leech | 1 |
+| Dev — Replace All Tags | 1 |
+| Dev — Delete Note | 1 |
+| Dev — Suspend Note | 1 |
+| Dev — Unsuspend Note | 1 |
+| Dev — Move Note | 1 |
 
 The first four policies have seven unique matching cards, with two cards
-matching more than one policy. The delete policy targets a separate eighth
-card. Two unmatched cards verify that conditions exclude an in-scope card and
+matching more than one policy. The tag repair, replacement, and delete policies
+target three separate cards. The three note-action policies affect three
+outside-scope siblings, for a total of thirteen cards to clean up.
+Two unmatched cards verify that conditions exclude an in-scope card and
 deck scope excludes an out-of-scope card. The move action uses the separate
 top-level `Card Janitor Retired` deck, verifying that moved cards leave the test
 source hierarchy completely.
 
 Run the integration test as follows:
 
-1. Confirm the policy counts and a total of eight cards to clean up
-2. Click **Browse** and confirm that it shows the same eight cards
+1. Confirm the policy counts and a total of thirteen cards to clean up
+2. Click **Browse** and confirm that it shows the same thirteen cards
 3. Click **Clean Up** and confirm all actions complete
 4. Confirm that the isolated delete card and its note were removed
-5. Use Anki's Undo command and confirm all eight cards, including the deleted
+5. Use Anki's Undo command and confirm all thirteen cards, including the deleted
    card and note, are restored
 6. Click **Refresh** and confirm the original counts return
 
 Run `make dev-seed` again whenever a clean fixture is needed. Keep every fixture
 policy On demand so opening the profile cannot mutate it before inspection.
+
+The note-action fixtures use a two-card note type. **Dev — Suspend Note**,
+**Dev — Unsuspend Note**, and **Dev — Move Note** should each report one card:
+their in-scope triggering card already satisfies the action, while a sibling
+in **Card Janitor Test::Outside Scope** needs updating. Browse should show that
+sibling, cleanup should update it, and Undo should restore its previous state
+or deck. Note unsuspension deliberately excludes suspended triggering cards
+from scope while still updating its suspended sibling.
+These policies restrict scope to **Card Janitor Test Siblings**. Confirm the
+editor loads that selection and the manager shows it in the Scope column.
+Changing the selection to **Basic** should show no matches for these fixtures.
+The note-action policies also include sibling suspension and review-history
+checks. Counts remain one each. **Dev — Unsuspend Note** should match through
+`any` suspended despite its suspended sibling being outside scope. Changing
+that condition to `none` should show no matches. The other two fixtures check
+`none` studied across both cards of the note.
 
 ## Linked development installation
 
@@ -108,10 +131,10 @@ tag can also be rebuilt from the workflow's manual trigger.
 6. Push `main` and confirm CI passes
 7. Create and push a signed version tag matching `pyproject.toml`
 
-For the first release, the final commands are:
+For the current release, the final commands are:
 
 ```bash
-git tag -s v0.1.0 -m "Card Janitor v0.1.0"
+git tag -s v0.2.0 -m "Card Janitor v0.2.0"
 git push origin main
 git push origin v0.1.0
 ```

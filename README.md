@@ -2,7 +2,9 @@
 
 Configurable policy-based cleanup for Anki cards.
 
-Applies cleanup policies according to deck scope, age, interval, card state, or review history, either on demand or automatically once per day.
+Applies cleanup policies according to deck scope, age, interval, card state,
+review history, note tags, or suspension state, either on demand or automatically
+once per day.
 
 > [!WARNING]
 > Card Janitor can make destructive collection changes, including permanently
@@ -10,6 +12,10 @@ Applies cleanup policies according to deck scope, age, interval, card state, or 
 > mode, inspect matching cards with **Browse**, and verify Anki's undo behavior
 > before enabling automatic cleanup. You use this add-on at your own risk; its
 > author accepts no responsibility or liability for collection damage or data loss.
+
+> [!CAUTION]
+> Card Janitor is pre-1.0 software. Its policy configuration format and behavior
+> may change without warning between releases.
 
 ![Card Janitor policy manager](./assets/banner.png)
 
@@ -42,14 +48,22 @@ Then install `card-janitor.ankiaddon` from Anki's add-ons screen or by double cl
 
 Each policy has three parts:
 
-* Scope — one or more decks, optionally including subdecks
-* Conditions — age, interval, card state, or review history, combined with AND/OR
-* Actions — tag, suspend, move, or delete the qualifying cards
+* Scope — deck selections, optionally restricted to selected note types
+* Conditions — card properties, note tags, or sibling suspension/review history, combined with AND/OR
+* Actions — change tags, suspend or unsuspend, move, or delete the qualifying cards
 
 ### Scope
 
 Scope limits a policy to one or more decks. It can optionally include their
 subdecks and cards that are already suspended. Filtered-deck cards are excluded.
+The compact deck selector opens a collapsible tree. Each deck can include all
+current and future descendants, only itself, or nothing. Partial checks indicate
+an exact selection or a mixed branch.
+The note-type selector defaults to **All note types**, including types created
+later. Selecting specific types restricts the cards matched within those decks.
+The manager's Scope column shows note-type restrictions when present; its
+tooltip lists every selected type.
+Choose **All decks** at the tree root to include every current and future deck.
 
 ### Conditions
 
@@ -63,24 +77,38 @@ subdecks and cards that are already suspended. Filtered-deck cards are excluded.
 
 | Condition | What it matches | Important detail |
 | --- | --- | --- |
+| All cards | Every card allowed by the selected scope | Must be the policy's only condition |
 | Age since first review | Whole days since the card's first genuine answer | Cards without review history do not match |
 | Age since creation | Whole days since the card's original creation timestamp | Imported cards may retain much older creation dates |
 | Current interval | The card's current scheduled interval in days | Supports greater than, at least, exactly, at most, and less than comparisons |
 | Card state | New, Learning, Review, or Relearning cards | One or more states can be selected |
 | Review history | Whether the card has ever received a genuine answer | History remains after a studied card is reset to New |
+| Note tags | Notes containing any, all, or none of the selected tags | Tags are shared by sibling cards |
+| Suspension state | Suspended or non-suspended cards | Matching suspended cards also requires the scope option |
+| Sibling suspension | All, any, or none of a note's cards are suspended | Checks every card of the note, including cards outside scope |
+| Sibling review history | None, any, or all of a note's cards have been studied | Checks every card of the note, including cards outside scope |
 
 A policy can require **all** conditions to match (AND), or allow **any** condition
 to match (OR). Nested combinations such as `A AND (B OR C)` are not currently
 supported.
+Sibling conditions include the matching card itself, plus suspended, buried,
+and filtered siblings. Use **Sibling review history → none studied** when
+deleting notes that must be completely unstudied, rather than checking only
+the matching card's review history.
 
 ### Actions
 
 Matching cards can be:
 
-* tagged — tags belong to notes, so sibling cards share them
-* suspended
+* given, stripped of, or assigned an exact set of tags — tags belong to notes, so sibling cards share them
+* suspended or unsuspended
 * moved to another existing deck
-* deleted — deletion must be the policy's only action
+* deleted individually, or deleted together with their complete note and every sibling card — deletion must be the policy's only action
+
+Choose **Cards** to act on matching cards, or **Notes** to suspend, unsuspend,
+move, or delete all cards belonging to matching notes. Notes actions can affect
+siblings outside the selected scope; counts and **Browse** include the cards
+that require an action.
 
 Compatible actions from overlapping policies are combined. Cards are skipped
 and reported when policies specify conflicting move destinations or combine
@@ -93,9 +121,10 @@ Card Janitor can, for example:
 * delete cards that remain unstudied 30 days after their original creation
 * suspend cards one year after their first review
 * move mature cards to a retirement deck once their interval reaches 365 days
+* delete cards that Anki has tagged as leeches and suspended
 
-Use **Browse** in the policy manager to inspect the cards a policy currently
-matches before running it.
+Use **Browse** in the policy manager or editor to inspect the cards a policy
+would currently clean up. The editor evaluates its current unsaved settings.
 
 ## Policy Modes
 
@@ -126,7 +155,9 @@ each profile has its own policies. Notification and debug settings are shared
 across profiles on the same Anki installation. Automatic cleanup is tracked
 separately for each profile.
 
-Automatic deletion is supported but is never configured by default. It requires an explicit `delete_card` action with `mode: "automatic"` and runs without confirmation.
+Automatic deletion is supported but is never configured by default. It requires
+an explicit `delete_card` or `delete_note` action with `mode: "automatic"` and
+runs without confirmation.
 
 See [policies.md](./docs/policies.md) for the complete policy schema and examples.
 
