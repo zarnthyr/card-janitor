@@ -1,7 +1,10 @@
 # Copyright (C) 2026 Zarnthyr
 # License: GNU AGPL v3 or later
 
+import json
 import os
+from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,13 +12,15 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from anki.collection import Collection
-from aqt.qt import QApplication, Qt, QWidget
+from aqt.qt import QApplication, QPlainTextEdit, Qt, QWidget
 from card_janitor import conflict_dialog, policy_editor, ui
 from card_janitor.action_row import ActionRow
+from card_janitor.actions import ConflictDetail
 from card_janitor.condition_row import ConditionRow
 from card_janitor.configuration import DEFAULT_CONFIG
 from card_janitor.deck_picker import DeckPicker
 from card_janitor.engine import CardFacts, ResolvedAction, evaluate_facts
+from card_janitor.line_numbers import LineNumberArea
 from card_janitor.models import (
     AgeCondition,
     CardStateCondition,
@@ -27,10 +32,44 @@ from card_janitor.models import (
     TagCondition,
     parse_config,
     parse_policy,
+    policy_to_dict,
 )
 from card_janitor.note_type_picker import NoteTypePicker
 
 pytestmark = pytest.mark.usefixtures("_application")
+
+
+def test_json_line_numbers_resize_and_scroll() -> None:
+    application = QApplication.instance()
+    editor = QPlainTextEdit()
+    editor.resize(400, 200)
+    editor.show()
+    application.processEvents()
+    # Anki's bulk ConfigEditor shows itself before we attach the gutter.
+    gutter = LineNumberArea(editor)
+    application.processEvents()
+    assert gutter.isVisible()
+    initial_width = gutter.width()
+    editor.setPlainText("\n".join(str(number) for number in range(120)))
+    application.processEvents()
+    assert gutter.width() > initial_width
+    assert editor.viewport().geometry().left() == gutter.geometry().right() + 1
+    editor.verticalScrollBar().setValue(60)
+    application.processEvents()
+    assert editor.firstVisibleBlock().blockNumber() > 0
+    assert not gutter.grab().isNull()
+    font = editor.font()
+    font.setPointSize(font.pointSize() + 4)
+    previous_width = gutter.width()
+    editor.setFont(font)
+    editor.resize(500, 300)
+    application.processEvents()
+    assert gutter.width() > previous_width
+    assert gutter.height() == editor.contentsRect().height()
+    editor.setPlainText("{}")
+    application.processEvents()
+    assert gutter.width() < previous_width
+    editor.close()
 
 
 @pytest.fixture(scope="module")
@@ -198,7 +237,8 @@ def test_conflict_summary_opens_modeless_details_and_browses_skipped_cards(
     assert details is not None
     assert not details.isModal()
     assert details.table.item(0, 1).text() == "A\nB"
-    assert details.table.item(0, 2).text() == "Move actions specify different destination decks"
+    assert details.table.item(0, 2).text() == "A: Move cards to 'A'\nB: Move cards to 'B'"
+    assert details.table.item(0, 3).text() == "Move actions specify different destination decks"
     browsed = []
     monkeypatch.setattr(conflict_dialog, "open_cards_in_browser", browsed.append)
     details.browse_button.click()
@@ -211,3 +251,179 @@ def test_conflict_summary_opens_modeless_details_and_browses_skipped_cards(
     assert dashboard.conflict_summary.isHidden()
     assert "1 card would be cleaned up" in dashboard.summary.text()
     dashboard.close()
+
+
+@pytest.fixture
+def edit_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
+    collection = Collection(str(tmp_path / "policy-ux.anki2"))
+    collection.decks.id("Mining")
+    parent = QWidget()
+    parent.col = collection
+    monkeypatch.setattr(policy_editor, "mw", parent)
+    monkeypatch.setattr(ui, "mw", parent)
+    raw = {
+        "id": "original",
+        "name": "Leeches",
+        "mode": "on_demand",
+        "scope": {"decks": [{"deck": "Mining", "include_subdecks": True}]},
+        "match": "all",
+        "conditions": [{"type": "tags", "tags": ["leech"], "operator": "contains_any"}],
+        "actions": [{"type": "remove_tags", "tags": ["leech"]}],
+    }
+    policy = parse_policy(raw)
+    yield SimpleNamespace(parent=parent, collection=collection, raw=raw, policy=policy)
+    parent.deleteLater()
+    collection.close()
+
+
+def test_policy_json_round_trip_unsaved_form_and_managed_id(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, edit_fixture.raw, edit_fixture.policy, ()), set(), edit_fixture.parent
+    )
+    editor.name.setText("Changed name")
+    editor._toggle_json()
+    raw = json.loads(editor.json_text.toPlainText())
+    assert raw["name"] == "Changed name"
+    raw["id"] = "copied-policy-id"
+    raw["scope"] = {"all_decks": True, "note_types": ["Basic"]}
+    raw["conditions"] = [{"type": "all_cards"}]
+    raw["actions"] = [{"type": "replace_tags", "tags": []}]
+    editor.json_text.setPlainText(json.dumps(raw))
+    editor.save_button.click()
+    assert editor.result_policy is None
+    assert not editor._json_mode
+    assert editor.save_button.text() == "Save"
+    result = editor._policy_from_form()
+    assert result.id == edit_fixture.policy.id
+    assert result.scope.all_decks
+    assert result.scope.note_types == ("Basic",)
+    assert policy_to_dict(result)["actions"] == [{"type": "replace_tags", "tags": []}]
+    assert editor._has_unsaved_changes()
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    editor.close()
+
+
+def test_new_policy_json_can_start_from_incomplete_form(edit_fixture: SimpleNamespace) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, {"original"}, edit_fixture.parent)
+    editor._toggle_json()
+    assert editor._json_mode
+    raw = dict(edit_fixture.raw)
+    editor.json_text.setPlainText(json.dumps(raw))
+    result = editor._policy_from_form()
+    assert result is not None
+    assert result.id != "original"
+    editor._accept()
+    assert editor.result_policy is None
+    assert not editor._json_mode
+    editor._accept()
+    assert editor.result_policy == result
+
+
+def test_invalid_json_keeps_json_editor_and_form_unchanged(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = []
+    monkeypatch.setattr(policy_editor, "showWarning", lambda text, **_kwargs: warnings.append(text))
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, edit_fixture.raw, edit_fixture.policy, ()), set(), edit_fixture.parent
+    )
+    editor._toggle_json()
+    editor.json_text.setPlainText("{")
+    editor._accept()
+    assert editor._json_mode
+    assert editor.name.text() == "Leeches"
+    assert editor._policy_from_form() is None
+    assert warnings
+
+
+def test_json_cancel_returns_to_incomplete_form_without_validation(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warnings = []
+    prompts = []
+    monkeypatch.setattr(policy_editor, "showWarning", lambda text, **_kwargs: warnings.append(text))
+    monkeypatch.setattr(
+        policy_editor, "askUser", lambda *args, **_kwargs: prompts.append(args) or False
+    )
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    initial = editor._form_payload()
+    editor.json_button.click()
+    assert editor.save_button.text() == "Apply"
+    assert editor.json_button.isHidden()
+    editor.cancel_button.click()
+    assert not editor._json_mode
+    assert editor.isVisible()
+    assert editor._form_payload() == initial
+    assert not warnings
+    assert not prompts
+    editor.reject()
+
+
+def test_json_cancel_discards_only_json_and_preserves_unsaved_form(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, edit_fixture.raw, edit_fixture.policy, ()), set(), edit_fixture.parent
+    )
+    editor.name.setText("Unsaved form name")
+    initial = editor._form_payload()
+    editor._toggle_json()
+    editor.json_text.setPlainText("{")
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: False)
+    editor.reject()
+    assert editor._json_mode
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    editor.reject()
+    assert not editor._json_mode
+    assert editor._form_payload() == initial
+    assert editor._has_unsaved_changes()
+    editor.reject()
+
+
+def test_unsaved_close_can_be_cancelled_or_confirmed(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    editor.name.setText("Unsaved")
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: False)
+    assert not editor.close()
+    assert editor.isVisible()
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    assert editor.close()
+    assert not editor.isVisible()
+
+
+def test_duplicate_opens_draft_with_fresh_id_and_does_not_save(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    parsed = parse_config({**DEFAULT_CONFIG, "policies": [edit_fixture.raw]})
+    dashboard = ui.CardJanitorDialog(parsed, ())
+    dashboard.duplicate_button.click()
+    editor = dashboard._policy_editor
+    assert editor is not None
+    assert editor._record is None
+    duplicate = editor._policy_from_form()
+    assert duplicate == replace(edit_fixture.policy, id=duplicate.id, name="Leeches (copy)")
+    assert duplicate.id != edit_fixture.policy.id
+    assert not editor._has_unsaved_changes()
+    editor.reject()
+    dashboard.close()
+
+
+def test_conflict_browse_respects_selected_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = QWidget()
+    dialog = conflict_dialog.ConflictDialog(
+        tuple(ConflictDetail(card_id, ("Policy",), ("Reason",)) for card_id in (1, 2)), parent, ()
+    )
+    browsed = []
+    monkeypatch.setattr(conflict_dialog, "open_cards_in_browser", browsed.append)
+    dialog.browse_button.click()
+    dialog.table.selectRow(1)
+    assert dialog.browse_button.text() == "Browse selected"
+    dialog.browse_button.click()
+    assert browsed == [{1, 2}, {2}]
+    dialog.close()

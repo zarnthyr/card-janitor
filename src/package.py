@@ -33,6 +33,7 @@ REQUIRED_PACKAGE_FILES = {
     "conflict_dialog.py",
     "editor_utils.py",
     "json_editor.py",
+    "line_numbers.py",
     "policy_editor.py",
     "settings_dialog.py",
     "deck_picker.py",
