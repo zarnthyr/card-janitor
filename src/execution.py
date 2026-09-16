@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from .actions import ExecutionResult, build_execution_plan, execute_plan
 from .evaluator import evaluate_policies
+from .models import action_targets_note
 
 if TYPE_CHECKING:
     from anki.collection import Collection
@@ -25,15 +26,30 @@ def execute_approved_reports(
     runtime_errors = [item for report in fresh_reports for item in report.errors]
     if runtime_errors:
         raise RuntimeError("; ".join(runtime_errors))
-    approved_reports = tuple(
-        replace(
-            report,
-            actionable=tuple(
-                card
-                for card in report.actionable
-                if card.card_id in approved_card_ids[report.policy.id]
-            ),
+    approved_reports = []
+    for report in fresh_reports:
+        approved_ids = approved_card_ids[report.policy.id]
+        blocked_notes = (
+            {card.note_id for card in report.actionable if card.card_id not in approved_ids}
+            if any(action_targets_note(action.action) for action in report.resolved_actions)
+            else set()
         )
-        for report in fresh_reports
-    )
-    return execute_plan(col, build_execution_plan(approved_reports), undo_name)
+        approved_reports.append(
+            replace(
+                report,
+                qualifying=tuple(
+                    card for card in report.qualifying if card.note_id not in blocked_notes
+                ),
+                card_actions=tuple(
+                    (card, actions)
+                    for card, actions in report.card_actions
+                    if card.note_id not in blocked_notes
+                ),
+                actionable=tuple(
+                    card
+                    for card in report.actionable
+                    if card.card_id in approved_ids and card.note_id not in blocked_notes
+                ),
+            )
+        )
+    return execute_plan(col, build_execution_plan(tuple(approved_reports), col), undo_name)

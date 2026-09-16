@@ -40,7 +40,7 @@
         "actions": {
           "type": "array",
           "minItems": 1,
-          "description": "Changes to apply to matching cards",
+          "description": "Changes to apply when cards match",
           "items": {"$ref": "#/$defs/action"}
         }
       },
@@ -52,39 +52,79 @@
                 "contains": {
                   "type": "object",
                   "required": ["type"],
-                  "properties": {"type": {"const": "delete_card"}}
+                  "properties": {"type": {"enum": ["delete_card", "delete_note"]}}
                 }
               }
             }
           },
           "then": {"properties": {"actions": {"maxItems": 1}}}
+        },
+        {
+          "if": {
+            "properties": {
+              "conditions": {
+                "contains": {
+                  "type": "object",
+                  "required": ["type"],
+                  "properties": {"type": {"const": "all_cards"}}
+                }
+              }
+            }
+          },
+          "then": {"properties": {"conditions": {"maxItems": 1}}}
         }
       ]
     },
     "scope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["decks"],
+      "oneOf": [
+        {"required": ["decks"], "not": {"required": ["all_decks"]}},
+        {"required": ["all_decks"], "not": {"required": ["decks"]}}
+      ],
       "properties": {
+        "all_decks": {
+          "const": true,
+          "description": "Include all current and future non-filtered decks"
+        },
         "decks": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
-          "description": "Exact names of one or more existing decks",
-          "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
-        },
-        "include_subdecks": {
-          "type": "boolean",
-          "description": "Also include every child deck of each named deck"
+          "description": "Union of per-deck exact or recursive selectors",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["deck", "include_subdecks"],
+            "properties": {
+              "deck": {"type": "string", "minLength": 1, "pattern": "\\S"},
+              "include_subdecks": {"type": "boolean"}
+            }
+          }
         },
         "include_suspended": {
           "type": "boolean",
           "description": "Allow the policy to match cards that are already suspended"
+        },
+        "note_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "pattern": "\\S"},
+          "description": "Restrict scope to these note-type names; omit to include all current and future note types"
         }
       }
     },
     "condition": {
       "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": {"const": "all_cards"}
+          }
+        },
         {
           "type": "object",
           "additionalProperties": false,
@@ -128,6 +168,39 @@
             "type": {"const": "review_history"},
             "operator": {"enum": ["exists", "not_exists"]}
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "tags", "operator"],
+          "properties": {
+            "type": {"const": "tags"},
+            "tags": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
+            },
+            "operator": {"enum": ["contains_any", "contains_all", "contains_none"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "operator"],
+          "properties": {
+            "type": {"const": "suspension"},
+            "operator": {"enum": ["is_suspended", "is_not_suspended"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "operator"],
+          "properties": {
+            "type": {"enum": ["sibling_suspension", "sibling_review_history"]},
+            "operator": {"enum": ["all", "any", "none"]}
+          }
         }
       ]
     },
@@ -138,7 +211,7 @@
           "additionalProperties": false,
           "required": ["type", "tags"],
           "properties": {
-            "type": {"const": "tag"},
+            "type": {"enum": ["tag", "add_tags", "remove_tags"]},
             "tags": {
               "type": "array",
               "minItems": 1,
@@ -150,15 +223,28 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["type", "tags"],
+          "properties": {
+            "type": {"const": "replace_tags"},
+            "tags": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {"type": "string", "minLength": 1, "pattern": "\\S"}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["type"],
-          "properties": {"type": {"enum": ["suspend", "delete_card"]}}
+          "properties": {"type": {"enum": ["suspend", "unsuspend", "suspend_note", "unsuspend_note", "delete_card", "delete_note"]}}
         },
         {
           "type": "object",
           "additionalProperties": false,
           "required": ["type", "deck"],
           "properties": {
-            "type": {"const": "move"},
+            "type": {"enum": ["move", "move_note"]},
             "deck": {"type": "string", "minLength": 1, "pattern": "\\S"}
           }
         }

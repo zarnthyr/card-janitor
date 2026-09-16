@@ -14,6 +14,9 @@ CHILD = "Card Janitor Test::Source::Child"
 OUTSIDE = "Card Janitor Test::Outside Scope"
 RETIRED = "Card Janitor Retired"
 DELETE = "Card Janitor Test::Delete"
+TAG_ACTIONS = "Card Janitor Test::Tag Actions"
+NOTE_ACTIONS = "Card Janitor Test::Note Actions"
+SIBLING_MODEL = "Card Janitor Test Siblings"
 
 
 def invoke(action: str, **params: object) -> object:
@@ -40,20 +43,32 @@ existing_notes = invoke("findNotes", query=f"tag:{TAG}")
 if existing_notes:
     invoke("deleteNotes", notes=existing_notes)
 
-for deck in (SOURCE, CHILD, OUTSIDE, RETIRED, DELETE):
+for deck in (SOURCE, CHILD, OUTSIDE, RETIRED, DELETE, TAG_ACTIONS, NOTE_ACTIONS):
     invoke("createDeck", deck=deck)
 
 fixtures = (
-    ("New — no review history", SOURCE, None),
-    ("New — no review history (suspended)", SOURCE, "new_suspended"),
-    ("Review — first reviewed 400 days ago, interval 400", SOURCE, "old_review"),
-    ("Review — first reviewed 5 days ago, interval 400", SOURCE, "recent_long"),
-    ("Review — first reviewed 5 days ago, interval 10", SOURCE, "recent_short"),
-    ("Learning — review history exists", SOURCE, "learning"),
-    ("Relearning — review history exists", SOURCE, "relearning"),
-    ("Child deck — first reviewed 400 days ago", CHILD, "old_review"),
-    ("Outside scope — interval 400", OUTSIDE, "recent_long"),
-    ("Delete — isolated undo test", DELETE, None),
+    ("New — no review history", SOURCE, None, ()),
+    ("New — no review history (suspended)", SOURCE, "new_suspended", ()),
+    ("Review — first reviewed 400 days ago, interval 400", SOURCE, "old_review", ()),
+    ("Review — first reviewed 5 days ago, interval 400", SOURCE, "recent_long", ()),
+    ("Review — first reviewed 5 days ago, interval 10", SOURCE, "recent_short", ()),
+    ("Learning — review history exists", SOURCE, "learning", ()),
+    ("Relearning — review history exists", SOURCE, "relearning", ()),
+    ("Child deck — first reviewed 400 days ago", CHILD, "old_review", ()),
+    ("Outside scope — interval 400", OUTSIDE, "recent_long", ()),
+    (
+        "Tag actions — suspended leech",
+        TAG_ACTIONS,
+        "tagged_suspended",
+        ("leech", "cj_test_remove"),
+    ),
+    (
+        "Tag actions — replace all tags",
+        TAG_ACTIONS,
+        None,
+        ("cj_test_replace", "old_tag"),
+    ),
+    ("Delete — isolated undo test", DELETE, None, ()),
 )
 notes = [
     {
@@ -64,9 +79,9 @@ notes = [
             "Back": "Card Janitor development fixture",
         },
         "options": {"allowDuplicate": False},
-        "tags": [TAG],
+        "tags": [TAG, *extra_tags],
     }
-    for label, deck, _kind in fixtures
+    for label, deck, _kind, extra_tags in fixtures
 ]
 note_ids = invoke("addNotes", notes=notes)
 if not all(isinstance(note_id, int) for note_id in note_ids):
@@ -75,7 +90,7 @@ if not all(isinstance(note_id, int) for note_id in note_ids):
 
 now_ms = int(time.time() * 1000)
 review_rows = []
-for offset, ((label, _deck, kind), note_id) in enumerate(
+for offset, ((label, _deck, kind, _extra_tags), note_id) in enumerate(
     zip(fixtures, note_ids, strict=True),
     start=1,
 ):
@@ -86,7 +101,7 @@ for offset, ((label, _deck, kind), note_id) in enumerate(
     card_id = card_ids[0]
     if kind is None:
         continue
-    if kind == "new_suspended":
+    if kind in {"new_suspended", "tagged_suspended"}:
         invoke(
             "setSpecificValueOfCard",
             card=card_id,
@@ -111,5 +126,43 @@ for offset, ((label, _deck, kind), note_id) in enumerate(
     review_rows.append([review_ms, card_id, -1, 3, interval, 0, 2500, 1000, 1])
 
 invoke("insertReviews", reviews=review_rows)
+
+if SIBLING_MODEL not in invoke("modelNames"):
+    invoke(
+        "createModel",
+        modelName=SIBLING_MODEL,
+        inOrderFields=["Front", "Back"],
+        cardTemplates=[
+            {"Name": "Forward", "Front": "{{Front}}", "Back": "{{FrontSide}}<hr>{{Back}}"},
+            {"Name": "Reverse", "Front": "{{Back}}", "Back": "{{FrontSide}}<hr>{{Front}}"},
+        ],
+    )
+for operation in ("suspend", "unsuspend", "move"):
+    note_id = invoke(
+        "addNote",
+        note={
+            "deckName": NOTE_ACTIONS,
+            "modelName": SIBLING_MODEL,
+            "fields": {
+                "Front": f"Note actions — {operation} siblings",
+                "Back": "Outside-scope sibling",
+            },
+            "tags": [TAG, f"cj_test_note_{operation}"],
+        },
+    )
+    cards = invoke("findCards", query=f"nid:{note_id}")
+    if len(cards) != 2:
+        message = f"Expected two cards for note action {operation!r}, got {cards!r}"
+        raise RuntimeError(message)
+    first, sibling = sorted(cards)
+    invoke("changeDeck", cards=[sibling], deck=OUTSIDE)
+    if operation != "move":
+        invoke(
+            "setSpecificValueOfCard",
+            card=first if operation == "suspend" else sibling,
+            keys=["type", "queue", "ivl"],
+            newValues=[0, -1, 0],
+            warning_check=True,
+        )
 invoke("reloadCollection")
-print(f"Seeded {len(fixtures)} cards in the dev profile")
+print(f"Seeded {len(fixtures) + 6} cards in the dev profile")

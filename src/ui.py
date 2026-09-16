@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 import aqt
 import markdown
-from anki.collection import SearchNode
 from aqt import mw
 from aqt.addons import ConfigEditor
 from aqt.operations import CollectionOp, QueryOp
@@ -46,6 +45,7 @@ from aqt.utils import askUser, showWarning, tooltip
 from markdown.extensions import md_in_html
 
 from .actions import ExecutionResult, build_execution_plan
+from .browsing import open_cards_in_browser
 from .configuration import (
     ADDON_MODULE,
     DEFAULT_CONFIG,
@@ -180,6 +180,8 @@ class CardJanitorDialog(QDialog):
         self._rows: tuple[DashboardRow, ...] = ()
         self._parsed = parsed
         self._running = False
+        self._policy_editor: PolicyEditorDialog | None = None
+        self._editor_widget_states: list[tuple[QWidget, bool]] = []
         self.setWindowTitle("Card Janitor")
         self.resize(1050, 420)
 
@@ -210,7 +212,7 @@ class CardJanitorDialog(QDialog):
             "Include or exclude all valid policies"
         )
         self.table.horizontalHeaderItem(self.COLUMN_COUNT).setToolTip(
-            "Cards that still require at least one configured action"
+            "Cards requiring an action, including affected siblings outside scope"
         )
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -543,12 +545,11 @@ class CardJanitorDialog(QDialog):
         match_counts = Counter(card.card_id for report in reports for card in report.actionable)
         candidate_ids = set(match_counts)
         overlap_count = sum(count > 1 for count in match_counts.values())
-        plan = build_execution_plan(reports)
+        plan = build_execution_plan(reports, mw.col)
         messages = [f"{card_count_text(plan.card_count).capitalize()} would be cleaned up"]
         if overlap_count:
-            overlap_verb = "matches" if overlap_count == 1 else "match"
             messages.append(
-                f"{card_count_text(overlap_count).capitalize()} {overlap_verb} more than one policy"
+                f"{card_count_text(overlap_count).capitalize()} would be affected by more than one policy"
             )
         if plan.conflicted_card_ids:
             conflict_count = len(plan.conflicted_card_ids)
@@ -568,7 +569,8 @@ class CardJanitorDialog(QDialog):
     def _view_included(self) -> None:
         card_ids = {card.card_id for report in self.checked_reports() for card in report.actionable}
         if card_ids:
-            _open_cards_in_browser(card_ids)
+            browser = open_cards_in_browser(card_ids)
+            qconnect(browser.destroyed, lambda _object=None: _restore_dashboard(self))
 
     def _refresh(self) -> None:
         refresh_on_demand_dialog(self)
@@ -629,6 +631,10 @@ class CardJanitorDialog(QDialog):
         self._refresh()
 
     def _open_editor(self, record: PolicyRecord | None) -> None:
+        if self._policy_editor is not None and self._policy_editor.isVisible():
+            self._policy_editor.raise_()
+            self._policy_editor.activateWindow()
+            return
         excluded_id = record.policy.id.casefold() if record and record.policy else None
         existing_ids = {
             item.policy.id.casefold()
@@ -636,32 +642,71 @@ class CardJanitorDialog(QDialog):
             if item.policy is not None and item.policy.id.casefold() != excluded_id
         }
         editor = PolicyEditorDialog(record, existing_ids, self)
-        if editor.exec() != QDialog.DialogCode.Accepted or editor.result_policy is None:
+        self._policy_editor = editor
+        self._set_editor_controls_enabled(enabled=False)
+        qconnect(
+            editor.finished,
+            lambda result: self._finish_editor(editor, record, result),
+        )
+        editor.setModal(False)
+        editor.show()
+        editor.raise_()
+        editor.activateWindow()
+
+    def _set_editor_controls_enabled(self, enabled: bool) -> None:
+        widgets = (
+            self.table,
+            self.add_button,
+            self.edit_button,
+            self.remove_button,
+            self.empty_add_button,
+            self.settings_button,
+            self.json_button,
+            self.refresh_button,
+            self.view_button,
+            self.close_button,
+            self.run_button,
+        )
+        if not enabled:
+            self._editor_widget_states = [(widget, widget.isEnabled()) for widget in widgets]
+            for widget, _was_enabled in self._editor_widget_states:
+                widget.setEnabled(False)
+            return
+        for widget, was_enabled in self._editor_widget_states:
+            widget.setEnabled(was_enabled)
+        self._editor_widget_states = []
+
+    def _finish_editor(
+        self,
+        editor: PolicyEditorDialog,
+        record: PolicyRecord | None,
+        result: int,
+    ) -> None:
+        if self._policy_editor is editor:
+            self._policy_editor = None
+        self._set_editor_controls_enabled(enabled=True)
+        policy = editor.result_policy
+        editor.deleteLater()
+        if result != QDialog.DialogCode.Accepted or policy is None:
+            self.raise_()
+            self.activateWindow()
             return
         try:
-            save_policy(editor.result_policy, index=record.index if record is not None else None)
+            save_policy(policy, index=record.index if record is not None else None)
         except ConfigWriteError as exc:
             error(
                 "failed to save policy",
-                policy_id=editor.result_policy.id,
+                policy_id=policy.id,
                 reason=str(exc),
             )
             showWarning(str(exc), parent=self)
             return
         debug(
             "policy saved",
-            policy_id=editor.result_policy.id,
+            policy_id=policy.id,
             operation="updated" if record is not None else "added",
         )
         self._refresh()
-
-
-def _open_cards_in_browser(card_ids: set[int]) -> None:
-    node = SearchNode(parsable_text="cid:" + ",".join(str(card_id) for card_id in sorted(card_ids)))
-    browser = aqt.dialogs.open("Browser", mw, search=(node,))
-    dialog = getattr(mw, ON_DEMAND_DIALOG_ATTR, None)
-    if isinstance(dialog, CardJanitorDialog):
-        qconnect(browser.destroyed, lambda _object=None: _restore_dashboard(dialog))
 
 
 def _restore_dashboard(dialog: CardJanitorDialog) -> None:

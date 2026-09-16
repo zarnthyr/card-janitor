@@ -5,17 +5,33 @@
       "name": "Dev — Old Reviews",
       "mode": "on_demand",
       "scope": {
-        "decks": ["Card Janitor Test::Source"],
-        "include_subdecks": true,
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Source",
+            "include_subdecks": true
+          }
+        ],
         "include_suspended": true
       },
       "match": "all",
       "conditions": [
-        {"type": "age", "days": 365, "source": "first_review", "operator": "gte"}
+        {
+          "type": "age",
+          "days": 365,
+          "source": "first_review",
+          "operator": "gte"
+        }
       ],
       "actions": [
-        {"type": "tag", "tags": ["cj_test_old"]},
-        {"type": "suspend"}
+        {
+          "type": "tag",
+          "tags": [
+            "cj_test_old"
+          ]
+        },
+        {
+          "type": "suspend"
+        }
       ]
     },
     {
@@ -23,16 +39,27 @@
       "name": "Dev — Long Intervals",
       "mode": "on_demand",
       "scope": {
-        "decks": ["Card Janitor Test::Source"],
-        "include_subdecks": true,
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Source",
+            "include_subdecks": true
+          }
+        ],
         "include_suspended": true
       },
       "match": "all",
       "conditions": [
-        {"type": "interval", "days": 365, "operator": "gte"}
+        {
+          "type": "interval",
+          "days": 365,
+          "operator": "gte"
+        }
       ],
       "actions": [
-        {"type": "move", "deck": "Card Janitor Retired"}
+        {
+          "type": "move",
+          "deck": "Card Janitor Retired"
+        }
       ]
     },
     {
@@ -40,17 +67,34 @@
       "name": "Dev — Never Studied",
       "mode": "on_demand",
       "scope": {
-        "decks": ["Card Janitor Test::Source"],
-        "include_subdecks": true,
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Source",
+            "include_subdecks": true
+          }
+        ],
         "include_suspended": true
       },
       "match": "all",
       "conditions": [
-        {"type": "age", "days": 0, "source": "card_created", "operator": "gte"},
-        {"type": "review_history", "operator": "not_exists"}
+        {
+          "type": "age",
+          "days": 0,
+          "source": "card_created",
+          "operator": "gte"
+        },
+        {
+          "type": "review_history",
+          "operator": "not_exists"
+        }
       ],
       "actions": [
-        {"type": "tag", "tags": ["cj_test_never_studied"]}
+        {
+          "type": "tag",
+          "tags": [
+            "cj_test_never_studied"
+          ]
+        }
       ]
     },
     {
@@ -58,34 +102,185 @@
       "name": "Dev — Learning States",
       "mode": "on_demand",
       "scope": {
-        "decks": ["Card Janitor Test::Source"],
-        "include_subdecks": true,
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Source",
+            "include_subdecks": true
+          }
+        ],
         "include_suspended": true
       },
       "match": "all",
       "conditions": [
-        {"type": "card_state", "states": ["learning", "relearning"]}
+        {
+          "type": "card_state",
+          "states": [
+            "learning",
+            "relearning"
+          ]
+        }
       ],
       "actions": [
-        {"type": "tag", "tags": ["cj_test_learning"]}
+        {
+          "type": "tag",
+          "tags": [
+            "cj_test_learning"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dev-repair-leech",
+      "name": "Dev — Repair Suspended Leech",
+      "mode": "on_demand",
+      "scope": {
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Tag Actions",
+            "include_subdecks": false
+          }
+        ],
+        "include_suspended": true
+      },
+      "match": "all",
+      "conditions": [
+        {
+          "type": "tags",
+          "operator": "contains_all",
+          "tags": [
+            "leech",
+            "cj_test_remove"
+          ]
+        },
+        {
+          "type": "suspension",
+          "operator": "is_suspended"
+        }
+      ],
+      "actions": [
+        {
+          "type": "remove_tags",
+          "tags": [
+            "leech",
+            "cj_test_remove"
+          ]
+        },
+        {
+          "type": "unsuspend"
+        }
+      ]
+    },
+    {
+      "id": "dev-replace-tags",
+      "name": "Dev — Replace All Tags",
+      "mode": "on_demand",
+      "scope": {
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Tag Actions",
+            "include_subdecks": false
+          }
+        ],
+        "include_suspended": true
+      },
+      "match": "all",
+      "conditions": [
+        {
+          "type": "tags",
+          "operator": "contains_any",
+          "tags": [
+            "cj_test_replace"
+          ]
+        },
+        {
+          "type": "suspension",
+          "operator": "is_not_suspended"
+        }
+      ],
+      "actions": [
+        {
+          "type": "replace_tags",
+          "tags": [
+            "card_janitor_test_fixture",
+            "cj_test_replaced"
+          ]
+        }
       ]
     },
     {
       "id": "dev-delete",
-      "name": "Dev — Delete",
+      "name": "Dev — Delete Note",
       "mode": "on_demand",
       "scope": {
-        "decks": ["Card Janitor Test::Delete"],
-        "include_subdecks": false,
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Delete",
+            "include_subdecks": false
+          }
+        ],
         "include_suspended": true
       },
       "match": "all",
       "conditions": [
-        {"type": "review_history", "operator": "not_exists"}
+        {
+          "type": "all_cards"
+        }
       ],
       "actions": [
-        {"type": "delete_card"}
+        {
+          "type": "delete_note"
+        }
       ]
+    },
+    {
+      "id": "dev-suspend-note",
+      "name": "Dev — Suspend Note",
+      "mode": "on_demand",
+      "scope": {
+        "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
+        "note_types": ["Card Janitor Test Siblings"],
+        "include_suspended": true
+      },
+      "match": "all",
+      "conditions": [
+        {"type": "tags", "operator": "contains_all", "tags": ["cj_test_note_suspend"]},
+        {"type": "sibling_suspension", "operator": "any"},
+        {"type": "sibling_review_history", "operator": "none"}
+      ],
+      "actions": [{"type": "suspend_note"}]
+    },
+    {
+      "id": "dev-unsuspend-note",
+      "name": "Dev — Unsuspend Note",
+      "mode": "on_demand",
+      "scope": {
+        "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
+        "note_types": ["Card Janitor Test Siblings"],
+        "include_suspended": false
+      },
+      "match": "all",
+      "conditions": [
+        {"type": "tags", "operator": "contains_all", "tags": ["cj_test_note_unsuspend"]},
+        {"type": "sibling_suspension", "operator": "any"}
+      ],
+      "actions": [{"type": "unsuspend_note"}]
+    },
+    {
+      "id": "dev-move-note",
+      "name": "Dev — Move Note",
+      "mode": "on_demand",
+      "scope": {
+        "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
+        "note_types": ["Card Janitor Test Siblings"],
+        "include_suspended": false
+      },
+      "match": "all",
+      "conditions": [
+        {"type": "tags", "operator": "contains_all", "tags": ["cj_test_note_move"]},
+        {"type": "sibling_suspension", "operator": "none"},
+        {"type": "sibling_review_history", "operator": "none"}
+      ],
+      "actions": [{"type": "move_note", "deck": "Card Janitor Test::Note Actions"}]
     }
   ]
 }

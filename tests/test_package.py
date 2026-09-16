@@ -49,6 +49,8 @@ def test_development_install_preserves_config(tmp_path: Path) -> None:
 
     assert destination == addons_dir / DEV_ADDON_NAME
     assert (destination / "addon.py").is_symlink()
+    assert (destination / "browsing.py").is_symlink()
+    assert (destination / "note_type_picker.py").is_symlink()
     assert (destination / "manifest.json").is_symlink()
     assert not (destination / "config.json").is_symlink()
 

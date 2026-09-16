@@ -3,31 +3,38 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from time import perf_counter
 from typing import TYPE_CHECKING
 
 from .engine import (
     CardFacts,
+    NoteFacts,
     PolicyReport,
     ResolvedAction,
+    action_is_satisfied,
+    conditions_need_siblings,
     evaluate_facts,
 )
 from .log import debug
-from .models import MoveAction, Policy
+from .models import MoveAction, Policy, action_targets_note
 
 if TYPE_CHECKING:
     from anki.collection import Collection
 
 
 def _resolve_deck_ids(col: Collection, policy: Policy) -> tuple[set[int], list[str]]:
+    if policy.scope.all_decks:
+        return {int(deck.id) for deck in col.decks.all_names_and_ids(include_filtered=False)}, []
     deck_ids: set[int] = set()
     errors: list[str] = []
-    for name in policy.scope.decks:
+    for selector in policy.scope.selectors:
+        name = selector.deck
         deck_id = col.decks.id_for_name(name)
         if deck_id is None:
             errors.append(f"scope deck does not exist: {name!r}")
             continue
-        if policy.scope.include_subdecks:
+        if selector.include_subdecks:
             deck_ids.update(int(value) for value in col.decks.deck_and_child_ids(deck_id))
         else:
             deck_ids.add(int(deck_id))
@@ -55,11 +62,21 @@ def _resolve_actions(
     return tuple(resolved), errors
 
 
-def _load_facts_where(col: Collection, column: str, values: set[int]) -> list[CardFacts]:
-    if not values:
+def _load_facts_where(
+    col: Collection,
+    column: str,
+    values: set[int],
+    *,
+    note_type_ids: set[int] | None = None,
+) -> list[CardFacts]:
+    if not values or note_type_ids == set():
         return []
     placeholders = ",".join("?" for _ in values)
     ordered_values = sorted(values)
+    note_filter = ""
+    if note_type_ids is not None:
+        note_filter = f"and n.mid in ({','.join('?' for _ in note_type_ids)})"
+        ordered_values.extend(sorted(note_type_ids))
     rows = col.db.all(
         f"""
 select
@@ -75,7 +92,7 @@ select
 from cards c
 join notes n on n.id = c.nid
 left join revlog r on r.cid = c.id
-where {column} in ({placeholders})
+where {column} in ({placeholders}) {note_filter}
 group by c.id
 """,
         *ordered_values,
@@ -97,11 +114,16 @@ group by c.id
     ]
 
 
-def _load_deck_facts(col: Collection, deck_ids: set[int]) -> list[CardFacts]:
+def _load_deck_facts(
+    col: Collection,
+    deck_ids: set[int],
+    note_type_ids: set[int] | None = None,
+) -> list[CardFacts]:
     return _load_facts_where(
         col,
         "(case when c.odid != 0 then c.odid else c.did end)",
         deck_ids,
+        note_type_ids=note_type_ids,
     )
 
 
@@ -110,6 +132,15 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
     deck_ids, errors = _resolve_deck_ids(col, policy)
     resolved_actions, action_errors = _resolve_actions(col, policy)
     errors.extend(action_errors)
+    note_type_ids = None
+    if policy.scope.note_types is not None:
+        note_type_ids = set()
+        for name in policy.scope.note_types:
+            note_type_id = col.models.id_for_name(name)
+            if note_type_id is None:
+                errors.append(f"scope note type does not exist: {name!r}")
+            else:
+                note_type_ids.add(int(note_type_id))
     if errors:
         report = PolicyReport(
             policy=policy,
@@ -126,14 +157,58 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
             elapsed_ms=round((perf_counter() - started) * 1000, 2),
         )
         return report
-    facts = _load_deck_facts(col, deck_ids)
+    facts = _load_deck_facts(col, deck_ids, note_type_ids)
+    siblings = None
+    note_facts = None
+    if conditions_need_siblings(policy.conditions):
+        siblings = _load_facts_where(col, "c.nid", {card.note_id for card in facts})
+        grouped: dict[int, list[CardFacts]] = {}
+        for card in siblings:
+            grouped.setdefault(card.note_id, []).append(card)
+        note_facts = {
+            note_id: NoteFacts(
+                len(cards),
+                sum(card.queue == -1 for card in cards),
+                sum(card.first_review_ms is not None for card in cards),
+            )
+            for note_id, cards in grouped.items()
+        }
     report = evaluate_facts(
         policy,
         facts,
         deck_ids,
         resolved_actions,
         now_ms=now_ms,
+        note_facts=note_facts,
     )
+    if any(action_targets_note(action.action) for action in resolved_actions):
+        note_ids = {card.note_id for card in report.qualifying}
+        siblings = (
+            _load_facts_where(col, "c.nid", note_ids)
+            if siblings is None
+            else [card for card in siblings if card.note_id in note_ids]
+        )
+        trigger_ids = {card.card_id for card in report.qualifying}
+        card_actions = tuple(
+            (
+                card,
+                tuple(
+                    action
+                    for action in resolved_actions
+                    if action_targets_note(action.action) or card.card_id in trigger_ids
+                ),
+            )
+            for card in siblings
+        )
+        report = replace(
+            report,
+            card_actions=card_actions,
+            actionable=tuple(
+                card
+                for card, actions in card_actions
+                if any(not action_is_satisfied(action, card) for action in actions)
+            ),
+        )
     debug(
         "policy evaluated",
         policy_id=policy.id,
