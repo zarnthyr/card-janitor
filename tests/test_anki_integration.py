@@ -9,8 +9,7 @@ import pytest
 from anki.collection import Collection
 from aqt.operations import QueryOp
 from card_janitor import automatic, ui
-from card_janitor.actions import build_execution_plan, execute_plan
-from card_janitor.dialogs import PolicyEditorDialog
+from card_janitor.actions import CleanupError, build_execution_plan, execute_plan
 from card_janitor.evaluator import evaluate_policy
 from card_janitor.execution import execute_approved_reports
 from card_janitor.models import (
@@ -29,6 +28,80 @@ from card_janitor.models import (
     UnsuspendAction,
     parse_policy,
 )
+from card_janitor.policy_editor import PolicyEditorDialog
+
+
+def test_partial_cleanup_failure_is_grouped_and_recoverable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection = Collection(str(tmp_path / "failure.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        policy = parse_policy(
+            {
+                "id": "failure",
+                "name": "Failure",
+                "mode": "on_demand",
+                "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
+                "match": "all",
+                "conditions": [{"type": "tags", "operator": "contains_none", "tags": ["retired"]}],
+                "actions": [{"type": "tag", "tags": ["retired"]}, {"type": "suspend"}],
+            }
+        )
+        report = evaluate_policy(collection, policy)
+
+        def fail(*_args: object) -> None:
+            message = "injected suspension failure"
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(collection.sched, "suspend_cards", fail)
+        with pytest.raises(CleanupError, match="Earlier changes may have been applied"):
+            execute_plan(collection, build_execution_plan((report,), collection), "Failed cleanup")
+        assert collection.get_note(note.id).has_tag("retired")
+        assert collection.undo_status().undo == "Failed cleanup"
+        collection.undo()
+        assert not collection.get_note(note.id).has_tag("retired")
+    finally:
+        collection.close()
+
+
+def test_tag_evaluation_does_not_query_review_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection = Collection(str(tmp_path / "queries.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        note.tags = ["leech"]
+        collection.add_note(note, deck_id)
+        queries = []
+        original_all = collection.db.all
+
+        def capture(sql: str, *args: object, **kwargs: object) -> list:
+            queries.append(sql)
+            return original_all(sql, *args, **kwargs)
+
+        monkeypatch.setattr(collection.db, "all", capture)
+        policy = Policy(
+            id="query",
+            name="Query",
+            mode="on_demand",
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=TagCondition(("leech",), "contains_any"),
+            actions=(SuspendAction(),),
+        )
+        assert len(evaluate_policy(collection, policy).actionable) == 1
+        fact_queries = [sql for sql in queries if "from cards c" in sql]
+        assert fact_queries
+        assert all("revlog" not in sql for sql in fact_queries)
+        assert "where c.did in" in fact_queries[0]
+        assert "and c.odid = 0" in fact_queries[0]
+    finally:
+        collection.close()
 
 
 def test_policy_editor_exposes_mode_tooltip_callback() -> None:

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from .actions import ExecutionResult, build_execution_plan, execute_plan
 from .evaluator import evaluate_policies
-from .models import action_targets_note
+from .models import action_expands_to_siblings
 
 if TYPE_CHECKING:
     from anki.collection import Collection
@@ -31,7 +31,7 @@ def execute_approved_reports(
         approved_ids = approved_card_ids[report.policy.id]
         blocked_notes = (
             {card.note_id for card in report.actionable if card.card_id not in approved_ids}
-            if any(action_targets_note(action.action) for action in report.resolved_actions)
+            if any(action_expands_to_siblings(action.action) for action in report.resolved_actions)
             else set()
         )
         approved_reports.append(

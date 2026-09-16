@@ -39,7 +39,14 @@ def report(
         conditions=IntervalCondition(1, "gte"),
         actions=tuple(a.action for a in actions),
     )
-    return PolicyReport(policy, (item,), (item,) if actionable else (), 0, actions)
+    return PolicyReport(
+        policy=policy,
+        qualifying=(item,),
+        actionable=(item,) if actionable else (),
+        missing_first_review=0,
+        resolved_actions=actions,
+        card_actions=((item, actions),),
+    )
 
 
 def test_build_plan_merges_compatible_actions() -> None:
@@ -50,6 +57,25 @@ def test_build_plan_merges_compatible_actions() -> None:
     assert plan.suspend_card_ids == (1,)
     assert plan.card_count == 1
     assert not plan.conflicted_card_ids
+    assert not plan.conflict_details
+
+
+def test_build_plan_uses_explicit_card_intentions_not_policy_actions() -> None:
+    item = card()
+    suspend = ResolvedAction(SuspendAction())
+    value = report((ResolvedAction(TagAction("trigger-only")), suspend), item)
+    value = replace(value, qualifying=(), card_actions=((item, (suspend,)),))
+    plan = build_execution_plan((value,))
+    assert plan.suspend_card_ids == (item.card_id,)
+    assert not plan.tags
+
+
+def test_empty_card_intentions_do_not_reconstruct_qualifying_actions() -> None:
+    value = report((ResolvedAction(UnsuspendAction()),), actionable=False)
+    value = replace(value, card_actions=())
+    plan = build_execution_plan((value, report((ResolvedAction(SuspendAction()),))))
+    assert plan.suspend_card_ids == (1,)
+    assert not plan.conflicted_card_ids
 
 
 def test_build_plan_skips_conflicting_moves() -> None:
@@ -58,6 +84,7 @@ def test_build_plan_skips_conflicting_moves() -> None:
     plan = build_execution_plan((first, second))
     assert plan.is_empty
     assert plan.conflicted_card_ids == (1,)
+    assert plan.conflict_details[0].reasons == ("Move actions specify different destination decks",)
 
 
 def test_build_plan_includes_inverse_actions_and_replacements() -> None:
@@ -85,6 +112,7 @@ def test_note_tag_conflict_applies_across_sibling_cards() -> None:
 
     assert plan.is_empty
     assert plan.conflicted_card_ids == (2,)
+    assert plan.conflict_details[0].reasons == ("Tags are both added and removed: leech",)
 
 
 def test_replace_tags_conflicts_with_incremental_tag_action() -> None:
@@ -95,6 +123,18 @@ def test_replace_tags_conflicts_with_incremental_tag_action() -> None:
 
     assert plan.is_empty
     assert plan.conflicted_card_ids == (1,)
+    assert plan.conflict_details[0].reasons == (
+        "Replacing tags is combined with adding or removing tags",
+    )
+
+
+def test_case_only_replacement_difference_is_compatible() -> None:
+    lower = report((ResolvedAction(ReplaceTagsAction(("kept", "other"))),))
+    upper = report((ResolvedAction(ReplaceTagsAction(("OTHER", "KEPT"))),))
+    plan = build_execution_plan((lower, upper))
+    assert not plan.conflicted_card_ids
+    assert plan.card_count == 1
+    assert len(plan.replace_tags) == 1
 
 
 def test_suspend_conflicts_with_satisfied_unsuspend_policy() -> None:
@@ -105,6 +145,36 @@ def test_suspend_conflicts_with_satisfied_unsuspend_policy() -> None:
 
     assert plan.is_empty
     assert plan.conflicted_card_ids == (1,)
+    assert plan.conflict_details[0].reasons == (
+        "Suspend and unsuspend actions target the same card",
+    )
+
+
+def test_note_wide_conflict_details_propagate_reasons_and_policy_names() -> None:
+    first, sibling = card(1), card(2)
+    note_move = ResolvedAction(MoveAction("A", "note"), 2)
+    wide = report((note_move,), first)
+    wide = replace(
+        wide,
+        policy=replace(wide.policy, name="Move note"),
+        card_actions=((first, (note_move,)), (sibling, (note_move,))),
+        actionable=(first, sibling),
+    )
+    narrow = report((ResolvedAction(MoveAction("B"), 3),), sibling)
+    narrow = replace(narrow, policy=replace(narrow.policy, name="Move sibling"))
+    plan = build_execution_plan((wide, narrow))
+    assert plan.is_empty
+    assert (
+        tuple(detail.card_id for detail in plan.conflict_details)
+        == plan.conflicted_card_ids
+        == (1, 2)
+    )
+    for detail in plan.conflict_details:
+        assert detail.policies == ("Move note", "Move sibling")
+        assert detail.reasons == (
+            "All affected cards of the note are skipped together",
+            "Move actions specify different destination decks",
+        )
 
 
 def test_delete_note_deduplicates_siblings_and_conflicts_with_other_note_actions() -> None:

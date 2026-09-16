@@ -5,16 +5,12 @@ from __future__ import annotations
 
 import contextlib
 import itertools
-import json
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
+from html import escape
 from typing import TYPE_CHECKING
 
-import aqt
-import markdown
 from aqt import mw
-from aqt.addons import ConfigEditor
 from aqt.operations import CollectionOp, QueryOp
 from aqt.qt import (
     QAbstractItemView,
@@ -30,6 +26,7 @@ from aqt.qt import (
     QPushButton,
     QRect,
     QSignalBlocker,
+    QSizePolicy,
     QStackedWidget,
     QStyle,
     QStyleOptionButton,
@@ -42,26 +39,22 @@ from aqt.qt import (
     qconnect,
 )
 from aqt.utils import askUser, showWarning, tooltip
-from markdown.extensions import md_in_html
 
 from .actions import ExecutionResult, build_execution_plan
 from .browsing import open_cards_in_browser
 from .configuration import (
-    ADDON_MODULE,
-    DEFAULT_CONFIG,
     ConfigWriteError,
     load_config,
-    load_raw_collection_config,
     remove_policy,
     save_policy,
-    save_raw_collection_config,
 )
-from .dialogs import PolicyEditorDialog, SettingsDialog
+from .conflict_dialog import ConflictDialog
 from .evaluator import evaluate_policies
 from .execution import execute_approved_reports
+from .json_editor import open_policy_json
 from .log import configure as configure_logging
 from .log import debug, error, exception
-from .models import parse_config
+from .policy_editor import PolicyEditorDialog
 from .presentation import (
     applied_message,
     card_count_text,
@@ -74,17 +67,15 @@ from .presentation import (
     policy_tooltip,
     scope_tooltip,
 )
+from .settings_dialog import SettingsDialog
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from anki.collection import Collection
 
     from .engine import PolicyReport
     from .models import ParsedConfig, PolicyRecord
 
 MENU_ATTR = "_card_janitor_action"
-CONFIG_EDITOR_ATTR = "_card_janitor_config_editor"
 ON_DEMAND_DIALOG_ATTR = "_card_janitor_dialog"
 
 
@@ -181,6 +172,7 @@ class CardJanitorDialog(QDialog):
         self._parsed = parsed
         self._running = False
         self._policy_editor: PolicyEditorDialog | None = None
+        self._conflict_dialog: ConflictDialog | None = None
         self._editor_widget_states: list[tuple[QWidget, bool]] = []
         self.setWindowTitle("Card Janitor")
         self.resize(1050, 420)
@@ -274,9 +266,20 @@ class CardJanitorDialog(QDialog):
         self.content_stack.addWidget(self.empty_page)
         layout.addWidget(self.content_stack)
 
-        self.summary = QLabel(self)
+        summary_panel = QWidget(self)
+        summary_panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        summary_layout = QVBoxLayout(summary_panel)
+        summary_layout.setContentsMargins(0, 0, 0, 0)
+        summary_layout.setSpacing(0)
+        self.summary = QLabel(summary_panel)
         self.summary.setWordWrap(True)
-        layout.addWidget(self.summary)
+        summary_layout.addWidget(self.summary)
+        self.conflict_summary = QLabel(summary_panel)
+        self.conflict_summary.setOpenExternalLinks(False)
+        qconnect(self.conflict_summary.linkActivated, self._show_conflicts)
+        summary_layout.addWidget(self.conflict_summary)
+        layout.addWidget(summary_panel)
+        qconnect(self.finished, lambda _result: self._close_conflicts())
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
         self.settings_button = buttons.addButton(
@@ -518,6 +521,8 @@ class CardJanitorDialog(QDialog):
         return super().eventFilter(watched, event)
 
     def _update_summary(self) -> None:
+        self._close_conflicts()
+        self.conflict_summary.hide()
         self.summary.setVisible(True)
         reports = self.checked_reports()
         if self._parsed.issues:
@@ -553,11 +558,9 @@ class CardJanitorDialog(QDialog):
             )
         if plan.conflicted_card_ids:
             conflict_count = len(plan.conflicted_card_ids)
-            conflict_verb = "has" if conflict_count == 1 else "have"
-            messages.append(
-                f"{card_count_text(conflict_count).capitalize()} {conflict_verb} "
-                "conflicting actions and would be skipped"
-            )
+            text = f"{card_count_text(conflict_count).capitalize()} with conflicting actions would be skipped."
+            self.conflict_summary.setText(f'<a href="conflicts">{escape(text)}</a>')
+            self.conflict_summary.show()
         if errors:
             messages.append(
                 "A checked policy has an error. Uncheck it or fix the configuration before running"
@@ -565,6 +568,28 @@ class CardJanitorDialog(QDialog):
         self.summary.setText(messages[0] if len(messages) == 1 else ".\n".join(messages) + ".")
         self.view_button.setEnabled(bool(candidate_ids))
         self.run_button.setEnabled(plan.card_count > 0 and not errors)
+
+    def _close_conflicts(self) -> None:
+        if self._conflict_dialog is not None:
+            self._conflict_dialog.close()
+            self._conflict_dialog.deleteLater()
+            self._conflict_dialog = None
+
+    def _show_conflicts(self, _link: str) -> None:
+        if self._policy_editor is not None:
+            return
+        if self._conflict_dialog is not None and self._conflict_dialog.isVisible():
+            self._conflict_dialog.raise_()
+            self._conflict_dialog.activateWindow()
+            return
+        self._close_conflicts()
+        plan = build_execution_plan(self.checked_reports(), mw.col)
+        if not plan.conflict_details:
+            return
+        self._conflict_dialog = ConflictDialog(plan.conflict_details, self)
+        self._conflict_dialog.show()
+        self._conflict_dialog.raise_()
+        self._conflict_dialog.activateWindow()
 
     def _view_included(self) -> None:
         card_ids = {card.card_id for report in self.checked_reports() for card in report.actionable}
@@ -622,7 +647,7 @@ class CardJanitorDialog(QDialog):
         ):
             return
         try:
-            remove_policy(index=record.index)
+            remove_policy(record=record)
         except ConfigWriteError as exc:
             error("failed to remove policy", policy_name=name, reason=str(exc))
             showWarning(str(exc), parent=self)
@@ -656,6 +681,7 @@ class CardJanitorDialog(QDialog):
     def _set_editor_controls_enabled(self, enabled: bool) -> None:
         widgets = (
             self.table,
+            self.conflict_summary,
             self.add_button,
             self.edit_button,
             self.remove_button,
@@ -692,7 +718,7 @@ class CardJanitorDialog(QDialog):
             self.activateWindow()
             return
         try:
-            save_policy(policy, index=record.index if record is not None else None)
+            save_policy(policy, record=record)
         except ConfigWriteError as exc:
             error(
                 "failed to save policy",
@@ -810,65 +836,6 @@ def execute_on_demand_reports(
         tooltip(message, parent=mw)
 
     CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
-
-
-class CollectionConfigEditor(ConfigEditor):
-    def __init__(self, parent: QDialog, addon: str, config: dict) -> None:
-        super().__init__(parent, addon, config)
-        self.setWindowTitle("Card Janitor — Edit Policies as JSON")
-        clear_button = self.form.buttonBox.button(QDialogButtonBox.StandardButton.RestoreDefaults)
-        clear_button.setText("Clear Policies")
-        clear_button.setToolTip("Replace the editor contents with an empty policy list")
-
-    def updateHelp(self) -> None:  # noqa: N802 - Qt/Anki virtual method
-        text = Path(__file__).with_name("policies.md").read_text(encoding="utf-8")
-        html = markdown.markdown(text, extensions=[md_in_html.makeExtension()])
-        self.form.help.stdHtml(html, js=[], css=["css/addonconf.css"], context=self)
-
-    def onRestoreDefaults(self) -> None:  # noqa: N802 - Qt/Anki virtual method
-        self.updateText({"policies": []})
-
-    def accept(self) -> None:
-        text = self.form.editor.toPlainText()
-        text = aqt.gui_hooks.addon_config_editor_will_update_json(text, ADDON_MODULE)
-        try:
-            config = json.loads(text)
-        except (TypeError, ValueError) as exc:
-            showWarning(f"Invalid JSON: {exc}", parent=self)
-            return
-        parsed = parse_config({**DEFAULT_CONFIG, **config} if isinstance(config, dict) else config)
-        if parsed.issues:
-            details = "\n".join(f"• {issue}" for issue in parsed.issues)
-            showWarning(f"Card Janitor configuration has errors:\n\n{details}", parent=self)
-            return
-        try:
-            save_raw_collection_config(config)
-        except ConfigWriteError as exc:
-            error("failed to save collection configuration", reason=str(exc))
-            showWarning(str(exc), parent=self)
-            return
-        self.conf = config
-        self.onClose()
-        QDialog.accept(self)
-
-
-def open_policy_json(*, parent: QWidget, on_close: Callable[[], None] | None = None) -> None:
-    config = load_raw_collection_config()
-    if not isinstance(config, dict):
-        error("cannot open policy JSON", reason="collection configuration is not an object")
-        showWarning("The collection configuration is not a JSON object", parent=parent)
-        return
-    editor_parent = QDialog(parent)
-    editor_parent.mgr = mw.addonManager
-    editor = CollectionConfigEditor(editor_parent, ADDON_MODULE, config)
-    setattr(mw, CONFIG_EDITOR_ATTR, (editor_parent, editor))
-
-    def editor_closed(_result: int) -> None:
-        setattr(mw, CONFIG_EDITOR_ATTR, None)
-        if callable(on_close):
-            on_close()
-
-    qconnect(editor.finished, editor_closed)
 
 
 def install_menu() -> None:

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import itertools
-import re
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -21,29 +20,23 @@ from aqt.qt import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMenu,
     QPushButton,
     QScrollArea,
-    QSignalBlocker,
-    QSpinBox,
-    QStackedWidget,
-    QStandardItem,
     Qt,
     QTimer,
     QVBoxLayout,
     QWidget,
-    QWidgetAction,
     qconnect,
 )
 from aqt.utils import showWarning, tooltip
 
 from .browsing import open_cards_in_browser
-from .configuration import ConfigWriteError, save_settings
 from .deck_picker import DeckPicker
+from .editor_utils import _split_tags
 from .evaluator import evaluate_policy
-from .log import configure as configure_logging
-from .log import debug, error
+from .log import error
 from .models import (
+    MAX_DAYS,
     Action,
     AgeCondition,
     AllCardsCondition,
@@ -69,12 +62,12 @@ from .models import (
     TagAction,
     TagCondition,
     UnsuspendAction,
+    parse_policy,
+    policy_to_dict,
 )
 from .note_type_picker import NoteTypePicker
 from .presentation import (
     CARD_STATES,
-    CONDITION_HELP,
-    NUMERIC_OPERATOR_LABELS,
     NUMERIC_OPERATOR_SYMBOLS,
     mode_tooltip,
     warning_panel,
@@ -82,422 +75,10 @@ from .presentation import (
 
 if TYPE_CHECKING:
     from .engine import PolicyReport
-    from .models import AddonConfig
 
 
-def _split_tags(value: str) -> tuple[str, ...]:
-    tags: list[str] = []
-    seen: set[str] = set()
-    for item in re.split(r"[\s,]+", value.strip()):
-        normalized = item.casefold()
-        if item and normalized not in seen:
-            tags.append(item)
-            seen.add(normalized)
-    return tuple(tags)
-
-
-class CardStatePicker(QComboBox):
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._states = ("new",)
-        self._checkboxes: dict[str, QCheckBox] = {}
-        self._menu = QMenu(self)
-        container = QWidget(self._menu)
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(10, 6, 10, 6)
-        layout.setSpacing(4)
-        for label, value in CARD_STATES:
-            checkbox = QCheckBox(label, container)
-            self._checkboxes[value] = checkbox
-            qconnect(
-                checkbox.toggled,
-                lambda checked, selected=value: self._state_toggled(selected, checked),
-            )
-            layout.addWidget(checkbox)
-        action = QWidgetAction(self._menu)
-        action.setDefaultWidget(container)
-        self._menu.addAction(action)
-        self.addItem("")
-        self.set_states(self._states)
-
-    def showPopup(self) -> None:  # noqa: N802 - Qt virtual method
-        self._menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
-
-    def states(self) -> tuple[str, ...]:
-        return self._states
-
-    def set_states(self, states: tuple[str, ...]) -> None:
-        self._states = tuple(value for _label, value in CARD_STATES if value in states)
-        blockers = [QSignalBlocker(checkbox) for checkbox in self._checkboxes.values()]
-        for value, checkbox in self._checkboxes.items():
-            checkbox.setChecked(value in self._states)
-        del blockers
-        self._update_text()
-
-    def _update_text(self) -> None:
-        selected = [label for label, value in CARD_STATES if value in self._states]
-        summary = ", ".join(selected) if selected else "Choose states"
-        self.setItemText(0, summary)
-        self.setToolTip(f"Match cards whose current state is any of: {summary}")
-
-    def _state_toggled(self, state: str, _checked: bool) -> None:
-        selected = tuple(
-            value for _label, value in CARD_STATES if self._checkboxes[value].isChecked()
-        )
-        if not selected:
-            blocker = QSignalBlocker(self._checkboxes[state])
-            self._checkboxes[state].setChecked(True)
-            del blocker
-            return
-        self._states = selected
-        self._update_text()
-
-
-def _add_combo_group(combo: QComboBox, title: str, choices: tuple[tuple[str, str], ...]) -> None:
-    header = QStandardItem(title)
-    header.setEnabled(False)
-    header.setSelectable(False)
-    font = header.font()
-    font.setBold(True)
-    header.setFont(font)
-    combo.model().appendRow(header)
-    for label, value in choices:
-        combo.addItem(label, value)
-
-
-class ConditionRow(QWidget):
-    def __init__(
-        self, condition: ConditionExpression | None = None, parent: QWidget | None = None
-    ) -> None:
-        super().__init__(parent)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.number_label = QLabel(self)
-        self.number_label.setMinimumWidth(20)
-        self.kind = QComboBox(self)
-        for group, choices in (
-            (
-                "Cards",
-                (
-                    ("Age since first review", "age_first_review"),
-                    ("Age since creation", "age_card_created"),
-                    ("Current interval", "interval"),
-                    ("Card state", "card_state"),
-                    ("Review history", "review_history"),
-                    ("Suspension state", "suspension"),
-                ),
-            ),
-            (
-                "Notes",
-                (
-                    ("Tags", "tags"),
-                    ("Sibling suspension", "sibling_suspension"),
-                    ("Sibling review history", "sibling_review_history"),
-                ),
-            ),
-        ):
-            _add_combo_group(self.kind, group, choices)
-        self.kind.setMinimumWidth(165)
-        self.operator = QComboBox(self)
-        self.fixed_operator = QLabel("is", self)
-        self.operator_stack = QStackedWidget(self)
-        self.operator_stack.setMinimumWidth(115)
-        self.operator_stack.addWidget(self.operator)
-        self.operator_stack.addWidget(self.fixed_operator)
-        self.days = QSpinBox(self)
-        self.days.setRange(0, 100000)
-        self.days.setSuffix(" days")
-        self.days.setMinimumWidth(140)
-        self.states = CardStatePicker(self)
-        self.states.setMinimumWidth(140)
-        self.tags = QLineEdit(self)
-        self.tags.setPlaceholderText("tag1, tag2")
-        self.tags.setMinimumWidth(140)
-        self.value_stack = QStackedWidget(self)
-        self.value_stack.setMinimumWidth(140)
-        self.value_stack.addWidget(self.days)
-        self.value_stack.addWidget(self.states)
-        self.value_stack.addWidget(self.tags)
-        self.no_value = QWidget(self)
-        self.value_stack.addWidget(self.no_value)
-        self.remove_button = QPushButton("Remove", self)
-        self.remove_button.setMinimumWidth(75)
-        self.remove_button.setToolTip("Remove this condition")
-        for widget in (
-            self.number_label,
-            self.kind,
-            self.operator_stack,
-            self.value_stack,
-            self.remove_button,
-        ):
-            layout.addWidget(widget)
-        selected_states: tuple[str, ...] | None = None
-        selected_tags: tuple[str, ...] | None = None
-        selected_operator: str | None = None
-        if isinstance(condition, AgeCondition):
-            kind = "age_first_review" if condition.source == "first_review" else "age_card_created"
-            self.kind.setCurrentIndex(self.kind.findData(kind))
-            self.days.setValue(condition.days)
-            selected_operator = condition.operator
-        elif isinstance(condition, IntervalCondition):
-            self.kind.setCurrentIndex(self.kind.findData("interval"))
-            self.days.setValue(condition.days)
-            selected_operator = condition.operator
-        elif isinstance(condition, CardStateCondition):
-            self.kind.setCurrentIndex(self.kind.findData("card_state"))
-            selected_states = condition.states
-        elif isinstance(condition, ReviewHistoryCondition):
-            self.kind.setCurrentIndex(self.kind.findData("review_history"))
-            selected_operator = condition.operator
-        elif isinstance(condition, TagCondition):
-            self.kind.setCurrentIndex(self.kind.findData("tags"))
-            selected_tags = condition.tags
-            selected_operator = condition.operator
-        elif isinstance(
-            condition,
-            (SuspensionCondition, SiblingSuspensionCondition, SiblingReviewHistoryCondition),
-        ):
-            self.kind.setCurrentIndex(
-                self.kind.findData(
-                    {
-                        SuspensionCondition: "suspension",
-                        SiblingSuspensionCondition: "sibling_suspension",
-                        SiblingReviewHistoryCondition: "sibling_review_history",
-                    }[type(condition)]
-                )
-            )
-            selected_operator = condition.operator
-        else:
-            self.kind.setCurrentIndex(self.kind.findData("age_first_review"))
-            self.days.setValue(365)
-        qconnect(self.kind.currentIndexChanged, self._update_controls)
-        self._update_controls()
-        if selected_operator is not None:
-            self.operator.setCurrentIndex(self.operator.findData(selected_operator))
-        if selected_states is not None:
-            self.states.set_states(selected_states)
-        if selected_tags is not None:
-            self.tags.setText(" ".join(selected_tags))
-
-    def _update_controls(self, _index: int = 0) -> None:
-        kind = self.kind.currentData()
-        help_text = CONDITION_HELP[kind]
-        self.kind.setToolTip(help_text)
-        self.operator.clear()
-        if kind == "card_state":
-            self.operator_stack.setCurrentWidget(self.fixed_operator)
-            self.value_stack.setCurrentWidget(self.states)
-        elif kind == "review_history":
-            self.operator_stack.setCurrentWidget(self.operator)
-            self.operator.addItem("exists", "exists")
-            self.operator.addItem("does not exist", "not_exists")
-            self.value_stack.setCurrentWidget(self.no_value)
-        elif kind == "tags":
-            self.operator_stack.setCurrentWidget(self.operator)
-            self.operator.addItem("contains any", "contains_any")
-            self.operator.addItem("contains all", "contains_all")
-            self.operator.addItem("contains none", "contains_none")
-            self.value_stack.setCurrentWidget(self.tags)
-        elif kind == "suspension":
-            self.operator_stack.setCurrentWidget(self.operator)
-            self.operator.addItem("is suspended", "is_suspended")
-            self.operator.addItem("is not suspended", "is_not_suspended")
-            self.value_stack.setCurrentWidget(self.no_value)
-        elif kind in {"sibling_suspension", "sibling_review_history"}:
-            self.operator_stack.setCurrentWidget(self.operator)
-            labels = (
-                (("all suspended", "all"), ("any suspended", "any"), ("none suspended", "none"))
-                if kind == "sibling_suspension"
-                else (("none studied", "none"), ("any studied", "any"), ("all studied", "all"))
-            )
-            for label, value in labels:
-                self.operator.addItem(label, value)
-            self.value_stack.setCurrentWidget(self.no_value)
-        else:
-            self.operator_stack.setCurrentWidget(self.operator)
-            for label, value in NUMERIC_OPERATOR_LABELS:
-                self.operator.addItem(label, value)
-            self.operator.setCurrentIndex(self.operator.findData("gte"))
-            self.value_stack.setCurrentWidget(self.days)
-        self.operator.setToolTip("Choose how this condition should match")
-        self.fixed_operator.setToolTip("A card matches when its state is one of those selected")
-        self.days.setToolTip(help_text)
-        self.tags.setToolTip(help_text)
-
-    def condition(  # noqa: PLR0911
-        self,
-    ) -> (
-        AgeCondition
-        | IntervalCondition
-        | CardStateCondition
-        | ReviewHistoryCondition
-        | TagCondition
-        | SuspensionCondition
-        | SiblingSuspensionCondition
-        | SiblingReviewHistoryCondition
-    ):
-        kind = self.kind.currentData()
-        if kind == "age_first_review":
-            return AgeCondition(self.days.value(), "first_review", self.operator.currentData())
-        if kind == "age_card_created":
-            return AgeCondition(self.days.value(), "card_created", self.operator.currentData())
-        if kind == "interval":
-            return IntervalCondition(self.days.value(), self.operator.currentData())
-        if kind == "card_state":
-            return CardStateCondition(self.states.states())
-        if kind == "tags":
-            return TagCondition(_split_tags(self.tags.text()), self.operator.currentData())
-        if kind == "suspension":
-            return SuspensionCondition(self.operator.currentData())
-        if kind == "sibling_suspension":
-            return SiblingSuspensionCondition(self.operator.currentData())
-        if kind == "sibling_review_history":
-            return SiblingReviewHistoryCondition(self.operator.currentData())
-        return ReviewHistoryCondition(self.operator.currentData())
-
-    def focus_widgets(self) -> tuple[QWidget, ...]:
-        return (
-            self.kind,
-            self.operator,
-            self.days,
-            self.states,
-            self.tags,
-            self.remove_button,
-        )
-
-
-class ActionRow(QWidget):
-    def __init__(
-        self,
-        deck_names: list[str],
-        *,
-        kind: str = "add_tags",
-        tags: tuple[str, ...] = (),
-        deck: str = "",
-        parent: QWidget | None = None,
-    ) -> None:
-        super().__init__(parent)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.number_label = QLabel(self)
-        self.number_label.setMinimumWidth(20)
-        self.kind = QComboBox(self)
-        self.kind.addItem("Tags", "tags")
-        self.kind.addItem("Cards", "cards")
-        self.kind.addItem("Notes", "notes")
-        self.kind.setMinimumWidth(105)
-        self.operator = QComboBox(self)
-        self.operator.setMinimumWidth(125)
-        self.tags = QLineEdit(self)
-        self.tags.setPlaceholderText("Separate tags with spaces or commas")
-        self.tags.setToolTip("Enter one or more tags, separated by spaces or commas")
-        self.deck = QComboBox(self)
-        self.deck.setEditable(True)
-        self.deck.addItems(deck_names)
-        self.deck.setToolTip("Choose or enter the destination deck")
-        self.no_value = QWidget(self)
-        self.value_stack = QStackedWidget(self)
-        self.value_stack.setMinimumWidth(150)
-        self.value_stack.addWidget(self.tags)
-        self.value_stack.addWidget(self.deck)
-        self.value_stack.addWidget(self.no_value)
-        self.remove_button = QPushButton("Remove", self)
-        self.remove_button.setMinimumWidth(75)
-        self.remove_button.setToolTip("Remove this action")
-        layout.addWidget(self.number_label)
-        layout.addWidget(self.kind, 2)
-        layout.addWidget(self.operator, 2)
-        layout.addWidget(self.value_stack, 3)
-        layout.addWidget(self.remove_button)
-        category, operator = {
-            "add_tags": ("tags", "add"),
-            "remove_tags": ("tags", "remove"),
-            "replace_tags": ("tags", "replace"),
-            "suspend": ("cards", "suspend"),
-            "unsuspend": ("cards", "unsuspend"),
-            "move": ("cards", "move"),
-            "delete_card": ("cards", "delete"),
-            "delete_note": ("notes", "delete"),
-            "suspend_note": ("notes", "suspend"),
-            "unsuspend_note": ("notes", "unsuspend"),
-            "move_note": ("notes", "move"),
-        }.get(kind, ("tags", "add"))
-        self.kind.setCurrentIndex(max(self.kind.findData(category), 0))
-        self.tags.setText(" ".join(tags))
-        self.deck.setCurrentText(deck)
-        qconnect(self.kind.currentIndexChanged, self._update_controls)
-        self._update_controls()
-        self.operator.setCurrentIndex(max(self.operator.findData(operator), 0))
-        qconnect(self.operator.currentIndexChanged, self._update_value)
-        self._update_value()
-
-    def _update_controls(self, _index: int = 0) -> None:
-        kind = self.kind.currentData()
-        self.operator.clear()
-        if kind == "tags":
-            self.operator.addItem("add", "add")
-            self.operator.addItem("remove", "remove")
-            self.operator.addItem("replace", "replace")
-        else:
-            self.operator.addItem("suspend", "suspend")
-            self.operator.addItem("unsuspend", "unsuspend")
-            self.operator.addItem("move to deck", "move")
-            self.operator.addItem("delete", "delete")
-        self._update_value()
-
-    def _update_value(self, _index: int = 0) -> None:
-        kind = self.action_kind()
-        if kind in {"add_tags", "remove_tags", "replace_tags"}:
-            self.value_stack.setCurrentWidget(self.tags)
-            self.tags.setPlaceholderText(
-                "Empty clears all tags" if kind == "replace_tags" else "tag1, tag2"
-            )
-        elif kind in {"move", "move_note"}:
-            self.value_stack.setCurrentWidget(self.deck)
-        else:
-            self.value_stack.setCurrentWidget(self.no_value)
-
-    def action_kind(self) -> str:
-        category = self.kind.currentData()
-        operator = self.operator.currentData()
-        if category == "tags":
-            return {"add": "add_tags", "remove": "remove_tags"}.get(operator, "replace_tags")
-        if category == "cards":
-            return {
-                "unsuspend": "unsuspend",
-                "move": "move",
-                "delete": "delete_card",
-            }.get(operator, "suspend")
-        return {
-            "unsuspend": "unsuspend_note",
-            "move": "move_note",
-            "delete": "delete_note",
-        }.get(operator, "suspend_note")
-
-    def actions(self) -> tuple[Action, ...]:  # noqa: PLR0911
-        kind = self.action_kind()
-        if kind == "add_tags":
-            return tuple(TagAction(tag) for tag in _split_tags(self.tags.text()))
-        if kind == "remove_tags":
-            return tuple(RemoveTagAction(tag) for tag in _split_tags(self.tags.text()))
-        if kind == "replace_tags":
-            return (ReplaceTagsAction(_split_tags(self.tags.text())),)
-        if kind in {"suspend", "suspend_note"}:
-            return (SuspendAction("note" if kind == "suspend_note" else "card"),)
-        if kind in {"unsuspend", "unsuspend_note"}:
-            return (UnsuspendAction("note" if kind == "unsuspend_note" else "card"),)
-        if kind in {"move", "move_note"}:
-            return (
-                MoveAction(
-                    self.deck.currentText().strip(), "note" if kind == "move_note" else "card"
-                ),
-            )
-        if kind == "delete_card":
-            return (DeleteCardAction(),)
-        return (DeleteNoteAction(),)
-
-    def focus_widgets(self) -> tuple[QWidget, ...]:
-        return (self.kind, self.operator, self.tags, self.deck, self.remove_button)
+from .action_row import ActionRow
+from .condition_row import ConditionRow
 
 
 class PolicyEditorDialog(QDialog):
@@ -536,7 +117,7 @@ class PolicyEditorDialog(QDialog):
         self.mode = QComboBox(self)
         self.mode.addItem("On demand", "on_demand")
         self.mode.addItem("Automatic", "automatic")
-        mode = policy.mode if policy else raw.get("mode", "on_demand")
+        mode = policy.mode if policy else _raw_string(raw, "mode") or "on_demand"
         index = self.mode.findData(mode)
         self.mode.setCurrentIndex(index if index >= 0 else self.mode.findData("on_demand"))
         self.automatic_warning = warning_panel(
@@ -632,7 +213,7 @@ class PolicyEditorDialog(QDialog):
             )
             conditions = source_conditions.conditions
         else:
-            raw_match = raw.get("match")
+            raw_match = _raw_string(raw, "match")
             self.match.setCurrentIndex(
                 self.match.findData(raw_match if raw_match in {"all", "any"} else "all")
             )
@@ -1049,7 +630,7 @@ class PolicyEditorDialog(QDialog):
             else:
                 showWarning("Another policy has the same internal ID", parent=self)
                 return None
-        return Policy(
+        policy = Policy(
             id=policy_id,
             name=name,
             mode=self.mode.currentData(),
@@ -1062,6 +643,11 @@ class PolicyEditorDialog(QDialog):
             conditions=condition,
             actions=tuple(actions),
         )
+        try:
+            return parse_policy(policy_to_dict(policy))
+        except ValueError as exc:
+            showWarning(str(exc), parent=self)
+            return None
 
     def _accept(self) -> None:
         policy = self._policy_from_form()
@@ -1145,21 +731,23 @@ def _raw_bool(raw: object, key: str, *, default: bool) -> bool:
 def _best_effort_condition(raw: object) -> ConditionExpression | None:  # noqa: PLR0911
     if not isinstance(raw, dict):
         return None
-    kind = raw.get("type")
+    kind = _raw_string(raw, "type")
     days = raw.get("days")
-    if not isinstance(days, int) or isinstance(days, bool) or days < 0:
+    if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= MAX_DAYS:
         days = 365
     if kind == "all_cards":
         return AllCardsCondition()
     if kind == "age":
-        source = raw.get("source")
+        source = _raw_string(raw, "source")
         return AgeCondition(
             days,
             source if source in {"first_review", "card_created"} else "first_review",
-            raw.get("operator") if raw.get("operator") in NUMERIC_OPERATOR_SYMBOLS else "gte",
+            _raw_string(raw, "operator")
+            if _raw_string(raw, "operator") in NUMERIC_OPERATOR_SYMBOLS
+            else "gte",
         )
     if kind == "interval":
-        operator = raw.get("operator")
+        operator = _raw_string(raw, "operator")
         return IntervalCondition(days, operator if operator in NUMERIC_OPERATOR_SYMBOLS else "gte")
     if kind == "card_state":
         raw_states = raw.get("states")
@@ -1170,9 +758,9 @@ def _best_effort_condition(raw: object) -> ConditionExpression | None:  # noqa: 
         )
         if states:
             return CardStateCondition(states)
-    if kind == "review_history" and raw.get("operator") in {"exists", "not_exists"}:
+    if kind == "review_history" and _raw_string(raw, "operator") in {"exists", "not_exists"}:
         return ReviewHistoryCondition(raw["operator"])
-    if kind == "tags" and raw.get("operator") in {
+    if kind == "tags" and _raw_string(raw, "operator") in {
         "contains_any",
         "contains_all",
         "contains_none",
@@ -1180,12 +768,14 @@ def _best_effort_condition(raw: object) -> ConditionExpression | None:  # noqa: 
         tags = _raw_string_list(raw, "tags")
         if tags:
             return TagCondition(tags, raw["operator"])
-    if kind == "suspension" and raw.get("operator") in {
+    if kind == "suspension" and _raw_string(raw, "operator") in {
         "is_suspended",
         "is_not_suspended",
     }:
         return SuspensionCondition(raw["operator"])
-    if kind in {"sibling_suspension", "sibling_review_history"} and raw.get("operator") in {
+    if kind in {"sibling_suspension", "sibling_review_history"} and _raw_string(
+        raw, "operator"
+    ) in {
         "all",
         "any",
         "none",
@@ -1205,7 +795,7 @@ def _best_effort_actions(raw: object) -> tuple[Action, ...]:
     for item in raw:
         if not isinstance(item, dict):
             continue
-        kind = item.get("type")
+        kind = _raw_string(item, "type")
         if kind in {"tag", "add_tags"} and isinstance(item.get("tags"), list):
             actions.extend(TagAction(tag) for tag in item["tags"] if isinstance(tag, str))
         elif kind == "remove_tags" and isinstance(item.get("tags"), list):
@@ -1225,61 +815,3 @@ def _best_effort_actions(raw: object) -> tuple[Action, ...]:
         elif kind == "delete_note":
             actions.append(DeleteNoteAction())
     return tuple(actions)
-
-
-class SettingsDialog(QDialog):
-    def __init__(self, config: AddonConfig, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Card Janitor Settings")
-
-        layout = QVBoxLayout(self)
-
-        automatic_group = QGroupBox("Automatic Cleanup", self)
-        automatic_layout = QVBoxLayout(automatic_group)
-        self.notify = QCheckBox(
-            "Show a notification after cards are cleaned up automatically",
-            automatic_group,
-        )
-        self.notify.setChecked(config.notify_after_automatic_run)
-        automatic_layout.addWidget(self.notify)
-        layout.addWidget(automatic_group)
-
-        troubleshooting_group = QGroupBox("Troubleshooting", self)
-        troubleshooting_layout = QVBoxLayout(troubleshooting_group)
-        self.debug_logging = QCheckBox("Enable debug logging", troubleshooting_group)
-        self.debug_logging.setChecked(config.debug_logging)
-        self.debug_logging.setToolTip("Print policy evaluation details to Anki's terminal output")
-        troubleshooting_layout.addWidget(self.debug_logging)
-        layout.addWidget(troubleshooting_group)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
-            parent=self,
-        )
-        qconnect(buttons.accepted, self._save)
-        qconnect(buttons.rejected, self.reject)
-        layout.addWidget(buttons)
-        save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
-        cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        QWidget.setTabOrder(self.notify, self.debug_logging)
-        QWidget.setTabOrder(self.debug_logging, save_button)
-        QWidget.setTabOrder(save_button, cancel_button)
-        QTimer.singleShot(0, self.notify.setFocus)
-
-    def _save(self) -> None:
-        try:
-            save_settings(
-                notify_after_automatic_run=self.notify.isChecked(),
-                debug_logging=self.debug_logging.isChecked(),
-            )
-        except ConfigWriteError as exc:
-            error("failed to save settings", reason=str(exc))
-            showWarning(str(exc), parent=self)
-            return
-        configure_logging(debug_logging=self.debug_logging.isChecked())
-        debug(
-            "settings saved",
-            notify_after_automatic_run=self.notify.isChecked(),
-            debug_logging=self.debug_logging.isChecked(),
-        )
-        self.accept()

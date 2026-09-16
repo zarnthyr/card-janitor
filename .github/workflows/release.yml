@@ -14,6 +14,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 jobs:
   release:
     name: Build and publish release
@@ -86,10 +90,19 @@ jobs:
 
       - name: Publish GitHub release
         run: |
-          gh release create "$RELEASE_TAG" \
-            card-janitor.ankiaddon \
-            --verify-tag \
-            --title "Card Janitor $RELEASE_TAG" \
-            --generate-notes
+          if release_draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft'); then
+            if [[ "$release_draft" != "true" ]]; then
+              echo "Release $RELEASE_TAG is already published; leaving its assets untouched."
+              exit 0
+            fi
+          else
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --verify-tag \
+              --title "Card Janitor $RELEASE_TAG" \
+              --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" card-janitor.ankiaddon --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
         env:
           GH_TOKEN: ${{ github.token }}

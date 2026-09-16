@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypeAlias
 
 CONFIG_VERSION = 1
+MAX_DAYS = 100000
 
 
 @dataclass(frozen=True)
@@ -168,7 +169,8 @@ Action: TypeAlias = (
 )
 
 
-def action_targets_note(action: Action) -> bool:
+def action_expands_to_siblings(action: Action) -> bool:
+    """Whether one matching card extends this action to every card of its note."""
     return isinstance(action, DeleteNoteAction) or (
         isinstance(action, (SuspendAction, UnsuspendAction, MoveAction)) and action.target == "note"
     )
@@ -243,8 +245,8 @@ def _bool(data: dict[str, Any], key: str, *, default: bool, path: str) -> bool:
 
 def _nonnegative_int(data: dict[str, Any], key: str, path: str) -> int:
     value = data.get(key)
-    if not _is_int(value) or value < 0:
-        raise ValueError(f"{path}.{key}: must be a non-negative integer")
+    if not _is_int(value) or not 0 <= value <= MAX_DAYS:
+        raise ValueError(f"{path}.{key}: must be an integer between 0 and {MAX_DAYS}")
     return value
 
 
@@ -258,6 +260,8 @@ def _tags(data: dict[str, Any], path: str, *, allow_empty: bool = False) -> tupl
         requirement = "an array of strings" if allow_empty else "a non-empty array of strings"
         raise ValueError(f"{path}.tags: must be {requirement}")
     normalized = tuple(tag.strip() for tag in tags)
+    if any(any(character.isspace() or character == "," for character in tag) for tag in normalized):
+        raise ValueError(f"{path}.tags: individual tags must not contain whitespace or commas")
     if len(normalized) != len({tag.casefold() for tag in normalized}):
         raise ValueError(f"{path}.tags: must not contain duplicates")
     return normalized
@@ -279,6 +283,8 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     condition_type = value.get("type")
+    if not isinstance(condition_type, str):
+        raise ValueError(f"{path}.type: must be a string")
     if condition_type == "all_cards":
         _reject_unknown_keys(value, {"type"}, path)
         return AllCardsCondition()
@@ -286,16 +292,16 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
         _reject_unknown_keys(value, {"type", "days", "source", "operator"}, path)
         days = _nonnegative_int(value, "days", path)
         source = value.get("source")
-        if source not in {"first_review", "card_created"}:
+        if not isinstance(source, str) or source not in {"first_review", "card_created"}:
             raise ValueError(f"{path}.source: must be 'first_review' or 'card_created'")
         operator = value.get("operator")
-        if operator not in {"gt", "gte", "eq", "lte", "lt"}:
+        if not isinstance(operator, str) or operator not in {"gt", "gte", "eq", "lte", "lt"}:
             raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
         return AgeCondition(days=days, source=source, operator=operator)
     if condition_type == "interval":
         _reject_unknown_keys(value, {"type", "days", "operator"}, path)
         operator = value.get("operator")
-        if operator not in {"gt", "gte", "eq", "lte", "lt"}:
+        if not isinstance(operator, str) or operator not in {"gt", "gte", "eq", "lte", "lt"}:
             raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
         return IntervalCondition(days=_nonnegative_int(value, "days", path), operator=operator)
     if condition_type == "card_state":
@@ -305,7 +311,7 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
         if (
             not isinstance(states, list)
             or not states
-            or any(state not in valid_states for state in states)
+            or any(not isinstance(state, str) or state not in valid_states for state in states)
             or len(states) != len(set(states))
         ):
             raise ValueError(
@@ -316,13 +322,17 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
     if condition_type == "review_history":
         _reject_unknown_keys(value, {"type", "operator"}, path)
         operator = value.get("operator")
-        if operator not in {"exists", "not_exists"}:
+        if not isinstance(operator, str) or operator not in {"exists", "not_exists"}:
             raise ValueError(f"{path}.operator: must be 'exists' or 'not_exists'")
         return ReviewHistoryCondition(operator)
     if condition_type == "tags":
         _reject_unknown_keys(value, {"type", "tags", "operator"}, path)
         operator = value.get("operator")
-        if operator not in {"contains_any", "contains_all", "contains_none"}:
+        if not isinstance(operator, str) or operator not in {
+            "contains_any",
+            "contains_all",
+            "contains_none",
+        }:
             raise ValueError(
                 f"{path}.operator: must be 'contains_any', 'contains_all', or 'contains_none'"
             )
@@ -330,13 +340,13 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
     if condition_type == "suspension":
         _reject_unknown_keys(value, {"type", "operator"}, path)
         operator = value.get("operator")
-        if operator not in {"is_suspended", "is_not_suspended"}:
+        if not isinstance(operator, str) or operator not in {"is_suspended", "is_not_suspended"}:
             raise ValueError(f"{path}.operator: must be 'is_suspended' or 'is_not_suspended'")
         return SuspensionCondition(operator)
     if condition_type in {"sibling_suspension", "sibling_review_history"}:
         _reject_unknown_keys(value, {"type", "operator"}, path)
         operator = value.get("operator")
-        if operator not in {"all", "any", "none"}:
+        if not isinstance(operator, str) or operator not in {"all", "any", "none"}:
             raise ValueError(f"{path}.operator: must be 'all', 'any', or 'none'")
         return (
             SiblingSuspensionCondition(operator)
@@ -347,7 +357,7 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
 
 
 def _parse_conditions(value: object, match: object, path: str) -> ConditionExpression:
-    if match not in {"all", "any"}:
+    if not isinstance(match, str) or match not in {"all", "any"}:
         raise ValueError(f"{path}.match: must be 'all' or 'any'")
     if not isinstance(value, list) or not value:
         raise ValueError(f"{path}.conditions: must be a non-empty array")
@@ -367,6 +377,8 @@ def _parse_action(value: object, path: str) -> tuple[Action, ...]:  # noqa: PLR0
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     action_type = value.get("type")
+    if not isinstance(action_type, str):
+        raise ValueError(f"{path}.type: must be a string")
     if action_type in {"tag", "add_tags"}:
         _reject_unknown_keys(value, {"type", "tags"}, path)
         return tuple(TagAction(tag) for tag in _tags(value, path))
@@ -466,7 +478,7 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     policy_id = _required_string(value, "id", path)
     name = _required_string(value, "name", path)
     mode = value.get("mode")
-    if mode not in {"on_demand", "automatic"}:
+    if not isinstance(mode, str) or mode not in {"on_demand", "automatic"}:
         raise ValueError(f"{path}.mode: must be 'on_demand' or 'automatic'")
     scope = _parse_scope(value.get("scope"), f"{path}.scope")
     conditions = _parse_conditions(value.get("conditions"), value.get("match"), path)

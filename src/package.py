@@ -28,7 +28,13 @@ REQUIRED_PACKAGE_FILES = {
     "config.md",
     "config.schema.json",
     "configuration.py",
-    "dialogs.py",
+    "action_row.py",
+    "condition_row.py",
+    "conflict_dialog.py",
+    "editor_utils.py",
+    "json_editor.py",
+    "policy_editor.py",
+    "settings_dialog.py",
     "deck_picker.py",
     "engine.py",
     "evaluator.py",
@@ -37,6 +43,7 @@ REQUIRED_PACKAGE_FILES = {
     "manifest.json",
     "models.py",
     "note_type_picker.py",
+    "picker_state.py",
     "presentation.py",
     "policies.md",
     "ui.py",
@@ -69,13 +76,23 @@ def clean() -> None:
 
 def prepare_build() -> None:
     BUILD_DIR.mkdir(parents=True)
-    for path in SRC_DIR.iterdir():
-        if path.is_file() and path.name != "package.py":
-            shutil.copy2(path, BUILD_DIR / path.name)
+    documentation = {"manifest.json", "README.md", "LICENSE", "config.md", "policies.md"}
+    for name in sorted(REQUIRED_PACKAGE_FILES - documentation):
+        shutil.copy2(SRC_DIR / name, BUILD_DIR / name)
     for name in ("manifest.json", "README.md", "LICENSE"):
         shutil.copy2(name, BUILD_DIR / name)
     shutil.copy2("docs/config.md", BUILD_DIR / "config.md")
     shutil.copy2("docs/policies.md", BUILD_DIR / "policies.md")
+    readme = BUILD_DIR / "README.md"
+    contents = readme.read_text(encoding="utf-8")
+    contents = contents.replace("./docs/policies.md", "policies.md")
+    contents = contents.replace(
+        "./assets/", "https://raw.githubusercontent.com/zarnthyr/card-janitor/main/assets/"
+    )
+    contents = contents.replace(
+        "./docs/", "https://github.com/zarnthyr/card-janitor/blob/main/docs/"
+    )
+    readme.write_text(contents, encoding="utf-8")
 
 
 def build_files() -> list[Path]:
@@ -99,10 +116,12 @@ def validate_package(path: Path = OUTPUT_FILE) -> None:
         except (KeyError, json.JSONDecodeError, UnicodeDecodeError):
             manifest = None
     missing = REQUIRED_PACKAGE_FILES - names
+    unexpected = names - REQUIRED_PACKAGE_FILES
     forbidden = {name for name in names if is_forbidden_package_path(name)}
     duplicates = {name for name in names if archive_names.count(name) > 1}
-    if missing or forbidden or duplicates or manifest != EXPECTED_MANIFEST:
+    if missing or unexpected or forbidden or duplicates or manifest != EXPECTED_MANIFEST:
         print(f"missing={sorted(missing)}")
+        print(f"unexpected={sorted(unexpected)}")
         print(f"forbidden={sorted(forbidden)}")
         print(f"duplicates={sorted(duplicates)}")
         print(f"manifest={manifest!r}")
@@ -153,7 +172,17 @@ def install_development_addon(addons_dir: Path | None = None) -> Path:
     destination.mkdir(parents=True, exist_ok=True)
     marker.write_text("Managed by the Card Janitor development installer.\n", encoding="utf-8")
 
-    for name, source in development_link_sources().items():
+    links = development_link_sources()
+    source_dir = Path(__file__).resolve().parent
+    for target in destination.iterdir():
+        if (
+            target.name not in links
+            and target.is_symlink()
+            and target.resolve().is_relative_to(source_dir)
+        ):
+            target.unlink()
+
+    for name, source in links.items():
         target = destination / name
         if target.is_symlink():
             if target.resolve() == source.resolve():

@@ -1,7 +1,9 @@
 # Copyright (C) 2026 Zarnthyr
 # License: GNU AGPL v3 or later
 
+import pytest
 from card_janitor.models import (
+    MAX_DAYS,
     AgeCondition,
     AllCardsCondition,
     AllConditions,
@@ -200,7 +202,7 @@ def test_rejects_nested_compound_policy() -> None:
         ],
     )
     parsed = parse_config(raw)
-    assert "unknown condition type" in str(parsed.issues[0])
+    assert "type: must be a string" in str(parsed.issues[0])
     assert parsed.policy_records[0].policy is None
     assert parsed.policy_records[0].raw is raw["policies"][0]
 
@@ -212,6 +214,45 @@ def test_invalid_policy_is_omitted() -> None:
     parsed = parse_config(raw)
     assert parsed.issues
     assert not parsed.config.policies
+
+
+@pytest.mark.parametrize("value", [[], {}, ["nested"], {"nested": True}])
+@pytest.mark.parametrize(
+    "field", ["mode", "match", "condition_type", "operator", "source", "state", "action_type"]
+)
+def test_malformed_json_fields_produce_repairable_issues(field: str, value: object) -> None:
+    raw = policy_config()
+    policy = raw["policies"][0]
+    condition = policy["conditions"][0]
+    if field in {"mode", "match"}:
+        policy[field] = value
+    elif field == "condition_type":
+        condition["type"] = value
+    elif field in {"operator", "source"}:
+        condition[field] = value
+    elif field == "state":
+        policy["conditions"] = [{"type": "card_state", "states": [value]}]
+    else:
+        policy["actions"][0]["type"] = value
+    parsed = parse_config(raw)
+    assert parsed.issues
+    assert parsed.policy_records[0].raw is policy
+    assert not parsed.config.policies
+
+
+@pytest.mark.parametrize("tag", ["two words", "two\twords", "two,words"])
+@pytest.mark.parametrize("kind", ["tag", "remove_tags", "replace_tags"])
+def test_individual_json_tags_cannot_be_split_by_anki_or_editor(tag: str, kind: str) -> None:
+    parsed = parse_config(policy_config(actions=[{"type": kind, "tags": [tag]}]))
+    assert "individual tags" in str(parsed.issues[0])
+
+
+@pytest.mark.parametrize("days", [-1, MAX_DAYS + 1, 10**100, True])
+def test_numeric_bounds_match_editor(days: int) -> None:
+    parsed = parse_config(
+        policy_config(conditions=[{"type": "interval", "days": days, "operator": "gte"}])
+    )
+    assert parsed.issues
 
 
 def test_automatic_delete_requires_explicit_configuration_but_is_supported() -> None:
