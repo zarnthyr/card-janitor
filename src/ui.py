@@ -6,9 +6,10 @@ from __future__ import annotations
 import contextlib
 import itertools
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import escape
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from aqt import mw
 from aqt.operations import CollectionOp, QueryOp
@@ -73,7 +74,7 @@ if TYPE_CHECKING:
     from anki.collection import Collection
 
     from .engine import PolicyReport
-    from .models import ParsedConfig, PolicyRecord
+    from .models import ParsedConfig, Policy, PolicyRecord
 
 MENU_ATTR = "_card_janitor_action"
 ON_DEMAND_DIALOG_ATTR = "_card_janitor_dialog"
@@ -187,10 +188,14 @@ class CardJanitorDialog(QDialog):
         self.add_button.setToolTip("Create a cleanup policy")
         self.edit_button = QPushButton("Edit…", self)
         self.edit_button.setToolTip("Edit the highlighted policy")
+        self.duplicate_button = QPushButton("Duplicate…", self)
+        self.duplicate_button.setToolTip("Create a copy of the highlighted policy")
+        qconnect(self.duplicate_button.clicked, self._duplicate_policy)
         self.remove_button = QPushButton("Remove…", self)
         self.remove_button.setToolTip("Remove the highlighted policy")
         intro.addWidget(self.add_button)
         intro.addWidget(self.edit_button)
+        intro.addWidget(self.duplicate_button)
         intro.addWidget(self.remove_button)
         layout.addLayout(intro)
 
@@ -321,6 +326,7 @@ class CardJanitorDialog(QDialog):
         tab_widgets = (
             self.add_button,
             self.edit_button,
+            self.duplicate_button,
             self.remove_button,
             self.table,
             self.empty_add_button,
@@ -586,7 +592,7 @@ class CardJanitorDialog(QDialog):
         plan = build_execution_plan(self.checked_reports(), mw.col)
         if not plan.conflict_details:
             return
-        self._conflict_dialog = ConflictDialog(plan.conflict_details, self)
+        self._conflict_dialog = ConflictDialog(plan.conflict_details, self, self.checked_reports())
         self._conflict_dialog.show()
         self._conflict_dialog.raise_()
         self._conflict_dialog.activateWindow()
@@ -620,7 +626,9 @@ class CardJanitorDialog(QDialog):
         return self._rows[row].record if 0 <= row < len(self._rows) else None
 
     def _update_buttons(self) -> None:
-        has_selection = self._selected_record() is not None
+        record = self._selected_record()
+        has_selection = record is not None
+        self.duplicate_button.setEnabled(record is not None and record.policy is not None)
         self.edit_button.setEnabled(has_selection)
         self.remove_button.setEnabled(has_selection)
 
@@ -631,6 +639,12 @@ class CardJanitorDialog(QDialog):
         record = self._selected_record()
         if record is not None:
             self._open_editor(record)
+
+    def _duplicate_policy(self) -> None:
+        record = self._selected_record()
+        if record is not None and record.policy is not None:
+            policy = replace(record.policy, id=uuid4().hex, name=record.policy.name + " (copy)")
+            self._open_editor(None, initial_policy=policy)
 
     def _remove_policy(self) -> None:
         record = self._selected_record()
@@ -655,7 +669,9 @@ class CardJanitorDialog(QDialog):
         debug("policy removed", policy_name=name)
         self._refresh()
 
-    def _open_editor(self, record: PolicyRecord | None) -> None:
+    def _open_editor(
+        self, record: PolicyRecord | None, *, initial_policy: Policy | None = None
+    ) -> None:
         if self._policy_editor is not None and self._policy_editor.isVisible():
             self._policy_editor.raise_()
             self._policy_editor.activateWindow()
@@ -666,7 +682,7 @@ class CardJanitorDialog(QDialog):
             for item in self._parsed.policy_records
             if item.policy is not None and item.policy.id.casefold() != excluded_id
         }
-        editor = PolicyEditorDialog(record, existing_ids, self)
+        editor = PolicyEditorDialog(record, existing_ids, self, initial_policy=initial_policy)
         self._policy_editor = editor
         self._set_editor_controls_enabled(enabled=False)
         qconnect(
@@ -684,6 +700,7 @@ class CardJanitorDialog(QDialog):
             self.conflict_summary,
             self.add_button,
             self.edit_button,
+            self.duplicate_button,
             self.remove_button,
             self.empty_add_button,
             self.settings_button,

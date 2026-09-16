@@ -28,6 +28,7 @@ from .configuration import (
     load_raw_collection_config,
     save_raw_collection_config,
 )
+from .line_numbers import LineNumberArea
 from .log import error
 from .models import parse_config
 
@@ -42,6 +43,7 @@ class CollectionConfigEditor(ConfigEditor):
     def __init__(self, parent: QDialog, addon: str, config: dict) -> None:
         self._original_policies = deepcopy(config.get("policies"))
         super().__init__(parent, addon, config)
+        self._line_numbers = LineNumberArea(self.form.editor)
         self.setWindowTitle("Card Janitor — Edit Policies as JSON")
         clear_button = self.form.buttonBox.button(QDialogButtonBox.StandardButton.RestoreDefaults)
         clear_button.setText("Clear Policies")

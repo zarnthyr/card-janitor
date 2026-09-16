@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import itertools
+import json
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -20,20 +21,23 @@ from aqt.qt import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     Qt,
     QTimer,
     QVBoxLayout,
     QWidget,
     qconnect,
 )
-from aqt.utils import showWarning, tooltip
+from aqt.utils import askUser, showWarning, tooltip
 
 from .browsing import open_cards_in_browser
 from .deck_picker import DeckPicker
 from .editor_utils import _split_tags
 from .evaluator import evaluate_policy
+from .line_numbers import LineNumberArea
 from .log import error
 from .models import (
     MAX_DAYS,
@@ -82,11 +86,13 @@ from .condition_row import ConditionRow
 
 
 class PolicyEditorDialog(QDialog):
-    def __init__(  # noqa: PLR0912
+    def __init__(
         self,
         record: PolicyRecord | None,
         existing_ids: set[str],
         parent: QWidget,
+        *,
+        initial_policy: Policy | None = None,
     ) -> None:
         super().__init__(parent)
         self._record = record
@@ -97,7 +103,10 @@ class PolicyEditorDialog(QDialog):
         self.setWindowTitle("Add Policy" if record is None else "Edit Policy")
         self.resize(650, 580)
         raw = record.raw if record is not None and isinstance(record.raw, dict) else {}
-        policy = record.policy if record is not None else None
+        policy = initial_policy or (record.policy if record is not None else None)
+        self._policy_id = policy.id if policy else _raw_string(raw, "id") or uuid4().hex
+        if record and record.policy is None and self._policy_id.casefold() in existing_ids:
+            self._policy_id = uuid4().hex
         deck_names = [
             item.name
             for item in mw.col.decks.all_names_and_ids(
@@ -141,6 +150,7 @@ class PolicyEditorDialog(QDialog):
             all_decks=policy.scope.all_decks if policy else raw_scope.get("all_decks") is True,
         )
         scope_form = QFormLayout()
+        self._scope_form = scope_form
         scope_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         scope_form.addRow("Decks", self.decks)
         self.note_types = NoteTypePicker(
@@ -286,39 +296,24 @@ class PolicyEditorDialog(QDialog):
         self.actions_scroll.setWidget(self.actions_container)
         actions_group_layout.addWidget(self.actions_scroll)
         source_actions = policy.actions if policy else _best_effort_actions(raw.get("actions"))
-        added_tags = tuple(action.tag for action in source_actions if isinstance(action, TagAction))
-        removed_tags = tuple(
-            action.tag for action in source_actions if isinstance(action, RemoveTagAction)
-        )
-        if added_tags:
-            self._add_action("add_tags", tags=added_tags)
-        if removed_tags:
-            self._add_action("remove_tags", tags=removed_tags)
-        for action in source_actions:
-            if isinstance(action, (TagAction, RemoveTagAction)):
-                continue
-            if isinstance(action, ReplaceTagsAction):
-                self._add_action("replace_tags", tags=action.tags)
-            elif isinstance(action, SuspendAction):
-                self._add_action("suspend_note" if action.target == "note" else "suspend")
-            elif isinstance(action, UnsuspendAction):
-                self._add_action("unsuspend_note" if action.target == "note" else "unsuspend")
-            elif isinstance(action, MoveAction):
-                self._add_action(
-                    "move_note" if action.target == "note" else "move", deck=action.deck
-                )
-            elif isinstance(action, DeleteCardAction):
-                self._add_action("delete_card")
-            elif isinstance(action, DeleteNoteAction):
-                self._add_action("delete_note")
-        if not self._actions:
-            self._add_action("add_tags")
+        self._load_actions(source_actions)
         qconnect(self.add_action_button.clicked, self._add_default_action)
         self._update_action_warnings()
         layout.addWidget(actions_group, alignment=Qt.AlignmentFlag.AlignTop)
         qconnect(self.mode.currentIndexChanged, self._update_warning_panels)
 
         layout.addStretch()
+        self._form_spacer = layout.itemAt(layout.count() - 1).spacerItem()
+        self._form_groups = (general_group, scope_group, conditions_group, actions_group)
+        self.json_text = QPlainTextEdit(self)
+        self._line_numbers = LineNumberArea(self.json_text)
+        self.json_text.setToolTip(
+            "Edit one policy. Its internal ID is managed automatically and cannot be changed here."
+        )
+        self.json_text.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.json_text.hide()
+        layout.addWidget(self.json_text, stretch=1)
+        self._json_mode = False
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel,
             parent=self,
@@ -330,6 +325,11 @@ class PolicyEditorDialog(QDialog):
         self.browse_button.setToolTip(
             "Open cards this policy would clean up using the current unsaved settings"
         )
+        self.json_button = buttons.addButton(
+            "Edit as JSON…", QDialogButtonBox.ButtonRole.ActionRole
+        )
+        self.json_button.setToolTip("Edit this policy's unsaved settings as JSON")
+        qconnect(self.json_button.clicked, self._toggle_json)
         qconnect(buttons.accepted, self._accept)
         qconnect(buttons.rejected, self.reject)
         qconnect(self.browse_button.clicked, self._browse)
@@ -340,6 +340,7 @@ class PolicyEditorDialog(QDialog):
         self._update_mode_tooltip()
         self._update_warning_panels()
         self._update_tab_order()
+        self._initial_snapshot = self._form_payload()
         QTimer.singleShot(0, self._focus_initial)
 
     def _focus_initial(self) -> None:
@@ -367,7 +368,7 @@ class PolicyEditorDialog(QDialog):
         widgets.append(self.add_action_button)
         for row in self._actions:
             widgets.extend(row.focus_widgets())
-        widgets.extend((self.browse_button, self.save_button, self.cancel_button))
+        widgets.extend((self.browse_button, self.json_button, self.save_button, self.cancel_button))
         for current, following in itertools.pairwise(widgets):
             QWidget.setTabOrder(current, following)
 
@@ -471,6 +472,35 @@ class PolicyEditorDialog(QDialog):
             self._update_tab_order()
             row.kind.setFocus()
 
+    def _load_actions(self, actions: tuple[Action, ...]) -> None:
+        added_tags = tuple(action.tag for action in actions if isinstance(action, TagAction))
+        removed_tags = tuple(
+            action.tag for action in actions if isinstance(action, RemoveTagAction)
+        )
+        if added_tags:
+            self._add_action("add_tags", tags=added_tags)
+        if removed_tags:
+            self._add_action("remove_tags", tags=removed_tags)
+        for action in actions:
+            if isinstance(action, (TagAction, RemoveTagAction)):
+                continue
+            if isinstance(action, ReplaceTagsAction):
+                self._add_action("replace_tags", tags=action.tags)
+            elif isinstance(action, SuspendAction):
+                self._add_action("suspend_note" if action.target == "note" else "suspend")
+            elif isinstance(action, UnsuspendAction):
+                self._add_action("unsuspend_note" if action.target == "note" else "unsuspend")
+            elif isinstance(action, MoveAction):
+                self._add_action(
+                    "move_note" if action.target == "note" else "move", deck=action.deck
+                )
+            elif isinstance(action, DeleteCardAction):
+                self._add_action("delete_card")
+            elif isinstance(action, DeleteNoteAction):
+                self._add_action("delete_note")
+        if not self._actions:
+            self._add_action("add_tags")
+
     def _add_default_action(self, _checked: object = None) -> None:
         used = {row.action_kind() for row in self._actions}
         candidates = [
@@ -546,6 +576,8 @@ class PolicyEditorDialog(QDialog):
         self.automatic_warning.setVisible(self.mode.currentData() == "automatic")
 
     def _policy_from_form(self) -> Policy | None:  # noqa: PLR0911, PLR0912
+        if self._json_mode:
+            return self._policy_from_json()
         name = self.name.text().strip()
         decks = self.decks.selectors()
         if not name:
@@ -614,19 +646,12 @@ class PolicyEditorDialog(QDialog):
         if added & removed:
             showWarning("The same tag cannot be added and removed", parent=self)
             return None
-        raw = (
-            self._record.raw
-            if self._record is not None and isinstance(self._record.raw, dict)
-            else {}
-        )
-        existing_id = _raw_string(raw, "id")
-        policy_id = self._record.policy.id if self._record and self._record.policy else existing_id
-        if not policy_id:
-            policy_id = uuid4().hex
+        policy_id = self._policy_id
         normalized_id = policy_id.casefold()
         if normalized_id in self._existing_ids:
             if self._record is not None and self._record.policy is None:
                 policy_id = uuid4().hex
+                self._policy_id = policy_id
             else:
                 showWarning("Another policy has the same internal ID", parent=self)
                 return None
@@ -649,7 +674,157 @@ class PolicyEditorDialog(QDialog):
             showWarning(str(exc), parent=self)
             return None
 
+    def _form_payload(self) -> dict:
+        conditions = (
+            (AllCardsCondition(),)
+            if self.match.currentData() == "all_cards"
+            else tuple(row.condition() for row in self._conditions)
+        )
+        expression = (
+            AnyConditions(conditions)
+            if self.match.currentData() == "any"
+            else AllConditions(conditions)
+        )
+        return policy_to_dict(
+            Policy(
+                id=self._policy_id,
+                name=self.name.text(),
+                mode=self.mode.currentData(),
+                scope=Scope(
+                    decks=self.decks.selectors(),
+                    all_decks=self.decks.all_decks,
+                    note_types=self.note_types.selected(),
+                    include_suspended=self.include_suspended.isChecked(),
+                ),
+                conditions=expression,
+                actions=tuple(action for row in self._actions for action in row.actions()),
+            )
+        )
+
+    def _policy_from_json(self) -> Policy | None:
+        try:
+            raw = json.loads(self.json_text.toPlainText())
+            if isinstance(raw, dict):
+                raw["id"] = self._policy_id
+            return parse_policy(raw)
+        except (ValueError, TypeError) as exc:
+            showWarning(f"Invalid policy JSON:\n\n{exc}", parent=self)
+            return None
+
+    def _toggle_json(self) -> None:
+        if self._json_mode:
+            return
+        self.json_text.setPlainText(json.dumps(self._form_payload(), indent=2, ensure_ascii=False))
+        self._json_initial_text = self.json_text.toPlainText()
+        self._set_json_mode(enabled=True)
+
+    def _set_json_mode(self, *, enabled: bool) -> None:
+        self._json_mode = enabled
+        self._form_spacer.changeSize(
+            0,
+            0,
+            QSizePolicy.Policy.Minimum,
+            QSizePolicy.Policy.Fixed if self._json_mode else QSizePolicy.Policy.Expanding,
+        )
+        self.layout().invalidate()
+        for group in self._form_groups:
+            group.setVisible(not self._json_mode)
+        self.json_text.setVisible(self._json_mode)
+        self.json_button.setVisible(not self._json_mode)
+        self.save_button.setText("Apply" if self._json_mode else "Save")
+        self.save_button.setToolTip(
+            "Apply valid JSON to the unsaved form" if self._json_mode else "Save this policy"
+        )
+        self.cancel_button.setToolTip(
+            "Discard JSON edits and return to the form" if self._json_mode else "Close this editor"
+        )
+        (self.json_text if self._json_mode else self.name).setFocus()
+
+    def _apply_json(self) -> None:
+        policy = self._policy_from_json()
+        if policy is None:
+            return
+        self._apply_policy(policy)
+        self._set_json_mode(enabled=False)
+
+    def _cancel_json(self) -> None:
+        if self.json_text.toPlainText() != self._json_initial_text and not askUser(
+            "Discard JSON edits and return to the form?",
+            parent=self,
+            defaultno=True,
+            title="Card Janitor",
+        ):
+            return
+        self._set_json_mode(enabled=False)
+
+    def _apply_policy(self, policy: Policy) -> None:
+        self.name.setText(policy.name)
+        self.mode.setCurrentIndex(self.mode.findData(policy.mode))
+        decks = DeckPicker(
+            self._deck_names, policy.scope.selectors, self, all_decks=policy.scope.all_decks
+        )
+        types = NoteTypePicker(
+            [item.name for item in mw.col.models.all_names_and_ids()], policy.scope.note_types, self
+        )
+        for old, new in ((self.decks, decks), (self.note_types, types)):
+            self._scope_form.replaceWidget(old, new)
+            old.hide()
+            old.deleteLater()
+        self.decks, self.note_types = decks, types
+        for rows, row_layout in (
+            (self._conditions, self.conditions_layout),
+            (self._actions, self.actions_layout),
+        ):
+            for row in rows:
+                row_layout.removeWidget(row)
+                row.hide()
+                row.deleteLater()
+            rows.clear()
+        expression = policy.conditions
+        conditions = (
+            expression.conditions
+            if isinstance(expression, (AllConditions, AnyConditions))
+            else (expression,)
+        )
+        all_cards = any(isinstance(condition, AllCardsCondition) for condition in conditions)
+        self.match.setCurrentIndex(
+            self.match.findData(
+                "all_cards"
+                if all_cards
+                else "any"
+                if isinstance(expression, AnyConditions)
+                else "all"
+            )
+        )
+        for condition in conditions:
+            if not isinstance(condition, AllCardsCondition):
+                self._add_condition(condition)
+        if not self._conditions:
+            self._add_condition(AgeCondition(365, "first_review", "gte"))
+        self._load_actions(policy.actions)
+        self.include_suspended.setChecked(policy.scope.include_suspended)
+        self._update_warning_panels()
+        self._update_tab_order()
+
+    def _has_unsaved_changes(self) -> bool:
+        return self._form_payload() != self._initial_snapshot or (
+            self._json_mode and self.json_text.toPlainText() != self._json_initial_text
+        )
+
+    def reject(self) -> None:
+        if self._json_mode:
+            self._cancel_json()
+            return
+        if self._has_unsaved_changes() and not askUser(
+            "Discard unsaved policy changes?", parent=self, defaultno=True, title="Card Janitor"
+        ):
+            return
+        super().reject()
+
     def _accept(self) -> None:
+        if self._json_mode:
+            self._apply_json()
+            return
         policy = self._policy_from_form()
         if policy is None:
             return

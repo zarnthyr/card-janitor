@@ -76,6 +76,18 @@ that day's automatic cleanup.
 **Browse** in the policy editor validates and evaluates the current form without
 saving it, then opens the cards that would require an action in Anki's Browser.
 
+**Duplicate…** opens an editable copy of the selected valid policy with a new
+internal ID. It is not saved until you click **Save**. Inside Add/Edit,
+**Edit as JSON…** switches to a single-policy JSON editor, including incomplete
+or unsaved settings. Paste one policy object, not a whole configuration.
+**Apply** validates JSON, updates the unsaved form, and returns to it.
+**Cancel/Escape** returns to the unchanged form without validation, asking
+before discarding changed JSON. Only the form's **Save** persists the policy;
+**Browse** previews either view without saving.
+Internal IDs are preserved for edited policies and generated for new ones,
+even if pasted JSON contains another ID. Closing a changed policy editor asks
+before discarding its unsaved changes.
+
 Policy modes are:
 
 - `on_demand` — runs only when you start cleanup from Card Janitor
@@ -327,8 +339,10 @@ reported as a policy error.
 Compatible actions are merged and deduplicated during on-demand and automatic execution. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
 
 When checked policies conflict, click the dashboard's skipped-card summary to
-see the affected card IDs, involved policies, and reasons. **Browse** in that
-window opens the skipped cards. The main **Browse** button still includes all
+see the affected card IDs, involved policies, their actions, and reasons.
+Select rows and use **Browse selected** to inspect just those skipped cards,
+or clear the selection and use **Browse** for all skipped cards. The main
+**Browse** button still includes all
 candidate cards from checked policies, including conflicts; cleanup totals
 exclude conflicting cards. Already-satisfied actions can still conflict with
 another policy's intended changes. A conflict affecting a note-wide action
