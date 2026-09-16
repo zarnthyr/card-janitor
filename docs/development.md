@@ -143,5 +143,8 @@ Pushing the tag publishes the GitHub Release automatically. Do not move or
 reuse a published version tag; increment the project version for the next
 release.
 
-Manually rerunning the workflow for an existing release replaces its add-on
-asset without moving the tag or recreating the release notes.
+Releases are created as drafts, receive the add-on asset, and are then published.
+With release immutability enabled, published assets and tags cannot be changed.
+Rerunning the workflow resumes an unfinished draft, replacing its draft asset
+before publishing. An already-published release is left untouched; ship changes
+under a new version tag instead. Runs for the same tag are serialized.
