@@ -14,6 +14,7 @@ ADDON_MODULE = "card_janitor"
 COLLECTION_POLICIES_KEY = "card_janitor_policies"
 DEFAULT_SETTINGS: dict[str, Any] = {
     "config_version": CONFIG_VERSION,
+    "automatic_cleanup_enabled": True,
     "notify_after_automatic_run": True,
     "debug_logging": False,
 }
@@ -125,6 +126,7 @@ def remove_policy(*, record: PolicyRecord) -> None:
 
 def save_settings(
     *,
+    automatic_cleanup_enabled: bool = True,
     notify_after_automatic_run: bool,
     debug_logging: bool,
 ) -> None:
@@ -136,6 +138,7 @@ def save_settings(
     updated = deepcopy(raw)
     updated.pop("policies", None)
     updated["config_version"] = CONFIG_VERSION
+    updated["automatic_cleanup_enabled"] = automatic_cleanup_enabled
     updated["notify_after_automatic_run"] = notify_after_automatic_run
     updated["debug_logging"] = debug_logging
     mw.addonManager.writeConfig(ADDON_MODULE, updated)

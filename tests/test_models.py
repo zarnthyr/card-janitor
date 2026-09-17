@@ -2,6 +2,7 @@
 # License: GNU AGPL v3 or later
 
 import pytest
+from card_janitor.configuration import DEFAULT_CONFIG
 from card_janitor.models import (
     MAX_DAYS,
     AgeCondition,
@@ -25,6 +26,22 @@ from card_janitor.models import (
     policy_to_dict,
 )
 from card_janitor.presentation import describe_scope, scope_tooltip
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_automatic_cleanup_setting_is_boolean(enabled: bool) -> None:
+    parsed = parse_config({**DEFAULT_CONFIG, "automatic_cleanup_enabled": enabled, "policies": []})
+    assert not parsed.issues
+    assert parsed.config.automatic_cleanup_enabled is enabled
+
+
+def test_automatic_cleanup_defaults_enabled_and_rejects_invalid_values() -> None:
+    assert parse_config({"config_version": 1, "policies": []}).config.automatic_cleanup_enabled
+    parsed = parse_config(
+        {"config_version": 1, "automatic_cleanup_enabled": "false", "policies": []}
+    )
+    assert any(issue.path == "automatic_cleanup_enabled" for issue in parsed.issues)
+    assert not parsed.config.automatic_cleanup_enabled
 
 
 def policy_config(**overrides: object) -> dict:

@@ -8,6 +8,11 @@
     "debug_logging"
   ],
   "properties": {
+    "automatic_cleanup_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Enable automatic cleanup; manual cleanup remains available"
+    },
     "config_version": {
       "const": 1
     },

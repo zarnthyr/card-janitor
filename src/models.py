@@ -201,6 +201,7 @@ class Policy:
 @dataclass(frozen=True)
 class AddonConfig:
     config_version: int
+    automatic_cleanup_enabled: bool
     notify_after_automatic_run: bool
     debug_logging: bool
     policies: tuple[Policy, ...]
@@ -569,6 +570,7 @@ def parse_config(value: object) -> ParsedConfig:
     if not isinstance(value, dict):
         value = {
             "config_version": CONFIG_VERSION,
+            "automatic_cleanup_enabled": True,
             "notify_after_automatic_run": True,
             "debug_logging": False,
             "policies": [],
@@ -577,6 +579,7 @@ def parse_config(value: object) -> ParsedConfig:
     else:
         allowed = {
             "config_version",
+            "automatic_cleanup_enabled",
             "notify_after_automatic_run",
             "debug_logging",
             "policies",
@@ -590,6 +593,11 @@ def parse_config(value: object) -> ParsedConfig:
     if not _is_int(version) or version != CONFIG_VERSION:
         issues.append(ConfigIssue("config_version", f"must be {CONFIG_VERSION}"))
         version = CONFIG_VERSION
+
+    automatic_enabled = value.get("automatic_cleanup_enabled", True)
+    if not isinstance(automatic_enabled, bool):
+        issues.append(ConfigIssue("automatic_cleanup_enabled", "must be a boolean"))
+        automatic_enabled = False
 
     notify = value.get("notify_after_automatic_run")
     if not isinstance(notify, bool):
@@ -628,6 +636,7 @@ def parse_config(value: object) -> ParsedConfig:
     return ParsedConfig(
         config=AddonConfig(
             config_version=CONFIG_VERSION,
+            automatic_cleanup_enabled=automatic_enabled,
             notify_after_automatic_run=notify,
             debug_logging=debug_logging,
             policies=tuple(policies),

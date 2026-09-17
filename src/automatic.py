@@ -114,6 +114,9 @@ def run_automatic_policies(
         _run_state.pending.update(events)
         return
     parsed = _load_configured()
+    if not parsed.config.automatic_cleanup_enabled:
+        debug("automatic cleanup skipped", reason="disabled in settings")
+        return
     if parsed.issues:
         error("invalid configuration", issues=tuple(str(issue) for issue in parsed.issues))
         record_cleanup(mw.pm.profile, failure=configuration_error_text(parsed.issues))
@@ -143,6 +146,7 @@ def run_automatic_policies(
         return
 
     policy_names = tuple(policy.name for policy in policies)
+    policy_ids = tuple(policy.id for policy in policies)
     matched_triggers = {
         item.type
         for policy in policies
@@ -164,6 +168,7 @@ def run_automatic_policies(
         record_cleanup(
             profile,
             policies=policy_names,
+            policy_ids=policy_ids,
             triggers=trigger_names,
             affected_cards=affected_cards,
             conflicts=conflicts,

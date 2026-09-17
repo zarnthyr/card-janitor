@@ -6,6 +6,7 @@ window.
 
 ## Options
 
+- `automatic_cleanup_enabled` — allow policy triggers to apply actions (enabled by default). Turn it off to pause automatic cleanup; manual cleanup remains available and policies are unchanged.
 - `notify_after_automatic_run` — show a summary after automatic cleanup changes cards
 - `debug_logging` — print cleanup diagnostics to Anki's terminal output
 
@@ -21,6 +22,7 @@ The default configuration is:
 
     {
       "config_version": 1,
+      "automatic_cleanup_enabled": true,
       "notify_after_automatic_run": true,
       "debug_logging": false
     }

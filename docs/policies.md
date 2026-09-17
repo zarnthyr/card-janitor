@@ -367,12 +367,14 @@ count, skipped conflicts and any failure. It is stored locally per profile,
 not in policy JSON, and does not sync. Completed checks with no changes are
 recorded too; events with no eligible policies leave the previous result intact.
 Undo does not update the recorded result.
+Policy names link to the current policy editor when the policy still exists;
+deleted policies remain listed without a link.
 
 ## Multiple profiles
 
 Policy definitions are stored in the current collection, so each profile has its
 own policies and they follow that collection through AnkiWeb sync. Add-on-wide
-settings such as notifications and debug logging remain shared by profiles on the
+settings such as automatic cleanup, notifications and debug logging remain shared by profiles on the
 same Anki installation. Daily completion is tracked separately for each policy
 and profile. A configured deck that no longer exists in its collection is
 reported as a policy error.

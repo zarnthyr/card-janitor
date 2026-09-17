@@ -113,6 +113,7 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         config=SimpleNamespace(
             policies=(SimpleNamespace(id="p", name="Daily policy", triggers=(Trigger("daily"),)),),
             notify_after_automatic_run=False,
+            automatic_cleanup_enabled=True,
         ),
     )
     monkeypatch.setattr(automatic, "mw", window)
@@ -129,6 +130,20 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         lambda *_args: SimpleNamespace(is_empty=True, conflicted_card_ids=()),
     )
     return SimpleNamespace(window=window, operations=operations, mutations=mutations, parsed=parsed)
+
+
+@pytest.mark.parametrize("event", ["on_open", "day_change", "on_sync"])
+def test_disabled_automatic_cleanup_leaves_profile_and_policies_unchanged(
+    runner: SimpleNamespace, event: str
+) -> None:
+    runner.parsed.config.automatic_cleanup_enabled = False
+    policies = runner.parsed.config.policies
+    runner.window.pm.profile["existing"] = "keep"
+    automatic.run_automatic_policies(events=frozenset({event}))
+    assert runner.operations == []
+    assert runner.mutations == []
+    assert runner.window.pm.profile == {"existing": "keep"}
+    assert runner.parsed.config.policies == policies
 
 
 @pytest.mark.parametrize(

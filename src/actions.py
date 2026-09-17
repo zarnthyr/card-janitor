@@ -21,6 +21,7 @@ from .models import (
     UnsuspendAction,
     action_expands_to_siblings,
 )
+from .presentation import describe_action
 
 if TYPE_CHECKING:
     from anki.collection import Collection
@@ -87,10 +88,19 @@ def build_execution_plan(  # noqa: PLR0912
     note_wide_ids: set[int] = set()
     card_policies: dict[int, set[str]] = {}
     note_policies: dict[int, set[str]] = {}
+    action_sources: dict[int, dict[ResolvedAction, set[str]]] = {}
+    card_action_sources: dict[int, dict[ResolvedAction, set[str]]] = {}
     for report in reports:
         desired = report.card_actions
         per_card = {card.card_id: actions for card, actions in desired}
         for card, actions in desired:
+            for action in actions:
+                card_action_sources.setdefault(card.card_id, {}).setdefault(action, set()).add(
+                    report.policy.name
+                )
+                action_sources.setdefault(card.note_id, {}).setdefault(action, set()).add(
+                    report.policy.name
+                )
             card_policies.setdefault(card.card_id, set()).add(report.policy.name)
             note_policies.setdefault(card.note_id, set()).add(report.policy.name)
             card_notes[card.card_id] = card.note_id
@@ -240,6 +250,47 @@ def build_execution_plan(  # noqa: PLR0912
         for note_id in delete_notes:
             planned_card_ids.update(int(card_id) for card_id in col.card_ids_of_note(note_id))
 
+    def explain(card_id: int, reason: str) -> str:
+        if reason == "All affected cards of the note are skipped together":
+            return reason
+        types = (
+            (MoveAction,)
+            if reason.startswith("Move actions")
+            else (SuspendAction, UnsuspendAction)
+            if reason.startswith("Suspend and unsuspend")
+            else (TagAction, RemoveTagAction, ReplaceTagsAction)
+            if reason.startswith(("Tags are", "Tag replacements", "Replacing tags"))
+            else None
+        )
+        descriptions: set[str] = set()
+        note_id = card_notes[card_id]
+        sources = action_sources[note_id]
+        if note_id not in note_wide_ids and reason.startswith(
+            ("Move actions", "Suspend and unsuspend", "Deletion is")
+        ):
+            sources = card_action_sources[card_id]
+        for resolved, policies in sources.items():
+            if types is not None and not isinstance(resolved.action, types):
+                continue
+            if reason.startswith("Tag replacements") and not isinstance(
+                resolved.action, ReplaceTagsAction
+            ):
+                continue
+            if reason.startswith("Tags are"):
+                opposing_type = (
+                    RemoveTagAction if isinstance(resolved.action, TagAction) else TagAction
+                )
+                if not isinstance(resolved.action, (TagAction, RemoveTagAction)) or not any(
+                    isinstance(other.action, opposing_type)
+                    and other.action.tag.casefold() == resolved.action.tag.casefold()
+                    for other in sources
+                ):
+                    continue
+            descriptions.update(
+                f"{policy}: {describe_action(resolved.action)}" for policy in policies
+            )
+        return reason + "\n" + "\n".join(sorted(descriptions))
+
     return ExecutionPlan(
         tags=tuple((tag, tuple(sorted(ids))) for tag, ids in sorted(tags.items())),
         remove_tags=tuple((tag, tuple(sorted(ids))) for tag, ids in sorted(remove_tags.items())),
@@ -256,7 +307,9 @@ def build_execution_plan(  # noqa: PLR0912
         planned_card_ids=tuple(sorted(planned_card_ids)),
         conflict_details=tuple(
             ConflictDetail(
-                card_id, tuple(sorted(card_policies[card_id])), tuple(sorted(reasons[card_id]))
+                card_id,
+                tuple(sorted(card_policies[card_id])),
+                tuple(explain(card_id, reason) for reason in sorted(reasons[card_id])),
             )
             for card_id in sorted(conflicts)
         ),

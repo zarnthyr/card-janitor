@@ -171,18 +171,21 @@ Only the form's **Save** commits the policy. Browse also
 previews unsaved JSON. Internal IDs are managed automatically. Closing a
 changed policy editor asks before discarding edits.
 
-**Settings…** controls notifications and debug logging. The manager's
+**Settings…** controls automatic cleanup, notifications and debug logging.
+Turn off **Enable automatic cleanup** to pause all triggers without changing
+policies; manual cleanup remains available. The manager's
 **Edit as JSON…** opens the current
 collection's policies for advanced editing.
 
 The manager shows **Last cleanup** for the most recent manual or automatic
 cleanup. Click it for the time, affected-card count, skipped conflicts and any
 failure, along with the policy names and initiating triggers captured at that
-time. This result is stored locally per profile and does not sync; Undo
+time. Click a policy name to edit it if the policy still exists.
+This result is stored locally per profile and does not sync; Undo
 does not change the recorded outcome.
 
 Policy definitions are stored in the current collection and sync with it, so
-each profile has its own policies. Notification and debug settings are shared
+each profile has its own policies. Automatic cleanup, notification and debug settings are shared
 across profiles on the same Anki installation. Automatic cleanup is tracked
 separately for each profile.
 
