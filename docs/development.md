@@ -10,9 +10,9 @@ make inspect
 The project targets Python 3.11+ and uses the Anki 26.8.1 development packages pinned in `uv.lock`. Runtime dependencies are limited to APIs bundled with Anki.
 
 For manual testing, install `card-janitor.ankiaddon` in Anki and begin with an
-On demand policy (`mode: "on_demand"`). Open **Card Janitor…** to add or edit
-policies, review card counts, inspect qualifying cards in the Browser, execute
-a policy, and test undo before trying Automatic mode. The manager is a
+manual-only policy (**Trigger → None**, `"triggers": []`). Open **Card Janitor…** to add or edit
+policies, review card counts, inspect qualifying cards in the Browser, apply
+a policy, and test undo before trying automatic triggers. The manager is a
 modeless tool window, so it remains available while working in the Browser.
 
 ## Manual integration test
@@ -67,8 +67,26 @@ Run the integration test as follows:
    card and note, are restored
 6. Click **Refresh** and confirm the original counts return
 
+### Automatic trigger smoke test
+
+The supplied dev policies remain manual-only. In an expendable profile, give a
+reversible tag-only policy **On open** and **On sync** triggers.
+Remove its output tag between checks so each run has something to change.
+Verify that reopening/switching into the profile applies it, a later collection
+sync applies it again on the same day, and opening auto-sync produces one cleanup
+Undo entry rather than two. Failed/cancelled sync attempts also evaluate the
+local collection. Remove the tag again, close/switch the profile with auto-sync
+enabled, and verify closing sync does not apply the policy. Cleanup changes
+already made should still upload through normal closing sync.
+
+For **Daily**, verify two policies track completion independently, reopening
+does not rerun a completed daily-only policy that day, and a newly added daily
+policy is still eligible. Manual cleanup must not consume the daily limit.
+Changes made after sync should appear in the next sync, including closing sync.
+Cleanup must not initiate another sync or intercept Anki's shutdown sequence.
+
 Run `make dev-seed` again whenever a clean fixture is needed. Keep every fixture
-policy On demand so opening the profile cannot mutate it before inspection.
+policy manual-only so opening the profile cannot mutate it before inspection.
 
 The note-action fixtures use a two-card note type. **Dev — Suspend Note**,
 **Dev — Unsuspend Note**, and **Dev — Move Note** should each report one card:
@@ -131,12 +149,12 @@ tag can also be rebuilt from the workflow's manual trigger.
 6. Push `main` and confirm CI passes
 7. Create and push a signed version tag matching `pyproject.toml`
 
-For the current release, the final commands are:
+Replace `X.Y.Z` with the version chosen for the release:
 
 ```bash
-git tag -s v0.2.0 -m "Card Janitor v0.2.0"
+git tag -s vX.Y.Z -m "Card Janitor vX.Y.Z"
 git push origin main
-git push origin v0.2.0
+git push origin vX.Y.Z
 ```
 
 Pushing the tag publishes the GitHub Release automatically. Do not move or

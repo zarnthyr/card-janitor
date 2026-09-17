@@ -34,6 +34,7 @@ REQUIRED_PACKAGE_FILES = {
     "editor_utils.py",
     "json_editor.py",
     "line_numbers.py",
+    "trigger_picker.py",
     "policy_editor.py",
     "settings_dialog.py",
     "deck_picker.py",

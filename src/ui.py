@@ -39,7 +39,7 @@ from aqt.qt import (
     QWidget,
     qconnect,
 )
-from aqt.utils import askUser, showWarning, tooltip
+from aqt.utils import askUser, showText, showWarning, tooltip
 
 from .actions import ExecutionResult, build_execution_plan
 from .browsing import open_cards_in_browser
@@ -60,13 +60,15 @@ from .presentation import (
     applied_message,
     card_count_text,
     configuration_error_text,
-    configured_mode,
+    configured_triggers,
     describe_actions,
     describe_conditions,
     describe_scope,
-    mode_tooltip,
+    last_cleanup,
     policy_tooltip,
+    record_cleanup,
     scope_tooltip,
+    triggers_tooltip,
 )
 from .settings_dialog import SettingsDialog
 
@@ -161,7 +163,7 @@ class CheckBoxHeader(QHeaderView):
 class CardJanitorDialog(QDialog):
     COLUMN_RUN = 0
     COLUMN_POLICY = 1
-    COLUMN_MODE = 2
+    COLUMN_TRIGGERS = 2
     COLUMN_SCOPE = 3
     COLUMN_CONDITIONS = 4
     COLUMN_ACTIONS = 5
@@ -172,6 +174,7 @@ class CardJanitorDialog(QDialog):
         self._rows: tuple[DashboardRow, ...] = ()
         self._parsed = parsed
         self._running = False
+        self._columns_initialized = False
         self._policy_editor: PolicyEditorDialog | None = None
         self._conflict_dialog: ConflictDialog | None = None
         self._editor_widget_states: list[tuple[QWidget, bool]] = []
@@ -203,7 +206,7 @@ class CardJanitorDialog(QDialog):
         self.table_header = CheckBoxHeader(self.table)
         self.table.setHorizontalHeader(self.table_header)
         self.table.setHorizontalHeaderLabels(
-            ("", "Policy", "Mode", "Scope", "Conditions", "Actions", "Cards")
+            ("", "Policy", "Trigger", "Scope", "Conditions", "Actions", "Cards")
         )
         self.table.horizontalHeaderItem(self.COLUMN_RUN).setToolTip(
             "Include or exclude all valid policies"
@@ -222,18 +225,7 @@ class CardJanitorDialog(QDialog):
         vertical_header.setVisible(False)
         vertical_header.setMinimumSectionSize(self.fontMetrics().height() * 2 + 12)
         header = self.table.horizontalHeader()
-        for column in (self.COLUMN_RUN, self.COLUMN_MODE):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(self.COLUMN_COUNT, QHeaderView.ResizeMode.Interactive)
-        count_width = self.table.fontMetrics().horizontalAdvance("Cards") + 28
-        self.table.setColumnWidth(self.COLUMN_COUNT, count_width)
-        for column in (
-            self.COLUMN_POLICY,
-            self.COLUMN_SCOPE,
-            self.COLUMN_CONDITIONS,
-            self.COLUMN_ACTIONS,
-        ):
-            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         qconnect(self.table.itemChanged, self._on_item_changed)
         qconnect(self.table_header.sectionClicked, self._on_header_clicked)
         qconnect(self.table.itemSelectionChanged, self._update_buttons)
@@ -283,7 +275,23 @@ class CardJanitorDialog(QDialog):
         self.conflict_summary.setOpenExternalLinks(False)
         qconnect(self.conflict_summary.linkActivated, self._show_conflicts)
         summary_layout.addWidget(self.conflict_summary)
-        layout.addWidget(summary_panel)
+        self.cleanup_status = QLabel(summary_panel)
+        self.cleanup_status.setContentsMargins(0, 6, 0, 0)
+        self.cleanup_status.setWordWrap(True)
+        self.cleanup_status.setOpenExternalLinks(False)
+        qconnect(self.cleanup_status.linkActivated, self._show_cleanup_status)
+        summary_layout.addWidget(self.cleanup_status)
+        self._cleanup_status_timer = QTimer(self)
+        qconnect(self._cleanup_status_timer.timeout, self._update_cleanup_status)
+        self._cleanup_status_timer.start(1000)
+        qconnect(self.finished, lambda _result: self._cleanup_status_timer.stop())
+        footer = QWidget(self)
+        footer.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 0, 0, 0)
+        footer_layout.setSpacing(12)
+        footer_layout.addWidget(summary_panel)
+        layout.addWidget(footer)
         qconnect(self.finished, lambda _result: self._close_conflicts())
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
@@ -306,7 +314,7 @@ class CardJanitorDialog(QDialog):
             "Browse",
             QDialogButtonBox.ButtonRole.ActionRole,
         )
-        self.view_button.setToolTip("Open cards from the checked policies in Browse")
+        self.view_button.setToolTip("Open cards from the checked policies in Anki's Browser")
         self.run_button = buttons.addButton(
             "Clean Up",
             QDialogButtonBox.ButtonRole.AcceptRole,
@@ -320,7 +328,7 @@ class CardJanitorDialog(QDialog):
         qconnect(self.view_button.clicked, self._view_included)
         qconnect(self.run_button.clicked, self._run)
         qconnect(buttons.rejected, self.close)
-        layout.addWidget(buttons)
+        footer_layout.addWidget(buttons)
         self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
 
         tab_widgets = (
@@ -341,7 +349,6 @@ class CardJanitorDialog(QDialog):
             QWidget.setTabOrder(current, following)
 
         self.set_dashboard(parsed, reports)
-        QTimer.singleShot(0, self._enable_column_resizing)
         QTimer.singleShot(0, self._focus_initial)
 
     def _focus_initial(self) -> None:
@@ -354,7 +361,7 @@ class CardJanitorDialog(QDialog):
         header = self.table.horizontalHeader()
         columns = (
             self.COLUMN_POLICY,
-            self.COLUMN_MODE,
+            self.COLUMN_TRIGGERS,
             self.COLUMN_SCOPE,
             self.COLUMN_CONDITIONS,
         )
@@ -364,6 +371,22 @@ class CardJanitorDialog(QDialog):
             header.resizeSection(column, widths[column])
         self.table.resizeRowsToContents()
 
+    def _reset_column_sizing(self) -> None:
+        header = self.table.horizontalHeader()
+        self.table.setColumnWidth(
+            self.COLUMN_COUNT, self.table.fontMetrics().horizontalAdvance("Cards") + 28
+        )
+        for column in (self.COLUMN_RUN, self.COLUMN_TRIGGERS):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.ResizeToContents)
+        for column in (
+            self.COLUMN_POLICY,
+            self.COLUMN_SCOPE,
+            self.COLUMN_CONDITIONS,
+            self.COLUMN_ACTIONS,
+        ):
+            header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
+        QTimer.singleShot(0, self._enable_column_resizing)
+
     def set_dashboard(
         self,
         parsed: ParsedConfig,
@@ -371,6 +394,10 @@ class CardJanitorDialog(QDialog):
         checked_keys: set[str] | None = None,
         known_keys: set[str] | None = None,
     ) -> None:
+        definitions_changed = not self._columns_initialized or (
+            tuple(record.raw for record in self._parsed.policy_records)
+            != tuple(record.raw for record in parsed.policy_records)
+        )
         self._parsed = parsed
         report_by_id = {report.policy.id: report for report in reports}
         self._rows = tuple(
@@ -410,7 +437,7 @@ class CardJanitorDialog(QDialog):
                 report = dashboard_row.report
                 values = (
                     policy.name,
-                    configured_mode(policy.mode),
+                    configured_triggers(policy),
                     describe_scope(policy.scope),
                     describe_conditions(policy.conditions),
                     describe_actions(policy.actions),
@@ -429,12 +456,15 @@ class CardJanitorDialog(QDialog):
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(error_text)
             else:
                 self.table.item(row, self.COLUMN_POLICY).setToolTip(policy_tooltip(policy))
-                self.table.item(row, self.COLUMN_MODE).setToolTip(mode_tooltip(policy.mode))
+                self.table.item(row, self.COLUMN_TRIGGERS).setToolTip(triggers_tooltip(policy))
                 self.table.item(row, self.COLUMN_SCOPE).setToolTip(scope_tooltip(policy.scope))
                 if dashboard_row.report and dashboard_row.report.errors:
                     error_text = "\n".join(dashboard_row.report.errors)
                     self.table.item(row, self.COLUMN_COUNT).setToolTip(error_text)
         del signal_blocker
+        if definitions_changed:
+            self._reset_column_sizing()
+            self._columns_initialized = True
         self.table.resizeRowsToContents()
         QTimer.singleShot(0, self.table.resizeRowsToContents)
         if self._rows:
@@ -442,6 +472,7 @@ class CardJanitorDialog(QDialog):
         self.content_stack.setCurrentWidget(self.table if self._rows else self.empty_page)
         self._sync_header_check_state()
         self._update_summary()
+        self._update_cleanup_status()
         self._update_buttons()
 
     def checked_keys(self) -> set[str]:
@@ -533,7 +564,7 @@ class CardJanitorDialog(QDialog):
         reports = self.checked_reports()
         if self._parsed.issues:
             self.summary.setText(
-                "Configuration needs repair before cleanup can run:\n"
+                "Configuration needs repair before cleaning up:\n"
                 + "\n".join(f"• {issue}" for issue in self._parsed.issues)
             )
             self.view_button.setEnabled(False)
@@ -545,7 +576,7 @@ class CardJanitorDialog(QDialog):
             self.run_button.setEnabled(False)
             return
         if not reports:
-            messages = ["No policies are included in this run"]
+            messages = ["No policies are selected for cleanup"]
             if any(row.record.policy is None for row in self._rows):
                 messages.append("Edit policies marked Invalid to repair them")
             self.summary.setText(messages[0] if len(messages) == 1 else ". ".join(messages) + ".")
@@ -569,7 +600,7 @@ class CardJanitorDialog(QDialog):
             self.conflict_summary.show()
         if errors:
             messages.append(
-                "A checked policy has an error. Uncheck it or fix the configuration before running"
+                "A checked policy has an error. Uncheck it or fix the configuration before cleaning up"
             )
         self.summary.setText(messages[0] if len(messages) == 1 else ".\n".join(messages) + ".")
         self.view_button.setEnabled(bool(candidate_ids))
@@ -600,8 +631,18 @@ class CardJanitorDialog(QDialog):
     def _view_included(self) -> None:
         card_ids = {card.card_id for report in self.checked_reports() for card in report.actionable}
         if card_ids:
-            browser = open_cards_in_browser(card_ids)
-            qconnect(browser.destroyed, lambda _object=None: _restore_dashboard(self))
+            open_cards_in_browser(card_ids, origin=self)
+
+    def _update_cleanup_status(self) -> None:
+        status = last_cleanup(mw.pm.profile or {})
+        self.cleanup_status.setVisible(status is not None)
+        if status:
+            self.cleanup_status.setText(f'<a href="cleanup">{escape(status[0])}</a>')
+
+    def _show_cleanup_status(self, _link: str) -> None:
+        status = last_cleanup(mw.pm.profile or {})
+        if status:
+            showText(status[1], parent=self, type="html", title="Last Cleanup", minHeight=300)
 
     def _refresh(self) -> None:
         refresh_on_demand_dialog(self)
@@ -752,12 +793,6 @@ class CardJanitorDialog(QDialog):
         self._refresh()
 
 
-def _restore_dashboard(dialog: CardJanitorDialog) -> None:
-    if getattr(mw, ON_DEMAND_DIALOG_ATTR, None) is dialog and dialog.isVisible():
-        dialog.raise_()
-        dialog.activateWindow()
-
-
 def _show_on_demand_dialog(parsed: ParsedConfig, reports: tuple[PolicyReport, ...]) -> None:
     dialog = CardJanitorDialog(parsed, reports)
     setattr(mw, ON_DEMAND_DIALOG_ATTR, dialog)
@@ -826,17 +861,33 @@ def execute_on_demand_reports(
     approved = {
         report.policy.id: {card.card_id for card in report.actionable} for report in reports
     }
+    profile = mw.pm.profile
+    collection = mw.col
+    policy_names = tuple(report.policy.name for report in reports)
     dialog.close()
 
     def execute_fresh(col: Collection) -> ExecutionResult:
+        if col is not collection or mw.col is not collection or mw.pm.profile is not profile:
+            message = "Cleanup cancelled because the collection changed."
+            raise RuntimeError(message)
         return execute_approved_reports(
             col,
             reports,
             approved,
-            "Card Janitor: On-Demand Run",
+            "Card Janitor: Clean Up",
         )
 
     def on_applied(result: ExecutionResult) -> None:
+        if mw.pm.profile is not profile or mw.col is not collection:
+            return
+        record_cleanup(
+            profile,
+            automatic=False,
+            affected_cards=result.affected_cards,
+            conflicts=result.conflicts,
+            policies=policy_names,
+            triggers=("Manual",),
+        )
         debug(
             "on-demand run complete",
             affected_cards=result.affected_cards,
@@ -852,7 +903,23 @@ def execute_on_demand_reports(
         message = messages[0] if len(messages) == 1 else ". ".join(messages) + "."
         tooltip(message, parent=mw)
 
-    CollectionOp(parent=mw, op=execute_fresh).success(on_applied).run_in_background()
+    def on_failure(exc: Exception) -> None:
+        if mw.pm.profile is not profile or mw.col is not collection:
+            return
+        error("manual cleanup failed", reason=str(exc))
+        record_cleanup(
+            profile,
+            automatic=False,
+            affected_cards=None,
+            failure=str(exc),
+            policies=policy_names,
+            triggers=("Manual",),
+        )
+        showWarning(str(exc), parent=mw)
+
+    CollectionOp(parent=mw, op=execute_fresh).success(on_applied).failure(
+        on_failure
+    ).run_in_background()
 
 
 def install_menu() -> None:
@@ -862,7 +929,7 @@ def install_menu() -> None:
             mw.form.menuTools.removeAction(existing)
 
     action = QAction("Card Janitor…", mw)
-    action.setStatusTip("Manage cleanup policies and run Card Janitor")
+    action.setStatusTip("Manage policies and clean up your collection")
     qconnect(action.triggered, open_card_janitor)
     mw.form.menuTools.addAction(action)
     setattr(mw, MENU_ATTR, action)

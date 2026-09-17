@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from html import escape
+
 from aqt.qt import QLabel, QWidget
 
 from .models import (
@@ -28,6 +31,7 @@ from .models import (
     SuspensionCondition,
     TagAction,
     TagCondition,
+    Trigger,
     UnsuspendAction,
 )
 
@@ -110,17 +114,17 @@ def describe_actions(actions: tuple[Action, ...]) -> str:
     return "\n".join(describe_action(action) for action in actions)
 
 
-def _describe_decks(scope: Scope) -> str:
+def _describe_decks(scope: Scope, *, separator: str = ", ") -> str:
     if scope.all_decks:
         return "All decks"
-    return ", ".join(
+    return separator.join(
         selector.deck + (" + subdecks" if selector.include_subdecks else "")
         for selector in scope.selectors
     )
 
 
 def describe_scope(scope: Scope) -> str:
-    decks = _describe_decks(scope)
+    decks = _describe_decks(scope, separator="\n")
     if scope.note_types is None:
         return decks
     types = (
@@ -198,14 +202,110 @@ def describe_conditions(  # noqa: PLR0911
     raise AssertionError(message)
 
 
-def configured_mode(mode: str) -> str:
-    return "On demand" if mode == "on_demand" else "Automatic"
+TRIGGER_LABELS = {
+    "daily": "Daily",
+    "on_open": "On open",
+    "on_sync": "On sync",
+}
+LAST_CLEANUP_KEY = "card_janitor_last_cleanup"
 
 
-def mode_tooltip(mode: str) -> str:
-    if mode == "on_demand":
-        return "On demand: runs only when you click Clean Up in Card Janitor"
-    return "Automatic: runs once per day without confirmation and can also be run on demand"
+def record_cleanup(
+    profile: dict,
+    *,
+    automatic: bool = True,
+    affected_cards: int | None = 0,
+    conflicts: int = 0,
+    failure: str = "",
+    policies: tuple[str, ...] = (),
+    triggers: tuple[str, ...] = (),
+) -> None:
+    profile[LAST_CLEANUP_KEY] = {
+        "time": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "affected_cards": affected_cards,
+        "conflicts": conflicts,
+        "failure": failure,
+        "automatic": automatic,
+        "policies": list(policies),
+        "triggers": list(triggers),
+    }
+
+
+def last_cleanup(profile: dict) -> tuple[str, str] | None:
+    value = profile.get(LAST_CLEANUP_KEY)
+    if not isinstance(value, dict):
+        return None
+    try:
+        when = datetime.fromisoformat(value["time"]).astimezone().strftime("%Y-%m-%d %H:%M")
+    except (KeyError, TypeError, ValueError):
+        return None
+    affected = value.get("affected_cards")
+    conflicts = value.get("conflicts")
+    failure = value.get("failure")
+    if (
+        (affected is not None and (type(affected) is not int or affected < 0))
+        or type(conflicts) is not int
+        or conflicts < 0
+        or not isinstance(failure, str)
+    ):
+        return None
+    outcome = "failed" if failure else card_count_text(affected or 0) + " cleaned up"
+    summary = f"Last cleanup: {when} — {outcome}"
+    rows = [
+        ("Time", when),
+        ("Source", "Automatic" if value.get("automatic") else "Manual"),
+        (
+            "Cards cleaned up",
+            "Unknown; some changes may have been applied" if affected is None else str(affected),
+        ),
+        ("Cards skipped", str(conflicts)),
+    ]
+    for key, heading in (("triggers", "Triggers"), ("policies", "Policies")):
+        if key == "triggers" and not value.get("automatic"):
+            continue
+        entries = value.get(key)
+        if isinstance(entries, list) and entries and all(isinstance(item, str) for item in entries):
+            rows.append((heading, "\n".join(entries)))
+    details = (
+        '<table cellspacing="0" cellpadding="3">'
+        + "".join(
+            f'<tr><td valign="top"><b>{escape(label)}</b></td>'
+            '<td width="12">&nbsp;</td>'
+            f'<td valign="top">{escape(text).replace(chr(10), "<br>")}</td></tr>'
+            for label, text in rows
+        )
+        + "</table>"
+    )
+    if failure:
+        details += "<p><b>Failure</b><br>" + escape(failure).replace("\n", "<br>") + "</p>"
+    else:
+        summary += f"; {conflicts} skipped due to conflicts" if conflicts else ""
+    return summary + ".", details
+
+
+TRIGGER_HELP = {
+    "daily": "Applies this policy once per Anki day, either on open or on day change.",
+    "on_open": "Applies this policy when Anki opens.",
+    "on_sync": "Applies this policy after collection sync.",
+}
+
+
+def configured_triggers(policy: Policy) -> str:
+    return "\n".join(TRIGGER_LABELS[trigger.type] for trigger in policy.triggers) or "None"
+
+
+def trigger_summary(triggers: tuple[Trigger, ...]) -> str:
+    return "; ".join(TRIGGER_LABELS[trigger.type] for trigger in triggers) or "None"
+
+
+def triggers_tooltip(policy: Policy) -> str:
+    return trigger_tooltip(policy.triggers)
+
+
+def trigger_tooltip(triggers: tuple[Trigger, ...]) -> str:
+    return "\n".join(TRIGGER_HELP[trigger.type] for trigger in triggers) or (
+        "No automatic triggers; this policy is applied only when started manually"
+    )
 
 
 def warning_panel(text: str, parent: QWidget, *, destructive: bool = False) -> QLabel:

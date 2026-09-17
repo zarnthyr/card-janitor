@@ -15,13 +15,14 @@ from aqt.qt import (
     QSpinBox,
     QStackedWidget,
     QStandardItem,
+    QStyle,
     QVBoxLayout,
     QWidget,
     QWidgetAction,
     qconnect,
 )
 
-from .editor_utils import _split_tags
+from .editor_utils import PopupCheckBox, _split_tags, guard_popup_anchor, pad_text_field
 from .models import (
     MAX_DAYS,
     AgeCondition,
@@ -48,11 +49,13 @@ class CardStatePicker(QComboBox):
         self._checkboxes: dict[str, QCheckBox] = {}
         self._menu = QMenu(self)
         container = QWidget(self._menu)
+        self._container = container
+        self._anchor_guard = guard_popup_anchor(self, self._menu)
         layout = QVBoxLayout(container)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(4)
         for label, value in CARD_STATES:
-            checkbox = QCheckBox(label, container)
+            checkbox = PopupCheckBox(label, container)
             self._checkboxes[value] = checkbox
             qconnect(
                 checkbox.toggled,
@@ -62,11 +65,18 @@ class CardStatePicker(QComboBox):
         action = QWidgetAction(self._menu)
         action.setDefaultWidget(container)
         self._menu.addAction(action)
+        qconnect(self._menu.aboutToShow, self._resize_popup)
         self.addItem("")
         self.set_states(self._states)
 
     def showPopup(self) -> None:  # noqa: N802 - Qt virtual method
         self._menu.popup(self.mapToGlobal(self.rect().bottomLeft()))
+
+    def _resize_popup(self) -> None:
+        width = min(self.width(), self.screen().availableGeometry().width())
+        panel_width = self._menu.style().pixelMetric(QStyle.PixelMetric.PM_MenuPanelWidth)
+        self._menu.setFixedWidth(width)
+        self._container.setFixedWidth(max(1, width - 2 * panel_width))
 
     def states(self) -> tuple[str, ...]:
         return self._states
@@ -150,12 +160,14 @@ class ConditionRow(QWidget):
         self.operator_stack.addWidget(self.operator)
         self.operator_stack.addWidget(self.fixed_operator)
         self.days = QSpinBox(self)
+        pad_text_field(self.days.lineEdit())
         self.days.setRange(0, MAX_DAYS)
         self.days.setSuffix(" days")
         self.days.setMinimumWidth(140)
         self.states = CardStatePicker(self)
         self.states.setMinimumWidth(140)
         self.tags = QLineEdit(self)
+        pad_text_field(self.tags)
         self.tags.setPlaceholderText("tag1, tag2")
         self.tags.setMinimumWidth(140)
         self.value_stack = QStackedWidget(self)

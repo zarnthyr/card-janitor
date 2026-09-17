@@ -7,11 +7,13 @@ window.
 ## Options
 
 - `notify_after_automatic_run` — show a summary after automatic cleanup changes cards
-- `debug_logging` — print policy evaluation details to Anki's terminal output
+- `debug_logging` — print cleanup diagnostics to Anki's terminal output
 
-No automatic-run summary is shown when no cards were changed. Configuration
+No completion notification is shown when no cards were changed. Configuration
 errors and action conflicts are still reported. Configuration errors and
 unexpected exceptions are always printed, even when debug logging is disabled.
+Notifications wait for an existing Anki tooltip to disappear. The dashboard's
+Last cleanup result is recorded independently of the notification setting.
 
 `config_version` identifies the settings format and must remain `1`.
 

@@ -35,7 +35,7 @@ from aqt.utils import askUser, showWarning, tooltip
 
 from .browsing import open_cards_in_browser
 from .deck_picker import DeckPicker
-from .editor_utils import _split_tags
+from .editor_utils import _split_tags, pad_text_field
 from .evaluator import evaluate_policy
 from .line_numbers import LineNumberArea
 from .log import error
@@ -65,6 +65,7 @@ from .models import (
     SuspensionCondition,
     TagAction,
     TagCondition,
+    Trigger,
     UnsuspendAction,
     parse_policy,
     policy_to_dict,
@@ -73,9 +74,10 @@ from .note_type_picker import NoteTypePicker
 from .presentation import (
     CARD_STATES,
     NUMERIC_OPERATOR_SYMBOLS,
-    mode_tooltip,
+    TRIGGER_LABELS,
     warning_panel,
 )
+from .trigger_picker import TriggerPicker
 
 if TYPE_CHECKING:
     from .engine import PolicyReport
@@ -122,20 +124,27 @@ class PolicyEditorDialog(QDialog):
         form = QFormLayout(general_group)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.name = QLineEdit(policy.name if policy else _raw_string(raw, "name"), self)
+        pad_text_field(self.name)
         form.addRow("Name", self.name)
-        self.mode = QComboBox(self)
-        self.mode.addItem("On demand", "on_demand")
-        self.mode.addItem("Automatic", "automatic")
-        mode = policy.mode if policy else _raw_string(raw, "mode") or "on_demand"
-        index = self.mode.findData(mode)
-        self.mode.setCurrentIndex(index if index >= 0 else self.mode.findData("on_demand"))
         self.automatic_warning = warning_panel(
-            "This policy runs once per day <b>without confirmation</b>",
+            "Triggers apply this policy <b>without confirmation</b>",
             self,
         )
         form.insertRow(0, self.automatic_warning)
-        self.mode_label = QLabel("Mode", self)
-        form.addRow(self.mode_label, self.mode)
+        raw_triggers = raw.get("triggers", [])
+        selected_triggers = (
+            policy.triggers
+            if policy
+            else tuple(
+                Trigger(trigger["type"])
+                for trigger in (raw_triggers if isinstance(raw_triggers, list) else [])
+                if isinstance(trigger, dict)
+                and isinstance(trigger.get("type"), str)
+                and trigger["type"] in TRIGGER_LABELS
+            )
+        )
+        self.triggers = TriggerPicker(selected_triggers, self)
+        form.addRow("Trigger", self.triggers)
         layout.addWidget(general_group, alignment=Qt.AlignmentFlag.AlignTop)
 
         scope_group = QGroupBox("Scope", self)
@@ -300,7 +309,11 @@ class PolicyEditorDialog(QDialog):
         qconnect(self.add_action_button.clicked, self._add_default_action)
         self._update_action_warnings()
         layout.addWidget(actions_group, alignment=Qt.AlignmentFlag.AlignTop)
-        qconnect(self.mode.currentIndexChanged, self._update_warning_panels)
+        qconnect(self.triggers.changed, self._update_warning_panels)
+        qconnect(
+            self.triggers.menu().aboutToHide,
+            lambda: QTimer.singleShot(0, self._update_warning_panels),
+        )
 
         layout.addStretch()
         self._form_spacer = layout.itemAt(layout.count() - 1).spacerItem()
@@ -336,8 +349,6 @@ class PolicyEditorDialog(QDialog):
         layout.addWidget(buttons)
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         self.cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
-        qconnect(self.mode.currentIndexChanged, self._update_mode_tooltip)
-        self._update_mode_tooltip()
         self._update_warning_panels()
         self._update_tab_order()
         self._initial_snapshot = self._form_payload()
@@ -348,15 +359,10 @@ class PolicyEditorDialog(QDialog):
         if self._record is not None:
             self.name.selectAll()
 
-    def _update_mode_tooltip(self, _index: int = 0) -> None:
-        help_text = mode_tooltip(self.mode.currentData())
-        self.mode_label.setToolTip(help_text)
-        self.mode.setToolTip(help_text)
-
     def _update_tab_order(self) -> None:
         widgets: list[QWidget] = [
             self.name,
-            self.mode,
+            self.triggers,
             self.decks,
             self.note_types,
             self.include_suspended,
@@ -573,7 +579,9 @@ class PolicyEditorDialog(QDialog):
             self.include_suspended.setChecked(True)
 
     def _update_warning_panels(self, _value: object = None) -> None:
-        self.automatic_warning.setVisible(self.mode.currentData() == "automatic")
+        if self.triggers.menu().isVisible():
+            return
+        self.automatic_warning.setVisible(bool(self.triggers.selected()))
 
     def _policy_from_form(self) -> Policy | None:  # noqa: PLR0911, PLR0912
         if self._json_mode:
@@ -658,7 +666,7 @@ class PolicyEditorDialog(QDialog):
         policy = Policy(
             id=policy_id,
             name=name,
-            mode=self.mode.currentData(),
+            triggers=self.triggers.selected(),
             scope=Scope(
                 decks=decks,
                 all_decks=self.decks.all_decks,
@@ -689,7 +697,7 @@ class PolicyEditorDialog(QDialog):
             Policy(
                 id=self._policy_id,
                 name=self.name.text(),
-                mode=self.mode.currentData(),
+                triggers=self.triggers.selected(),
                 scope=Scope(
                     decks=self.decks.selectors(),
                     all_decks=self.decks.all_decks,
@@ -759,7 +767,7 @@ class PolicyEditorDialog(QDialog):
 
     def _apply_policy(self, policy: Policy) -> None:
         self.name.setText(policy.name)
-        self.mode.setCurrentIndex(self.mode.findData(policy.mode))
+        self.triggers.set_selected(policy.triggers)
         decks = DeckPicker(
             self._deck_names, policy.scope.selectors, self, all_decks=policy.scope.all_decks
         )
@@ -853,8 +861,7 @@ class PolicyEditorDialog(QDialog):
             if not card_ids:
                 tooltip("No cards would be cleaned up by this policy", parent=self)
                 return
-            browser = open_cards_in_browser(card_ids)
-            qconnect(browser.destroyed, lambda _object=None: self._restore_after_browse())
+            open_cards_in_browser(card_ids, origin=self)
 
         def on_failure(exception: Exception) -> None:
             restore_button()
@@ -867,11 +874,6 @@ class PolicyEditorDialog(QDialog):
             op=lambda col: evaluate_policy(col, policy),
             success=on_success,
         ).failure(on_failure).with_progress("Finding cards…").run_in_background()
-
-    def _restore_after_browse(self) -> None:
-        if self.isVisible():
-            self.raise_()
-            self.activateWindow()
 
 
 def _raw_deck_selectors(raw: dict) -> tuple[DeckSelector, ...]:

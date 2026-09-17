@@ -3,7 +3,7 @@
     {
       "id": "dev-old-reviews",
       "name": "Dev — Old Reviews",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -37,7 +37,7 @@
     {
       "id": "dev-long-intervals",
       "name": "Dev — Long Intervals",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -65,7 +65,7 @@
     {
       "id": "dev-never-studied",
       "name": "Dev — Never Studied",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -100,7 +100,7 @@
     {
       "id": "dev-learning-states",
       "name": "Dev — Learning States",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -132,7 +132,7 @@
     {
       "id": "dev-repair-leech",
       "name": "Dev — Repair Suspended Leech",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -173,7 +173,7 @@
     {
       "id": "dev-replace-tags",
       "name": "Dev — Replace All Tags",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -210,7 +210,7 @@
     {
       "id": "dev-delete",
       "name": "Dev — Delete Note",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -235,7 +235,7 @@
     {
       "id": "dev-suspend-note",
       "name": "Dev — Suspend Note",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
         "note_types": ["Card Janitor Test Siblings"],
@@ -252,7 +252,7 @@
     {
       "id": "dev-unsuspend-note",
       "name": "Dev — Unsuspend Note",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
         "note_types": ["Card Janitor Test Siblings"],
@@ -268,7 +268,7 @@
     {
       "id": "dev-move-note",
       "name": "Dev — Move Note",
-      "mode": "on_demand",
+      "triggers": [],
       "scope": {
         "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
         "note_types": ["Card Janitor Test Siblings"],

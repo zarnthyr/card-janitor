@@ -28,7 +28,6 @@ from card_janitor.models import (
     UnsuspendAction,
     parse_policy,
 )
-from card_janitor.policy_editor import PolicyEditorDialog
 
 
 def test_partial_cleanup_failure_is_grouped_and_recoverable(
@@ -44,7 +43,7 @@ def test_partial_cleanup_failure_is_grouped_and_recoverable(
             {
                 "id": "failure",
                 "name": "Failure",
-                "mode": "on_demand",
+                "triggers": [],
                 "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
                 "match": "all",
                 "conditions": [{"type": "tags", "operator": "contains_none", "tags": ["retired"]}],
@@ -89,7 +88,7 @@ def test_tag_evaluation_does_not_query_review_history(
         policy = Policy(
             id="query",
             name="Query",
-            mode="on_demand",
+            triggers=(),
             scope=Scope((DeckSelector("Mining"),)),
             conditions=TagCondition(("leech",), "contains_any"),
             actions=(SuspendAction(),),
@@ -102,10 +101,6 @@ def test_tag_evaluation_does_not_query_review_history(
         assert "and c.odid = 0" in fact_queries[0]
     finally:
         collection.close()
-
-
-def test_policy_editor_exposes_mode_tooltip_callback() -> None:
-    assert callable(PolicyEditorDialog._update_mode_tooltip)
 
 
 def test_query_op_requires_constructor_success_callback() -> None:
@@ -131,8 +126,8 @@ def test_dashboard_uses_current_query_op_constructor(
 
     created: list[FakeQueryOp] = []
 
-    on_demand = SimpleNamespace(mode="on_demand")
-    automatic = SimpleNamespace(mode="automatic")
+    on_demand = SimpleNamespace(triggers=())
+    automatic = SimpleNamespace(triggers=())
     parsed = SimpleNamespace(config=SimpleNamespace(policies=(on_demand, automatic)))
     evaluated: list[tuple[object, tuple[object, ...]]] = []
     monkeypatch.setattr(ui, "mw", SimpleNamespace(col="current collection"))
@@ -224,7 +219,7 @@ def test_note_type_scope_filters_triggers_and_preserves_note_siblings(tmp_path: 
                     {
                         "id": "types",
                         "name": "Types",
-                        "mode": "on_demand",
+                        "triggers": [],
                         "scope": scope,
                         "match": "all",
                         "conditions": [{"type": "all_cards"}],
@@ -291,7 +286,7 @@ def test_sibling_conditions_include_suspended_and_studied_cards_outside_scope(
                     {
                         "id": "siblings",
                         "name": "Siblings",
-                        "mode": "on_demand",
+                        "triggers": [],
                         "scope": {"decks": [{"deck": "Source", "include_subdecks": False}]},
                         "match": "all",
                         "conditions": [condition],
@@ -342,7 +337,7 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         policy = Policy(
             id="mining",
             name="Mining",
-            mode="on_demand",
+            triggers=(),
             scope=Scope((DeckSelector("Mining"),)),
             conditions=AgeCondition(0, "first_review", "gte"),
             actions=(TagAction("retired"), SuspendAction()),
@@ -383,7 +378,7 @@ def test_delete_action_can_be_undone(tmp_path: Path) -> None:
         policy = Policy(
             id="delete",
             name="Delete",
-            mode="on_demand",
+            triggers=(),
             scope=Scope((DeckSelector("Cleanup"),)),
             conditions=AgeCondition(0, "card_created", "gte"),
             actions=(DeleteCardAction(),),
@@ -421,7 +416,7 @@ def test_delete_note_removes_sibling_cards_outside_scope_and_can_be_undone(
         policy = Policy(
             id="delete-note",
             name="Delete Note",
-            mode="on_demand",
+            triggers=(),
             scope=Scope((DeckSelector("Delete Note"),)),
             conditions=AgeCondition(0, "card_created", "gte"),
             actions=(DeleteNoteAction(),),
@@ -471,7 +466,7 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
             {
                 "id": "note-action",
                 "name": "Note action",
-                "mode": "on_demand",
+                "triggers": [],
                 "scope": {
                     "decks": [{"deck": "Source", "include_subdecks": False}],
                     "include_suspended": kind == "suspend_note",
@@ -543,7 +538,7 @@ def test_replace_tags_and_unsuspend_can_be_undone(tmp_path: Path) -> None:
         policy = Policy(
             id="repair-leech",
             name="Repair Leech",
-            mode="on_demand",
+            triggers=(),
             scope=Scope((DeckSelector("Leeches"),), include_suspended=True),
             conditions=AllConditions(
                 (
@@ -586,7 +581,7 @@ def test_note_actions_skip_whole_note_on_sibling_conflict(tmp_path: Path) -> Non
                 {
                     "id": policy_id,
                     "name": policy_id,
-                    "mode": "on_demand",
+                    "triggers": [],
                     "scope": {
                         "decks": [{"deck": deck, "include_subdecks": False}],
                         "include_suspended": True,
