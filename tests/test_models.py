@@ -31,7 +31,7 @@ def policy_config(**overrides: object) -> dict:
     policy = {
         "id": "mining",
         "name": "Mining",
-        "mode": "on_demand",
+        "triggers": [],
         "scope": {"decks": [{"deck": "Mining", "include_subdecks": True}]},
         "match": "all",
         "conditions": [
@@ -218,13 +218,16 @@ def test_invalid_policy_is_omitted() -> None:
 
 @pytest.mark.parametrize("value", [[], {}, ["nested"], {"nested": True}])
 @pytest.mark.parametrize(
-    "field", ["mode", "match", "condition_type", "operator", "source", "state", "action_type"]
+    "field",
+    ["trigger_type", "match", "condition_type", "operator", "source", "state", "action_type"],
 )
 def test_malformed_json_fields_produce_repairable_issues(field: str, value: object) -> None:
     raw = policy_config()
     policy = raw["policies"][0]
     condition = policy["conditions"][0]
-    if field in {"mode", "match"}:
+    if field == "trigger_type":
+        policy["triggers"] = [{"type": value}]
+    elif field == "match":
         policy[field] = value
     elif field == "condition_type":
         condition["type"] = value
@@ -256,9 +259,11 @@ def test_numeric_bounds_match_editor(days: int) -> None:
 
 
 def test_automatic_delete_requires_explicit_configuration_but_is_supported() -> None:
-    parsed = parse_config(policy_config(mode="automatic", actions=[{"type": "delete_card"}]))
+    parsed = parse_config(
+        policy_config(triggers=[{"type": "daily"}], actions=[{"type": "delete_card"}])
+    )
     assert not parsed.issues
-    assert parsed.config.policies[0].mode == "automatic"
+    assert parsed.config.policies[0].triggers[0].type == "daily"
     assert isinstance(parsed.config.policies[0].actions[0], DeleteCardAction)
 
 
@@ -440,18 +445,50 @@ def test_addon_settings_are_required() -> None:
         assert any(issue.path == missing for issue in parsed.issues)
 
 
-def test_policy_mode_is_validated() -> None:
-    parsed = parse_config(policy_config(mode="notify"))
-    assert str(parsed.issues[0]) == "policies[0].mode: must be 'on_demand' or 'automatic'"
+def test_policy_triggers_are_validated() -> None:
+    parsed = parse_config(policy_config(triggers=[{"type": "notify"}]))
+    assert "policies[0].triggers[0].type:" in str(parsed.issues[0])
     assert not parsed.config.policies
 
 
-def test_policy_mode_is_required() -> None:
+def test_policy_triggers_are_required() -> None:
     raw = policy_config()
-    del raw["policies"][0]["mode"]
+    del raw["policies"][0]["triggers"]
     parsed = parse_config(raw)
-    assert str(parsed.issues[0]) == "policies[0].mode: must be 'on_demand' or 'automatic'"
+    assert str(parsed.issues[0]) == "policies[0].triggers: must be an array"
     assert not parsed.config.policies
+
+
+@pytest.mark.parametrize(
+    "triggers",
+    [
+        None,
+        {},
+        "daily",
+        ["daily"],
+        [{}],
+        [{"type": "review_end"}],
+        [{"type": "profile_open"}],
+        [{"type": "after_sync"}],
+        [{"type": "daily", "extra": True}],
+        [{"type": "daily"}, {"type": "daily"}],
+    ],
+)
+def test_invalid_trigger_shapes_are_rejected(triggers: object) -> None:
+    parsed = parse_config(policy_config(triggers=triggers))
+    assert parsed.issues
+    assert not parsed.config.policies
+
+
+@pytest.mark.parametrize(
+    "kinds",
+    [[], ["daily"], ["on_open", "on_sync"], ["daily", "on_open", "on_sync"]],
+)
+def test_triggers_round_trip(kinds: list[str]) -> None:
+    raw = policy_config(triggers=[{"type": kind} for kind in kinds])
+    parsed = parse_config(raw)
+    assert not parsed.issues
+    assert policy_to_dict(parsed.config.policies[0])["triggers"] == raw["policies"][0]["triggers"]
 
 
 def test_match_and_conditions_are_required() -> None:

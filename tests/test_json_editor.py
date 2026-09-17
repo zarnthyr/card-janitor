@@ -8,6 +8,38 @@ from card_janitor import json_editor
 from card_janitor.configuration import ConfigWriteError
 
 
+def test_bulk_json_editor_uses_actual_parent_and_releases_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    created = []
+    callbacks = []
+    closed = []
+    parent = SimpleNamespace()
+    manager = object()
+    window = SimpleNamespace(addonManager=manager)
+
+    def create_editor(actual_parent: object, addon: str, config: dict) -> object:
+        editor = SimpleNamespace(
+            finished=SimpleNamespace(connect=callbacks.append), parent=actual_parent
+        )
+        created.append((editor, addon, config))
+        return editor
+
+    monkeypatch.setattr(json_editor, "mw", window)
+    monkeypatch.setattr(json_editor, "load_raw_collection_config", lambda: {"policies": []})
+    monkeypatch.setattr(json_editor, "CollectionConfigEditor", create_editor)
+    json_editor.open_policy_json(parent=parent, on_close=lambda: closed.append(True))
+    editor, addon, config = created[0]
+    assert editor.parent is parent
+    assert parent.mgr is manager
+    assert addon == json_editor.ADDON_MODULE
+    assert config == {"policies": []}
+    assert getattr(window, json_editor.CONFIG_EDITOR_ATTR) is editor
+    callbacks[0](0)
+    assert getattr(window, json_editor.CONFIG_EDITOR_ATTR) is None
+    assert closed == [True]
+
+
 def test_json_editor_saves_original_snapshot_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     writes = []
     closed = []

@@ -46,7 +46,7 @@ def sample_policy() -> Policy:
     return Policy(
         id="fixed",
         name="Fixed",
-        mode="on_demand",
+        triggers=(),
         scope=Scope((DeckSelector("Mining"),)),
         conditions=AgeCondition(365, "first_review", "gte"),
         actions=(SuspendAction(),),
@@ -163,7 +163,7 @@ def test_stale_configuration_writes_are_rejected(
     operation: str,
 ) -> None:
     original = [{"id": "fixed", "name": "Before sync"}]
-    current = [{"id": "different", "name": "After sync"}]
+    current = [{"id": "different", "name": "On sync"}]
     collection = FakeCollection({configuration.COLLECTION_POLICIES_KEY: current})
     monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, []))
     record = PolicyRecord(0, original[0], None, ())

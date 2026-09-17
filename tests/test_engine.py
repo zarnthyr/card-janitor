@@ -61,7 +61,7 @@ def policy(
     return Policy(
         id="test",
         name="Test",
-        mode="on_demand",
+        triggers=(),
         scope=scope or Scope((DeckSelector("Mining"),)),
         conditions=conditions or AgeCondition(365, "first_review", "gte"),
         actions=actions or (SuspendAction(),),

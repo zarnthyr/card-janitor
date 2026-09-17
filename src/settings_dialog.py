@@ -46,7 +46,7 @@ class SettingsDialog(QDialog):
         troubleshooting_layout = QVBoxLayout(troubleshooting_group)
         self.debug_logging = QCheckBox("Enable debug logging", troubleshooting_group)
         self.debug_logging.setChecked(config.debug_logging)
-        self.debug_logging.setToolTip("Print policy evaluation details to Anki's terminal output")
+        self.debug_logging.setToolTip("Print cleanup diagnostics to Anki's terminal output")
         troubleshooting_layout.addWidget(self.debug_logging)
         layout.addWidget(troubleshooting_group)
 

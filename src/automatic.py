@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from aqt import mw
+from aqt import utils as aqt_utils
 from aqt.operations import CollectionOp, QueryOp
+from aqt.qt import QTimer
 from aqt.utils import showWarning, tooltip
 
 from .actions import ExecutionResult, build_execution_plan
@@ -16,7 +18,7 @@ from .evaluator import evaluate_policies
 from .execution import execute_approved_reports
 from .log import configure as configure_logging
 from .log import debug, error
-from .presentation import applied_message, configuration_error_text
+from .presentation import TRIGGER_LABELS, applied_message, configuration_error_text, record_cleanup
 
 if TYPE_CHECKING:
     from anki.collection import Collection
@@ -24,13 +26,15 @@ if TYPE_CHECKING:
     from .engine import PolicyReport
     from .models import ParsedConfig
 
-AutomaticTrigger = Literal["profile_open", "day_change"]
-LAST_AUTOMATIC_DAY_PROFILE_KEY = "card_janitor_last_automatic_day"
+AutomaticTrigger = Literal["on_open", "day_change", "on_sync"]
+LAST_AUTOMATIC_DAYS_PROFILE_KEY = "card_janitor_automatic_days"
 
 
 @dataclass
 class _RunState:
     token: object | None = None
+    pending: set[AutomaticTrigger] = field(default_factory=set)
+    notification_generation: int = 0
 
 
 class CancelledAutomaticRunError(RuntimeError):
@@ -56,6 +60,35 @@ def automatic_run_is_due(
 
 def cancel_automatic_run() -> None:
     _run_state.token = None
+    _run_state.pending.clear()
+    _run_state.notification_generation += 1
+
+
+def _notify_automatic(message: str) -> None:
+    profile = mw.pm.profile
+    collection = mw.col
+    generation = _run_state.notification_generation
+
+    def show_when_available() -> None:
+        if (
+            mw.pm.profile is not profile
+            or mw.col is not collection
+            or _run_state.notification_generation != generation
+        ):
+            return
+        # Anki has no public tooltip queue. Only inspect its current label;
+        # never replace or modify Anki's tooltip/timer implementation.
+        label = getattr(aqt_utils, "_tooltipLabel", None)
+        try:
+            visible = label is not None and label.isVisible()
+        except RuntimeError:
+            visible = False  # Its parent may already have deleted the label.
+        if visible:
+            QTimer.singleShot(200, show_when_available)
+        else:
+            tooltip(message, parent=mw)
+
+    show_when_available()
 
 
 def _automatic_completion_message(*, notify: bool, affected_cards: int, conflicts: int) -> str:
@@ -69,35 +102,73 @@ def _automatic_completion_message(*, notify: bool, affected_cards: int, conflict
     return ". ".join(messages) + "."
 
 
-def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> None:
-    if mw is None or mw.col is None or mw.pm.profile is None or _run_state.token is not None:
+def run_automatic_policies(
+    *,
+    trigger: AutomaticTrigger = "on_open",
+    events: frozenset[AutomaticTrigger] | None = None,
+) -> None:
+    if mw is None or mw.col is None or mw.pm.profile is None:
+        return
+    events = events if events is not None else frozenset({trigger})
+    if _run_state.token is not None:
+        _run_state.pending.update(events)
         return
     parsed = _load_configured()
     if parsed.issues:
         error("invalid configuration", issues=tuple(str(issue) for issue in parsed.issues))
+        record_cleanup(mw.pm.profile, failure=configuration_error_text(parsed.issues))
         showWarning(configuration_error_text(parsed.issues), parent=mw)
         return
-    policies = tuple(policy for policy in parsed.config.policies if policy.mode == "automatic")
-    if not policies:
-        debug("automatic run skipped", reason="no automatic policies")
-        return
-
     today = int(mw.col.sched.today)
     profile = mw.pm.profile
     collection = mw.col
-    last_day = profile.get(LAST_AUTOMATIC_DAY_PROFILE_KEY) if profile else None
-    if not automatic_run_is_due(
-        today=today,
-        last_automatic_day=last_day,
-    ):
-        debug(
-            "automatic run skipped",
-            reason="automatic cleanup already ran today",
-            trigger=trigger,
-            today=today,
-            last_automatic_day=last_day,
+    last_days = profile.get(LAST_AUTOMATIC_DAYS_PROFILE_KEY, {})
+    if not isinstance(last_days, dict):
+        last_days = {}
+    policies = tuple(
+        policy
+        for policy in parsed.config.policies
+        if any(
+            (item.type in events)
+            or (
+                item.type == "daily"
+                and bool(events & {"on_open", "day_change"})
+                and automatic_run_is_due(today=today, last_automatic_day=last_days.get(policy.id))
+            )
+            for item in policy.triggers
         )
+    )
+    if not policies:
+        debug("automatic run skipped", reason="no eligible policies", events=sorted(events))
         return
+
+    policy_names = tuple(policy.name for policy in policies)
+    matched_triggers = {
+        item.type
+        for policy in policies
+        for item in policy.triggers
+        if item.type in events
+        or (
+            item.type == "daily"
+            and bool(events & {"on_open", "day_change"})
+            and automatic_run_is_due(today=today, last_automatic_day=last_days.get(policy.id))
+        )
+    }
+    trigger_names = tuple(
+        label for kind, label in TRIGGER_LABELS.items() if kind in matched_triggers
+    )
+
+    def record_result(
+        *, affected_cards: int | None = 0, conflicts: int = 0, failure: str = ""
+    ) -> None:
+        record_cleanup(
+            profile,
+            policies=policy_names,
+            triggers=trigger_names,
+            affected_cards=affected_cards,
+            conflicts=conflicts,
+            failure=failure,
+        )
 
     token = object()
     _run_state.token = token
@@ -108,18 +179,36 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
     def finish(*, complete: bool = False) -> None:
         current = is_current()
         if complete and current:
-            profile[LAST_AUTOMATIC_DAY_PROFILE_KEY] = today
+            stored_days = profile.get(LAST_AUTOMATIC_DAYS_PROFILE_KEY, {})
+            days = dict(stored_days) if isinstance(stored_days, dict) else {}
+            days.update(
+                (policy.id, today)
+                for policy in policies
+                if any(item.type == "daily" for item in policy.triggers)
+            )
+            if days:
+                profile[LAST_AUTOMATIC_DAYS_PROFILE_KEY] = days
         if _run_state.token is token:
             _run_state.token = None
-        if complete and current and int(collection.sched.today) != today:
-            run_automatic_policies(trigger="day_change")
+            if complete and current and int(collection.sched.today) != today:
+                _run_state.pending.add("day_change")
+            pending = frozenset(_run_state.pending)
+            _run_state.pending.clear()
+            if complete and current and pending:
+                try:
+                    run_automatic_policies(events=pending)
+                except Exception:
+                    error("queued automatic cleanup failed to start")
 
     def on_failure(exc: Exception) -> None:
         current = is_current()
-        finish()
-        if current and not isinstance(exc, CancelledAutomaticRunError):
-            error("automatic cleanup failed", reason=str(exc))
-            showWarning(str(exc), parent=mw)
+        try:
+            if current and not isinstance(exc, CancelledAutomaticRunError):
+                record_result(affected_cards=None, failure=str(exc))
+                error("automatic cleanup failed", reason=str(exc))
+                showWarning(str(exc), parent=mw)
+        finally:
+            finish()
 
     def evaluate_current(col: Collection) -> tuple[PolicyReport, ...]:
         if col is not collection or not is_current():
@@ -129,7 +218,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
     debug(
         "automatic run started",
         policy_count=len(policies),
-        trigger=trigger,
+        events=sorted(events),
     )
 
     def apply_evaluated(reports: tuple[PolicyReport, ...]) -> None:
@@ -138,20 +227,20 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
             return
         errors = [f"{report.policy.name}: {item}" for report in reports for item in report.errors]
         if errors:
+            record_result(failure="\n".join(errors))
             finish()
             error("automatic run evaluation failed", errors=tuple(errors))
-            tooltip(
+            _notify_automatic(
                 "Card Janitor: an automatic policy has errors; open Card Janitor to repair it",
-                parent=mw,
             )
             return
         plan = build_execution_plan(reports, collection)
         if plan.is_empty:
+            record_result(conflicts=len(plan.conflicted_card_ids))
             finish(complete=True)
             if plan.conflicted_card_ids:
-                tooltip(
+                _notify_automatic(
                     f"Card Janitor: {len(plan.conflicted_card_ids)} conflicting cards were skipped",
-                    parent=mw,
                 )
             return
 
@@ -166,13 +255,14 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
                 col,
                 reports,
                 approved,
-                "Card Janitor: Automatic Run",
+                "Card Janitor: Automatic Clean Up",
             )
 
         def on_applied(result: ExecutionResult) -> None:
             if not is_current():
                 finish()
                 return
+            record_result(affected_cards=result.affected_cards, conflicts=result.conflicts)
             finish(complete=True)
             debug(
                 "automatic run complete",
@@ -185,7 +275,7 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
                 conflicts=result.conflicts,
             )
             if message:
-                tooltip(message, parent=mw)
+                _notify_automatic(message)
 
         CollectionOp(parent=mw, op=execute_fresh).success(on_applied).failure(
             on_failure
@@ -201,6 +291,8 @@ def run_automatic_policies(*, trigger: AutomaticTrigger = "profile_open") -> Non
         QueryOp(parent=mw, op=evaluate_current, success=on_evaluated).failure(
             on_failure
         ).run_in_background()
-    except Exception:
+    except Exception as exc:
+        if is_current():
+            record_result(failure=str(exc))
         finish()
         raise

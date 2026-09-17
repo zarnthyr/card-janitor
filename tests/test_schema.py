@@ -39,7 +39,7 @@ def test_collection_schema_accepts_tag_and_suspension_features() -> None:
             {
                 "id": "leeches",
                 "name": "Leeches",
-                "mode": "automatic",
+                "triggers": [{"type": "daily"}],
                 "scope": {
                     "decks": [{"deck": "Mining", "include_subdecks": True}],
                     "include_suspended": True,
@@ -66,7 +66,7 @@ def test_collection_schema_accepts_only_standalone_all_cards_condition() -> None
     policy = {
         "id": "everything",
         "name": "Everything",
-        "mode": "on_demand",
+        "triggers": [],
         "scope": {"decks": [{"deck": "Mining", "include_subdecks": True}]},
         "match": "all",
         "conditions": [{"type": "all_cards"}],

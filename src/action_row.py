@@ -14,7 +14,7 @@ from aqt.qt import (
     qconnect,
 )
 
-from .editor_utils import _split_tags
+from .editor_utils import _split_tags, pad_text_field
 from .models import (
     Action,
     DeleteCardAction,
@@ -51,10 +51,12 @@ class ActionRow(QWidget):
         self.operator = QComboBox(self)
         self.operator.setMinimumWidth(125)
         self.tags = QLineEdit(self)
+        pad_text_field(self.tags)
         self.tags.setPlaceholderText("Separate tags with spaces or commas")
         self.tags.setToolTip("Enter one or more tags, separated by spaces or commas")
         self.deck = QComboBox(self)
         self.deck.setEditable(True)
+        pad_text_field(self.deck.lineEdit())
         self.deck.addItems(deck_names)
         self.deck.setToolTip("Choose or enter the destination deck")
         self.no_value = QWidget(self)

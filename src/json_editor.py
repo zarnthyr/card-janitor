@@ -87,10 +87,11 @@ def open_policy_json(*, parent: QWidget, on_close: Callable[[], None] | None = N
         error("cannot open policy JSON", reason="collection configuration is not an object")
         showWarning("The collection configuration is not a JSON object", parent=parent)
         return
-    editor_parent = QDialog(parent)
-    editor_parent.mgr = mw.addonManager
-    editor = CollectionConfigEditor(editor_parent, ADDON_MODULE, config)
-    setattr(mw, CONFIG_EDITOR_ATTR, (editor_parent, editor))
+    # Anki's ConfigEditor expects its actual parent to expose the add-on manager.
+    # A hidden intermediary dialog prevents reliable native focus restoration.
+    parent.mgr = mw.addonManager
+    editor = CollectionConfigEditor(parent, ADDON_MODULE, config)
+    setattr(mw, CONFIG_EDITOR_ATTR, editor)
 
     def editor_closed(_result: int) -> None:
         setattr(mw, CONFIG_EDITOR_ATTR, None)

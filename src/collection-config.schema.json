@@ -15,13 +15,20 @@
     "policy": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "name", "mode", "scope", "match", "conditions", "actions"],
+      "required": ["id", "name", "triggers", "scope", "match", "conditions", "actions"],
       "properties": {
         "id": {"type": "string", "minLength": 1, "pattern": "\\S"},
         "name": {"type": "string", "minLength": 1, "pattern": "\\S"},
-        "mode": {
-          "enum": ["on_demand", "automatic"],
-          "description": "on_demand runs only when requested in Card Janitor; automatic also runs once per day without confirmation"
+        "triggers": {
+          "type": "array",
+          "uniqueItems": true,
+          "description": "Automatic events; empty means manual only. All policies remain manually runnable.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["type"],
+            "properties": {"type": {"enum": ["daily", "on_open", "on_sync"]}}
+          }
         },
         "scope": {
           "$ref": "#/$defs/scope",

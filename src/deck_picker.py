@@ -21,6 +21,7 @@ from aqt.qt import (
     qconnect,
 )
 
+from .editor_utils import guard_popup_anchor
 from .picker_state import DeckSelection
 from .presentation import warning_panel
 
@@ -80,6 +81,7 @@ class DeckPicker(QPushButton):
         action.setDefaultWidget(container)
         self._menu.addAction(action)
         self.setMenu(self._menu)
+        self._anchor_guard = guard_popup_anchor(self, self._menu)
         qconnect(self._menu.aboutToShow, self._resize_popup)
         qconnect(self.tree.itemClicked, self._clicked)
         qconnect(self.tree.itemDoubleClicked, self._clicked)

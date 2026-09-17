@@ -18,6 +18,7 @@ from .ui import close_card_janitor, safe_install_menu
 class _OpeningState:
     profile: object | None = None
     generation: int = 0
+    closing: bool = False
 
 
 _opening_state = _OpeningState()
@@ -44,47 +45,55 @@ def _replace_hook(hook: object, callback: object) -> None:
 
 def on_profile_loaded() -> None:
     _opening_state.generation += 1
+    _opening_state.closing = False
     try:
         safe_install_menu()
         if mw.can_auto_sync():
             _opening_state.profile = mw.pm.profile
         else:
             _opening_state.profile = None
-            run_automatic_policies(trigger="profile_open")
+            run_automatic_policies(trigger="on_open")
     except Exception:
         exception("profile-open callback failed")
 
 
 def on_day_changed() -> None:
     try:
-        if _opening_state.profile is None:
+        if _opening_state.profile is None and not _opening_state.closing:
             run_automatic_policies(trigger="day_change")
     except Exception:
         exception("day-change callback failed")
 
 
 def on_sync_finished() -> None:
-    profile = _opening_state.profile
+    if _opening_state.closing:
+        return
+    opening_profile = _opening_state.profile
+    profile = mw.pm.profile
     generation = _opening_state.generation
     _opening_state.profile = None
-    if profile is None or mw.pm.profile is not profile:
+    if profile is None:
         return
 
-    def run_after_sync() -> None:
+    def run_on_sync() -> None:
         if mw.pm.profile is profile and _opening_state.generation == generation:
             try:
-                run_automatic_policies(trigger="profile_open")
+                events = {"on_sync"}
+                if opening_profile is profile:
+                    events.add("on_open")
+                run_automatic_policies(events=frozenset(events))
             except Exception:
                 exception("post-sync opening cleanup failed")
 
     # Allow Anki's sync completion/reset (including full downloads) to finish.
-    QTimer.singleShot(0, run_after_sync)
+    QTimer.singleShot(0, run_on_sync)
 
 
 def on_profile_closing() -> None:
     _opening_state.generation += 1
     _opening_state.profile = None
     cancel_automatic_run()
+    _opening_state.closing = True
     close_card_janitor()
 
 

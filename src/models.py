@@ -176,7 +176,14 @@ def action_expands_to_siblings(action: Action) -> bool:
     )
 
 
-PolicyMode: TypeAlias = Literal["on_demand", "automatic"]
+TriggerType: TypeAlias = Literal["daily", "on_open", "on_sync"]
+
+
+@dataclass(frozen=True)
+class Trigger:
+    type: TriggerType
+
+
 NumericOperator: TypeAlias = Literal["gt", "gte", "eq", "lte", "lt"]
 CardState: TypeAlias = Literal["new", "learning", "review", "relearning"]
 
@@ -185,7 +192,7 @@ CardState: TypeAlias = Literal["new", "learning", "review", "relearning"]
 class Policy:
     id: str
     name: str
-    mode: PolicyMode
+    triggers: tuple[Trigger, ...]
     scope: Scope
     conditions: ConditionExpression
     actions: tuple[Action, ...]
@@ -466,20 +473,37 @@ def _parse_scope(value: object, path: str) -> Scope:
     )
 
 
+def _parse_triggers(value: object, path: str) -> tuple[Trigger, ...]:
+    triggers_value = value
+    if not isinstance(triggers_value, list):
+        raise ValueError(f"{path}: must be an array")
+    triggers = []
+    for index, trigger in enumerate(triggers_value):
+        trigger_path = f"{path}[{index}]"
+        if not isinstance(trigger, dict):
+            raise ValueError(f"{trigger_path}: must be an object")
+        _reject_unknown_keys(trigger, {"type"}, trigger_path)
+        kind = trigger.get("type")
+        if not isinstance(kind, str) or kind not in {"daily", "on_open", "on_sync"}:
+            raise ValueError(f"{trigger_path}.type: must be 'daily', 'on_open', or 'on_sync'")
+        if any(item.type == kind for item in triggers):
+            raise ValueError(f"{trigger_path}: duplicate trigger")
+        triggers.append(Trigger(kind))
+    return tuple(triggers)
+
+
 def parse_policy(value: object, index: int = 0) -> Policy:
     path = f"policies[{index}]"
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     _reject_unknown_keys(
         value,
-        {"id", "name", "mode", "scope", "match", "conditions", "actions"},
+        {"id", "name", "triggers", "scope", "match", "conditions", "actions"},
         path,
     )
     policy_id = _required_string(value, "id", path)
     name = _required_string(value, "name", path)
-    mode = value.get("mode")
-    if not isinstance(mode, str) or mode not in {"on_demand", "automatic"}:
-        raise ValueError(f"{path}.mode: must be 'on_demand' or 'automatic'")
+    triggers = _parse_triggers(value.get("triggers"), f"{path}.triggers")
     scope = _parse_scope(value.get("scope"), f"{path}.scope")
     conditions = _parse_conditions(value.get("conditions"), value.get("match"), path)
     if not scope.include_suspended and _requires_suspended_scope(conditions):
@@ -523,7 +547,7 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     return Policy(
         id=policy_id,
         name=name,
-        mode=mode,
+        triggers=tuple(triggers),
         scope=scope,
         conditions=conditions,
         actions=actions,
@@ -695,7 +719,7 @@ def policy_to_dict(policy: Policy) -> dict[str, Any]:
     return {
         "id": policy.id,
         "name": policy.name,
-        "mode": policy.mode,
+        "triggers": [{"type": trigger.type} for trigger in policy.triggers],
         "scope": {
             **(
                 {"all_decks": True}

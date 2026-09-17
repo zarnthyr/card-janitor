@@ -4,14 +4,14 @@ Add and edit policies in the Card Janitor window. Choose **Edit as JSON** there
 to edit the current collection's policy data directly.
 
 **Review copied or shared policies before saving.** They may enable automatic
-deletion without confirmation. Check their scope, conditions, actions, and mode;
+deletion without confirmation. Check their scope, conditions, actions, and triggers;
 changing deck names alone is not enough. Set copied policies to
-`"mode": "on_demand"` and inspect affected cards with **Browse** before enabling
-`"mode": "automatic"`.
+`"triggers": []` and inspect affected cards with **Browse** before adding
+automatic triggers.
 
 Policies are stored in the current Anki collection and sync with it.
 
-If any policy is invalid, Card Janitor will not run cleanup until the problem is
+If any policy is invalid, Card Janitor will not clean up until the problem is
 fixed. Invalid policies remain visible in Card Janitor and can be repaired with
 **Edit** or **Edit as JSON**.
 
@@ -21,10 +21,13 @@ destination is an error.
 ## Safety and undo
 
 Card Janitor can permanently delete cards. Back up your collection before use,
-begin in On demand mode, and inspect matching cards with **Browse** before
-running cleanup. Automatic policies run without confirmation.
+begin in on-demand cleanup, and inspect matching cards with **Browse** before
+cleaning up. Automatic triggers apply policies without confirmation.
 
-Each cleanup run is recorded as one entry in Anki's collection undo history.
+Each cleanup that changes cards is grouped into one entry in Anki's collection
+undo history.
+Undo restores collection changes but does not reset Daily's completion record.
+To retry an undone cleanup on the same day, apply it manually.
 Policy configuration changes do not create collection undo entries. Removing a
 policy therefore requires confirmation but cannot be undone with Anki's Undo
 command.
@@ -36,7 +39,7 @@ command.
         {
           "id": "retire-mature-cards",
           "name": "Retire Mature Cards",
-          "mode": "on_demand",
+          "triggers": [],
           "scope": {
             "decks": [{"deck": "Mining", "include_subdecks": true}],
             "include_suspended": false
@@ -54,13 +57,13 @@ command.
       ]
     }
 
-In JSON, `mode: "on_demand"` is the **On demand** mode shown in the policy editor.
-Keep this mode while testing. Card Janitor evaluates every configured policy
+In JSON, `"triggers": []` means manual-only (**Trigger → None** in the editor).
+Keep triggers empty while testing. Card Janitor evaluates every configured policy
 and shows its scope, conditions, actions, and the number of cards it would
 clean up.
 Every policy is included by default in the dashboard. The checkboxes affect
-only the current run. Change `mode` to `automatic` to also run a policy once
-per day without approval. Each run is recorded in Anki's undo history.
+only the current cleanup. Add automatic triggers to also apply a policy without
+approval. Collection changes are grouped into one Anki Undo entry.
 
 Opening cleanup waits for Anki's opening collection sync attempt to finish when
 automatic sync is enabled; otherwise it runs immediately. A failed or cancelled
@@ -70,7 +73,7 @@ failing; use the named Anki Undo entry to revert completed changes.
 
 The window remains open while you inspect cards. **Browse** opens the union
 from all checked policies. Select a row and use **Edit** to change that policy;
-**Refresh** recalculates the table. Running a policy on demand does not count as
+**Refresh** recalculates the table. Applying a policy manually does not count as
 that day's automatic cleanup.
 
 **Browse** in the policy editor validates and evaluates the current form without
@@ -88,14 +91,45 @@ Internal IDs are preserved for edited policies and generated for new ones,
 even if pasted JSON contains another ID. Closing a changed policy editor asks
 before discarding its unsaved changes.
 
-Policy modes are:
+## Automatic triggers
 
-- `on_demand` — runs only when you start cleanup from Card Janitor
-- `automatic` — runs once per day without confirmation and can also be run on demand
+Every policy requires a top-level `triggers` array. Empty means manual only;
+all policies remain manually runnable regardless of their triggers. Each entry
+is an object with a `type`:
 
-Automatic cleanup runs when a profile opens if it has not yet run that day. It
-also runs when Anki's day changes while the application remains open. Use Card
-Janitor whenever you want to run policies on demand.
+- `daily` — once per Anki day, checked on profile open and day change.
+- `on_open` — each profile open, including switching profiles.
+- `on_sync` — after opening/manual collection sync attempts finish, including
+  failed or cancelled attempts, except when closing Anki and/or switching profiles. Media-only
+  sync is not a trigger.
+
+Daily is checked on opening and day change, not periodically throughout the day.
+
+In the editor, **Trigger** opens a compact checkbox selector; selecting **None**
+clears automatic triggers, and selecting any trigger deselects **None**.
+The manager's **Trigger** column summarizes
+selected triggers, and its tooltip explains only the current setting.
+
+For example: `"triggers": [{"type": "on_open"}, {"type": "on_sync"}]`.
+Any listed event can apply the policy. Duplicate types, unknown types, and unknown
+trigger fields are rejected. Trigger objects allow future types to have their
+own settings; no other trigger types are supported yet.
+
+Opening events wait for opening sync and are combined with its On sync event;
+each eligible policy is evaluated once in the shared conflict-handled run.
+Daily limits only the Daily trigger; On open and On sync can apply the same
+policy again that day. Any successful automatic cleanup of a policy with a
+Daily trigger satisfies its daily limit; manual cleanups do not.
+Daily completion is tracked per policy and profile, including runs with no
+changes or only conflicts. Failed runs do not mark completion. Events arriving
+during a run are coalesced for a subsequent run after success; failure clears
+pending events rather than automatically retrying a partially completed run.
+Cleanup never starts another sync.
+
+Closing sync does not trigger cleanup or delay Anki's shutdown. It uploads
+cleanup changes already made as usual. Cards that become eligible since the
+last cleanup are handled by the next configured event. Changes made after
+opening/manual sync are uploaded on a later sync, including closing sync.
 
 ## Scope
 
@@ -165,8 +199,8 @@ in the card ID.
 > first evaluation. Anki does not expose a reliable per-card local-import timestamp.
 
 Use creation-age conditions only for cards whose provenance you understand. Keep the
-policy in On demand (`mode: "on_demand"`) and inspect its matching cards before changing
-it to Automatic. Card Janitor does not attempt to rewrite card IDs. If you use another
+policy manual-only (`"triggers": []`) and inspect its matching cards before
+adding automatic triggers. Card Janitor does not attempt to rewrite card IDs. If you use another
 add-on to normalize creation dates, back up the collection first and verify that the
 tool safely updates all related references.
 
@@ -260,7 +294,7 @@ note's `leech` tag:
 
 Pair this with `delete_card` to remove only the suspended leech card. Use
 `delete_note` only when you also intend to remove the note and every sibling
-card it generates. Automatic policies run during Card Janitor's daily cleanup,
+card it generates. Automatic policies are applied on their configured triggers,
 not at the instant Anki adds the leech tag.
 
 ### Combining conditions
@@ -306,9 +340,9 @@ as conflicts when they add and remove the same tag, replace a note's tags in
 incompatible ways, or both suspend and unsuspend a card.
 
 `delete_card` and `delete_note` must each be the policy's only action. Either can
-use `mode: "automatic"`, but automatic deletion runs without confirmation.
-On-demand deletion is shown in the dashboard before execution. The shipped
-configuration contains no policies, and the example uses `mode: "on_demand"`
+use automatic triggers, but automatic deletion happens without confirmation.
+On-demand deletion is shown in the dashboard before actions are applied. The shipped
+configuration contains no policies, and the example uses `"triggers": []`
 with reversible tag, suspend, and move actions.
 
 For **Notes** actions, scope and conditions identify the triggering cards. The
@@ -322,21 +356,30 @@ Policy counts and **Browse** include sibling cards that require an action,
 including those deleted with a note. An already satisfied triggering card does
 not prevent a note action from updating its siblings. If a sibling has a
 conflicting policy, the note-wide operation is skipped for the whole note.
-If new cards would be affected between preview and execution, the whole note
+If new cards would be affected between preview and applying actions, the whole note
 is skipped rather than expanding the approved operation.
+
+## Last cleanup
+
+The dashboard's **Last cleanup** link shows the latest manual or automatic
+result, including its time, policy names, initiating triggers, affected-card
+count, skipped conflicts and any failure. It is stored locally per profile,
+not in policy JSON, and does not sync. Completed checks with no changes are
+recorded too; events with no eligible policies leave the previous result intact.
+Undo does not update the recorded result.
 
 ## Multiple profiles
 
 Policy definitions are stored in the current collection, so each profile has its
 own policies and they follow that collection through AnkiWeb sync. Add-on-wide
 settings such as notifications and debug logging remain shared by profiles on the
-same Anki installation. The daily automatic-run marker is tracked separately for
-each profile. A configured deck that no longer exists in its collection is
+same Anki installation. Daily completion is tracked separately for each policy
+and profile. A configured deck that no longer exists in its collection is
 reported as a policy error.
 
 ## Overlapping policies
 
-Compatible actions are merged and deduplicated during on-demand and automatic execution. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
+Compatible actions are merged and deduplicated during manual and automatic cleanup. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
 
 When checked policies conflict, click the dashboard's skipped-card summary to
 see the affected card IDs, involved policies, their actions, and reasons.

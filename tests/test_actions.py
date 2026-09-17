@@ -34,7 +34,7 @@ def report(
     policy = Policy(
         id="p",
         name="Policy",
-        mode="automatic",
+        triggers=(),
         scope=Scope((DeckSelector("Mining"),)),
         conditions=IntervalCondition(1, "gte"),
         actions=tuple(a.action for a in actions),

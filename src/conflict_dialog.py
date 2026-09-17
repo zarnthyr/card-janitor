@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from textwrap import indent
 from typing import TYPE_CHECKING
 
 from aqt.qt import (
@@ -59,7 +60,9 @@ class ConflictDialog(QDialog):
                     str(detail.card_id),
                     "\n".join(detail.policies),
                     "\n".join(
-                        report.policy.name + ": " + describe_actions(report.policy.actions)
+                        report.policy.name
+                        + ":\n"
+                        + indent(describe_actions(report.policy.actions), "  ")
                         for report in reports
                         if report.policy.name in detail.policies
                     ),
@@ -89,7 +92,7 @@ class ConflictDialog(QDialog):
                 int(self.table.item(index.row(), 0).text())
                 for index in self.table.selectionModel().selectedRows()
             }
-            open_cards_in_browser(selected or self._card_ids)
+            open_cards_in_browser(selected or self._card_ids, origin=self)
 
     def _update_browse_label(self) -> None:
         self.browse_button.setText(

@@ -4,12 +4,13 @@ Configurable policy-based cleanup for Anki cards.
 
 Applies cleanup policies according to deck scope, age, interval, card state,
 review history, note tags, or suspension state, either on demand or automatically
-once per day.
+on daily, open, or sync triggers.
 
 > [!WARNING]
 > Card Janitor can make destructive collection changes, including permanently
-> deleting cards. Back up your collection before use. Begin with **On demand**
-> mode, inspect matching cards with **Browse**, and verify Anki's undo behavior
+> deleting cards. Back up your collection before use. Begin with on-demand
+> cleanup and no automatic triggers, inspect matching cards with **Browse**,
+> and verify Anki's undo behavior
 > before enabling automatic cleanup. You use this add-on at your own risk; its
 > author accepts no responsibility or liability for collection damage or data loss.
 
@@ -46,8 +47,9 @@ Then install `card-janitor.ankiaddon` from Anki's add-ons screen or by double cl
 
 ## Policies
 
-Each policy has three parts:
+Each policy has four parts:
 
+* Triggers — when to apply the policy automatically; None keeps it manual-only
 * Scope — deck selections, optionally restricted to selected note types
 * Conditions — card properties, note tags, or sibling suspension/review history, combined with AND/OR
 * Actions — change tags, suspend or unsuspend, move, or delete the qualifying cards
@@ -72,7 +74,7 @@ Choose **All decks** at the tree root to include every current and future deck.
 > cards commonly retain the original creator's timestamp; it is **not** the date the
 > card was imported into your collection. A creation-age policy can therefore match an
 > entire premade deck immediately. Use this condition only for cards whose provenance
-> you understand, and preview it with **On demand** mode before enabling automatic
+> you understand, and preview it with on-demand cleanup before enabling automatic
 > actions.
 
 | Condition | What it matches | Important detail |
@@ -129,14 +131,26 @@ Card Janitor can, for example:
 Use **Browse** in the policy manager or editor to inspect the cards a policy
 would currently clean up. The editor evaluates its current unsaved settings.
 
-## Policy Modes
+## Automatic triggers
 
-| Mode       | Behavior                                                    |
-| ---------- | ----------------------------------------------------------- |
-| On demand  | Runs only when you start cleanup from Card Janitor          |
-| Automatic  | Runs once per day without confirmation and can also be run on demand |
+All policies can be applied manually. Choose automatic triggers in the policy
+editor's **Trigger** selector to also apply them without confirmation. **None** means
+manual-only:
 
-Automatic cleanup runs when a profile opens if it has not yet run that day, and when Anki's day changes while the application remains open. When opening auto-sync is enabled, cleanup waits for that sync attempt to finish and then uses the local collection, even if sync failed or was cancelled. Cleanup changes are uploaded on the next sync. It does not use background polling. Its completion notification can be disabled independently.
+| Trigger | Behavior |
+| --- | --- |
+| Daily | Once per Anki day, on profile open or day change |
+| On open | Every profile open, including switching profiles |
+| On sync | After opening/manual sync, excluding closing sync |
+
+Opening cleanup waits for opening auto-sync. On open and On sync triggers
+are combined into one run when they coincide. Failed or cancelled sync attempts
+still evaluate the local collection. Closing sync does not trigger cleanup;
+it uploads any cleanup changes already made as usual. Newly matching cards
+wait until the next configured event. Cleanup never starts another sync;
+changes made after sync are uploaded on the next sync. Daily limits are per
+policy and do not limit other triggers. Completion notifications can be disabled
+independently and wait for an existing notification to disappear.
 
 ## Configuration
 
@@ -161,14 +175,20 @@ changed policy editor asks before discarding edits.
 **Edit as JSON…** opens the current
 collection's policies for advanced editing.
 
+The manager shows **Last cleanup** for the most recent manual or automatic
+cleanup. Click it for the time, affected-card count, skipped conflicts and any
+failure, along with the policy names and initiating triggers captured at that
+time. This result is stored locally per profile and does not sync; Undo
+does not change the recorded outcome.
+
 Policy definitions are stored in the current collection and sync with it, so
 each profile has its own policies. Notification and debug settings are shared
 across profiles on the same Anki installation. Automatic cleanup is tracked
 separately for each profile.
 
 Automatic deletion is supported but is never configured by default. It requires
-an explicit `delete_card` or `delete_note` action with `mode: "automatic"` and
-runs without confirmation.
+an explicit `delete_card` or `delete_note` action with automatic triggers and
+applies those actions without confirmation.
 
 See [policies.md](./docs/policies.md) for the complete policy schema and examples.
 
