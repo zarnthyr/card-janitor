@@ -17,6 +17,7 @@ from aqt.qt import (
 )
 from aqt.utils import showWarning
 
+from .automatic import cancel_automatic_run
 from .configuration import ConfigWriteError, save_settings
 from .log import configure as configure_logging
 from .log import debug, error
@@ -34,8 +35,14 @@ class SettingsDialog(QDialog):
 
         automatic_group = QGroupBox("Automatic Cleanup", self)
         automatic_layout = QVBoxLayout(automatic_group)
+        self.automatic_enabled = QCheckBox("Enable automatic cleanup", automatic_group)
+        self.automatic_enabled.setChecked(config.automatic_cleanup_enabled)
+        self.automatic_enabled.setToolTip(
+            "Allow policy triggers to apply actions; manual cleanup remains available"
+        )
+        automatic_layout.addWidget(self.automatic_enabled)
         self.notify = QCheckBox(
-            "Show a notification after cards are cleaned up automatically",
+            "Show notifications after cleanup",
             automatic_group,
         )
         self.notify.setChecked(config.notify_after_automatic_run)
@@ -59,14 +66,16 @@ class SettingsDialog(QDialog):
         layout.addWidget(buttons)
         save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
+        QWidget.setTabOrder(self.automatic_enabled, self.notify)
         QWidget.setTabOrder(self.notify, self.debug_logging)
         QWidget.setTabOrder(self.debug_logging, save_button)
         QWidget.setTabOrder(save_button, cancel_button)
-        QTimer.singleShot(0, self.notify.setFocus)
+        QTimer.singleShot(0, self.automatic_enabled.setFocus)
 
     def _save(self) -> None:
         try:
             save_settings(
+                automatic_cleanup_enabled=self.automatic_enabled.isChecked(),
                 notify_after_automatic_run=self.notify.isChecked(),
                 debug_logging=self.debug_logging.isChecked(),
             )
@@ -75,8 +84,11 @@ class SettingsDialog(QDialog):
             showWarning(str(exc), parent=self)
             return
         configure_logging(debug_logging=self.debug_logging.isChecked())
+        if not self.automatic_enabled.isChecked():
+            cancel_automatic_run()
         debug(
             "settings saved",
+            automatic_cleanup_enabled=self.automatic_enabled.isChecked(),
             notify_after_automatic_run=self.notify.isChecked(),
             debug_logging=self.debug_logging.isChecked(),
         )

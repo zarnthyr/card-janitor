@@ -84,7 +84,12 @@ def test_build_plan_skips_conflicting_moves() -> None:
     plan = build_execution_plan((first, second))
     assert plan.is_empty
     assert plan.conflicted_card_ids == (1,)
-    assert plan.conflict_details[0].reasons == ("Move actions specify different destination decks",)
+    assert plan.conflict_details[0].reasons == (
+        (
+            "Move actions specify different destination decks\n"
+            "Policy: Move cards to 'A'\nPolicy: Move cards to 'B'"
+        ),
+    )
 
 
 def test_build_plan_includes_inverse_actions_and_replacements() -> None:
@@ -112,7 +117,12 @@ def test_note_tag_conflict_applies_across_sibling_cards() -> None:
 
     assert plan.is_empty
     assert plan.conflicted_card_ids == (2,)
-    assert plan.conflict_details[0].reasons == ("Tags are both added and removed: leech",)
+    assert plan.conflict_details[0].reasons == (
+        (
+            "Tags are both added and removed: leech\n"
+            "Policy: Add tag 'leech'\nPolicy: Remove tag 'LEECH'"
+        ),
+    )
 
 
 def test_replace_tags_conflicts_with_incremental_tag_action() -> None:
@@ -124,7 +134,10 @@ def test_replace_tags_conflicts_with_incremental_tag_action() -> None:
     assert plan.is_empty
     assert plan.conflicted_card_ids == (1,)
     assert plan.conflict_details[0].reasons == (
-        "Replacing tags is combined with adding or removing tags",
+        (
+            "Replacing tags is combined with adding or removing tags\n"
+            "Policy: Add tag 'extra'\nPolicy: Replace all tags with 'only'"
+        ),
     )
 
 
@@ -146,7 +159,10 @@ def test_suspend_conflicts_with_satisfied_unsuspend_policy() -> None:
     assert plan.is_empty
     assert plan.conflicted_card_ids == (1,)
     assert plan.conflict_details[0].reasons == (
-        "Suspend and unsuspend actions target the same card",
+        (
+            "Suspend and unsuspend actions target the same card\n"
+            "Policy: Suspend cards\nPolicy: Unsuspend cards"
+        ),
     )
 
 
@@ -173,7 +189,11 @@ def test_note_wide_conflict_details_propagate_reasons_and_policy_names() -> None
         assert detail.policies == ("Move note", "Move sibling")
         assert detail.reasons == (
             "All affected cards of the note are skipped together",
-            "Move actions specify different destination decks",
+            (
+                "Move actions specify different destination decks\n"
+                "Move note: Move all cards of matching notes to 'A'\n"
+                "Move sibling: Move cards to 'B'"
+            ),
         )
 
 

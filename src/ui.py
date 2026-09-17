@@ -9,6 +9,7 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from html import escape
 from typing import TYPE_CHECKING
+from urllib.parse import unquote
 from uuid import uuid4
 
 from aqt import mw
@@ -34,6 +35,7 @@ from aqt.qt import (
     Qt,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QTimer,
     QVBoxLayout,
     QWidget,
@@ -69,6 +71,7 @@ from .presentation import (
     record_cleanup,
     scope_tooltip,
     triggers_tooltip,
+    warning_panel,
 )
 from .settings_dialog import SettingsDialog
 
@@ -177,6 +180,7 @@ class CardJanitorDialog(QDialog):
         self._columns_initialized = False
         self._policy_editor: PolicyEditorDialog | None = None
         self._conflict_dialog: ConflictDialog | None = None
+        self._cleanup_details: QDialog | None = None
         self._editor_widget_states: list[tuple[QWidget, bool]] = []
         self.setWindowTitle("Card Janitor")
         self.resize(1050, 420)
@@ -292,6 +296,8 @@ class CardJanitorDialog(QDialog):
         footer_layout.setSpacing(12)
         footer_layout.addWidget(summary_panel)
         layout.addWidget(footer)
+        self.automatic_disabled = warning_panel("Automatic cleanup is disabled", self)
+        layout.insertWidget(1, self.automatic_disabled)
         qconnect(self.finished, lambda _result: self._close_conflicts())
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
@@ -473,6 +479,7 @@ class CardJanitorDialog(QDialog):
         self._sync_header_check_state()
         self._update_summary()
         self._update_cleanup_status()
+        self.automatic_disabled.setVisible(not parsed.config.automatic_cleanup_enabled)
         self._update_buttons()
 
     def checked_keys(self) -> set[str]:
@@ -640,9 +647,54 @@ class CardJanitorDialog(QDialog):
             self.cleanup_status.setText(f'<a href="cleanup">{escape(status[0])}</a>')
 
     def _show_cleanup_status(self, _link: str) -> None:
-        status = last_cleanup(mw.pm.profile or {})
+        if self._cleanup_details is not None and self._cleanup_details.isVisible():
+            self._cleanup_details.raise_()
+            self._cleanup_details.activateWindow()
+            return
+        parsed = _load_configured()
+        ids = {record.policy.id for record in parsed.policy_records if record.policy is not None}
+        status = last_cleanup(mw.pm.profile or {}, existing_policy_ids=ids)
         if status:
-            showText(status[1], parent=self, type="html", title="Last Cleanup", minHeight=300)
+            result = showText(
+                status[1], parent=self, type="html", title="Last Cleanup", minHeight=300, run=False
+            )
+            if result:
+                dialog, _buttons = result
+                self._cleanup_details = dialog
+                qconnect(self.finished, lambda _result: dialog.close())
+                browser = dialog.findChild(QTextBrowser)
+                browser.setOpenLinks(False)
+                browser.setOpenExternalLinks(False)
+
+                def open_policy(url: object) -> None:
+                    link = url.toString()
+                    if not link.startswith("policy:"):
+                        return
+                    policy_id = unquote(link.removeprefix("policy:"))
+                    record = next(
+                        (
+                            item
+                            for item in _load_configured().policy_records
+                            if item.policy is not None and item.policy.id == policy_id
+                        ),
+                        None,
+                    )
+                    if record is not None:
+                        self._open_editor(record)
+                        if self._policy_editor is not None:
+
+                            def return_to_details(_result: int) -> None:
+                                if dialog.isVisible() and self.isVisible():
+                                    dialog.raise_()
+                                    dialog.activateWindow()
+
+                            qconnect(self._policy_editor.finished, return_to_details)
+
+                qconnect(browser.anchorClicked, open_policy)
+                dialog.setModal(False)
+                dialog.show()
+                dialog.raise_()
+                dialog.activateWindow()
 
     def _refresh(self) -> None:
         refresh_on_demand_dialog(self)
@@ -864,6 +916,7 @@ def execute_on_demand_reports(
     profile = mw.pm.profile
     collection = mw.col
     policy_names = tuple(report.policy.name for report in reports)
+    policy_ids = tuple(report.policy.id for report in reports)
     dialog.close()
 
     def execute_fresh(col: Collection) -> ExecutionResult:
@@ -886,6 +939,7 @@ def execute_on_demand_reports(
             affected_cards=result.affected_cards,
             conflicts=result.conflicts,
             policies=policy_names,
+            policy_ids=policy_ids,
             triggers=("Manual",),
         )
         debug(
@@ -913,6 +967,7 @@ def execute_on_demand_reports(
             affected_cards=None,
             failure=str(exc),
             policies=policy_names,
+            policy_ids=policy_ids,
             triggers=("Manual",),
         )
         showWarning(str(exc), parent=mw)

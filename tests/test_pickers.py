@@ -12,8 +12,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from anki.collection import Collection
-from aqt.qt import QApplication, QPlainTextEdit, QPoint, Qt, QWidget
-from card_janitor import conflict_dialog, policy_editor, ui
+from aqt.qt import QApplication, QDialog, QPlainTextEdit, QPoint, Qt, QTextBrowser, QUrl, QWidget
+from card_janitor import conflict_dialog, policy_editor, settings_dialog, ui
 from card_janitor.action_row import ActionRow
 from card_janitor.actions import ConflictDetail
 from card_janitor.condition_row import CardStatePicker, ConditionRow
@@ -40,6 +40,101 @@ from card_janitor.presentation import LAST_CLEANUP_KEY, last_cleanup, record_cle
 from PyQt6.QtTest import QTest
 
 pytestmark = pytest.mark.usefixtures("_application")
+
+
+def test_settings_disable_cancels_pending_automatic_work(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parsed = parse_config(DEFAULT_CONFIG)
+    dialog = settings_dialog.SettingsDialog(parsed.config, edit_fixture.parent)
+    assert dialog.automatic_enabled.isChecked()
+    writes = []
+    cancelled = []
+    monkeypatch.setattr(settings_dialog, "save_settings", lambda **values: writes.append(values))
+    monkeypatch.setattr(settings_dialog, "cancel_automatic_run", lambda: cancelled.append(True))
+    dialog.automatic_enabled.setChecked(False)
+    dialog._save()
+    assert writes[0]["automatic_cleanup_enabled"] is False
+    assert cancelled == [True]
+    assert dialog.result() == QDialog.DialogCode.Accepted
+
+
+def test_last_cleanup_links_only_existing_policies() -> None:
+    profile = {}
+    record_cleanup(
+        profile,
+        policies=("<Old name>", "Deleted"),
+        policy_ids=("existing", "deleted"),
+    )
+    _, details = last_cleanup(profile, existing_policy_ids={"existing"})
+    assert '<a href="policy:existing">&lt;Old name&gt;</a>' in details
+    assert "Deleted" in details
+    assert 'href="policy:deleted"' not in details
+
+
+def test_last_cleanup_policy_link_opens_current_editor(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parsed = parse_config({**DEFAULT_CONFIG, "policies": [edit_fixture.raw]})
+    policy = parsed.config.policies[0]
+    record_cleanup(edit_fixture.parent.pm.profile, policies=(policy.name,), policy_ids=(policy.id,))
+    monkeypatch.setattr(ui, "_load_configured", lambda: parsed)
+    dashboard = ui.CardJanitorDialog(parsed, ())
+    dialog = QDialog(dashboard)
+    browser = QTextBrowser(dialog)
+    monkeypatch.setattr(ui, "showText", lambda *_args, **_kwargs: (dialog, None))
+    opened = []
+    monkeypatch.setattr(dashboard, "_open_editor", opened.append)
+    dashboard._show_cleanup_status("last_cleanup")
+    browser.anchorClicked.emit(QUrl(f"policy:{policy.id}"))
+    assert opened == [parsed.policy_records[0]]
+    assert dialog.isVisible()
+    assert not dialog.isModal()
+    dialog.close()
+    dashboard.close()
+
+
+def test_disabling_automatic_cleanup_keeps_manual_button_available(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    parsed = parse_config(
+        {**DEFAULT_CONFIG, "automatic_cleanup_enabled": False, "policies": [edit_fixture.raw]}
+    )
+    card = CardFacts(1, 10, 1, 0, 2, 2, 100, 1000, None, frozenset({"leech"}))
+    reports = (
+        evaluate_facts(
+            parsed.config.policies[0], [card], {1}, (ResolvedAction(TagAction("test")),)
+        ),
+    )
+    dashboard = ui.CardJanitorDialog(parsed, reports)
+    assert dashboard.run_button.isEnabled()
+    assert not dashboard.automatic_disabled.isHidden()
+    dashboard.close()
+
+
+def test_closing_linked_policy_editor_returns_to_cleanup_details(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    parsed = parse_config({**DEFAULT_CONFIG, "policies": [edit_fixture.raw]})
+    policy = parsed.config.policies[0]
+    record_cleanup(edit_fixture.parent.pm.profile, policies=(policy.name,), policy_ids=(policy.id,))
+    monkeypatch.setattr(ui, "_load_configured", lambda: parsed)
+    dashboard = ui.CardJanitorDialog(parsed, ())
+    dashboard.show()
+    dialog = QDialog(dashboard)
+    browser = QTextBrowser(dialog)
+    monkeypatch.setattr(ui, "showText", lambda *_args, **_kwargs: (dialog, None))
+    activated = []
+    monkeypatch.setattr(dialog, "activateWindow", lambda: activated.append(True))
+    dashboard._show_cleanup_status("cleanup")
+    browser.anchorClicked.emit(QUrl(f"policy:{policy.id}"))
+    assert dashboard._policy_editor is not None
+    activated.clear()
+    dashboard._policy_editor.reject()
+    assert activated == [True]
+    assert dialog.isVisible()
+    dialog.close()
+    dashboard.close()
 
 
 def test_last_cleanup_status_is_local_and_clickable(
@@ -426,7 +521,10 @@ def test_conflict_summary_opens_modeless_details_and_browses_skipped_cards(
     assert not details.isModal()
     assert details.table.item(0, 1).text() == "A\nB"
     assert details.table.item(0, 2).text() == "A:\n  Move cards to 'A'\nB:\n  Move cards to 'B'"
-    assert details.table.item(0, 3).text() == "Move actions specify different destination decks"
+    assert details.table.item(0, 3).text() == (
+        "Move actions specify different destination decks\n"
+        "A: Move cards to 'A'\nB: Move cards to 'B'"
+    )
     browsed = []
     monkeypatch.setattr(
         conflict_dialog, "open_cards_in_browser", lambda ids, **_kwargs: browsed.append(ids)

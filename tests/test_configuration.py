@@ -125,6 +125,7 @@ def test_save_settings_does_not_change_collection_policies(
     monkeypatch.setattr(configuration, "mw", fake_main_window(collection, settings, writes))
 
     configuration.save_settings(
+        automatic_cleanup_enabled=False,
         notify_after_automatic_run=False,
         debug_logging=True,
     )
@@ -135,6 +136,7 @@ def test_save_settings_does_not_change_collection_policies(
             {
                 "config_version": 1,
                 "notify_after_automatic_run": False,
+                "automatic_cleanup_enabled": False,
                 "debug_logging": True,
             },
         )

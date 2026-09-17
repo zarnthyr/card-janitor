@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from html import escape
+from urllib.parse import quote
 
 from aqt.qt import QLabel, QWidget
 
@@ -218,6 +219,7 @@ def record_cleanup(
     conflicts: int = 0,
     failure: str = "",
     policies: tuple[str, ...] = (),
+    policy_ids: tuple[str, ...] = (),
     triggers: tuple[str, ...] = (),
 ) -> None:
     profile[LAST_CLEANUP_KEY] = {
@@ -227,11 +229,14 @@ def record_cleanup(
         "failure": failure,
         "automatic": automatic,
         "policies": list(policies),
+        "policy_ids": list(policy_ids),
         "triggers": list(triggers),
     }
 
 
-def last_cleanup(profile: dict) -> tuple[str, str] | None:
+def last_cleanup(
+    profile: dict, *, existing_policy_ids: set[str] | None = None
+) -> tuple[str, str] | None:
     value = profile.get(LAST_CLEANUP_KEY)
     if not isinstance(value, dict):
         return None
@@ -266,12 +271,28 @@ def last_cleanup(profile: dict) -> tuple[str, str] | None:
         entries = value.get(key)
         if isinstance(entries, list) and entries and all(isinstance(item, str) for item in entries):
             rows.append((heading, "\n".join(entries)))
+    policy_html = None
+    ids = value.get("policy_ids")
+    names = value.get("policies")
+    if (
+        existing_policy_ids is not None
+        and isinstance(ids, list)
+        and isinstance(names, list)
+        and len(ids) == len(names)
+        and all(isinstance(item, str) for item in (*ids, *names))
+    ):
+        policy_html = "<br>".join(
+            f'<a href="policy:{quote(policy_id, safe="")}">{escape(name)}</a>'
+            if policy_id in existing_policy_ids
+            else escape(name)
+            for policy_id, name in zip(ids, names, strict=True)
+        )
     details = (
         '<table cellspacing="0" cellpadding="3">'
         + "".join(
             f'<tr><td valign="top"><b>{escape(label)}</b></td>'
             '<td width="12">&nbsp;</td>'
-            f'<td valign="top">{escape(text).replace(chr(10), "<br>")}</td></tr>'
+            f'<td valign="top">{policy_html if label == "Policies" and policy_html is not None else escape(text).replace(chr(10), "<br>")}</td></tr>'
             for label, text in rows
         )
         + "</table>"
