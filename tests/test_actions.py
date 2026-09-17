@@ -4,6 +4,7 @@
 from dataclasses import replace
 
 from card_janitor.actions import build_execution_plan
+from card_janitor.cleanup_preview import build_preview_rows
 from card_janitor.engine import CardFacts, PolicyReport, ResolvedAction
 from card_janitor.models import (
     DeckSelector,
@@ -22,6 +23,54 @@ from card_janitor.models import (
 
 def card(card_id: int = 1, note_id: int = 10) -> CardFacts:
     return CardFacts(card_id, note_id, 1, 0, 2, 2, 100, 1000, 2000, frozenset())
+
+
+def test_preview_shows_deduplicated_actual_changes_and_move_origin() -> None:
+    actions = (ResolvedAction(TagAction("retired")), ResolvedAction(MoveAction("Retired"), 2))
+    first = report(actions)
+    second = replace(first, policy=replace(first.policy, id="second", name="Second"))
+    reports = (first, second)
+    plan = build_execution_plan(reports)
+    rows = build_preview_rows(plan, reports, {1: "Mining", 2: "Retired"})
+    assert len(rows) == plan.card_count == 1
+    assert rows[0].policies == ("Policy", "Second")
+    assert rows[0].overlapping
+    assert rows[0].changes == ("Move: Mining → Retired", "Add tag 'retired'")
+
+
+def test_preview_does_not_show_already_satisfied_actions() -> None:
+    item = replace(card(), queue=-1)
+    reports = (report((ResolvedAction(SuspendAction()), ResolvedAction(TagAction("new"))), item),)
+    plan = build_execution_plan(reports)
+    rows = build_preview_rows(plan, reports, {})
+    assert rows[0].changes == ("Add tag 'new'",)
+    satisfied = report((ResolvedAction(SuspendAction()),), item, actionable=False)
+    assert build_preview_rows(build_execution_plan((satisfied,)), (satisfied,), {}) == ()
+
+
+def test_preview_conflicts_have_no_planned_changes() -> None:
+    reports = (
+        report((ResolvedAction(TagAction("leech")),)),
+        report((ResolvedAction(RemoveTagAction("leech")),)),
+    )
+    rows = build_preview_rows(build_execution_plan(reports), reports, {})
+    assert rows[0].changes == ()
+    assert rows[0].reasons[0].startswith("Tags are both added and removed")
+
+
+def test_preview_includes_note_wide_siblings_expanded_sibling() -> None:
+    first, sibling = card(1), card(2)
+    action = ResolvedAction(DeleteNoteAction())
+    wide = report((action,), first)
+    wide = replace(
+        wide, actionable=(first, sibling), card_actions=((first, (action,)), (sibling, (action,)))
+    )
+    plan = build_execution_plan((wide,))
+    rows = build_preview_rows(plan, (wide,), {})
+    assert len(rows) == plan.card_count == 2
+    assert rows[0].changes == rows[1].changes == ("Delete note and all its cards",)
+    assert not rows[0].expanded_sibling
+    assert rows[1].expanded_sibling
 
 
 def report(
@@ -85,10 +134,7 @@ def test_build_plan_skips_conflicting_moves() -> None:
     assert plan.is_empty
     assert plan.conflicted_card_ids == (1,)
     assert plan.conflict_details[0].reasons == (
-        (
-            "Move actions specify different destination decks\n"
-            "Policy: Move cards to 'A'\nPolicy: Move cards to 'B'"
-        ),
+        ("Different move destinations\nPolicy: Move cards to 'A'\nPolicy: Move cards to 'B'"),
     )
 
 
@@ -135,7 +181,7 @@ def test_replace_tags_conflicts_with_incremental_tag_action() -> None:
     assert plan.conflicted_card_ids == (1,)
     assert plan.conflict_details[0].reasons == (
         (
-            "Replacing tags is combined with adding or removing tags\n"
+            "Replacing tags combined with adding or removing tags\n"
             "Policy: Add tag 'extra'\nPolicy: Replace all tags with 'only'"
         ),
     )
@@ -159,10 +205,7 @@ def test_suspend_conflicts_with_satisfied_unsuspend_policy() -> None:
     assert plan.is_empty
     assert plan.conflicted_card_ids == (1,)
     assert plan.conflict_details[0].reasons == (
-        (
-            "Suspend and unsuspend actions target the same card\n"
-            "Policy: Suspend cards\nPolicy: Unsuspend cards"
-        ),
+        ("Suspend and unsuspend conflict\nPolicy: Suspend cards\nPolicy: Unsuspend cards"),
     )
 
 
@@ -190,7 +233,7 @@ def test_note_wide_conflict_details_propagate_reasons_and_policy_names() -> None
         assert detail.reasons == (
             "All affected cards of the note are skipped together",
             (
-                "Move actions specify different destination decks\n"
+                "Different move destinations\n"
                 "Move note: Move all cards of matching notes to 'A'\n"
                 "Move sibling: Move cards to 'B'"
             ),

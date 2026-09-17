@@ -136,11 +136,11 @@ def build_execution_plan(  # noqa: PLR0912
         has_unsuspend = any(isinstance(action.action, UnsuspendAction) for action in actions)
         if card_id in card_actions:
             if len(move_targets) > 1:
-                mark_conflict((card_id,), "Move actions specify different destination decks")
+                mark_conflict((card_id,), "Different move destinations")
             if has_delete and len(actions) > 1:
-                mark_conflict((card_id,), "Deletion is combined with another action")
+                mark_conflict((card_id,), "Deletion combined with other actions")
             if has_suspend and has_unsuspend:
-                mark_conflict((card_id,), "Suspend and unsuspend actions target the same card")
+                mark_conflict((card_id,), "Suspend and unsuspend conflict")
 
     note_actions: dict[int, set[ResolvedAction]] = {}
     all_note_actions: dict[int, set[ResolvedAction]] = {}
@@ -179,13 +179,11 @@ def build_execution_plan(  # noqa: PLR0912
                 note_policies[note_id],
             )
         if len(replacements) > 1:
-            mark_conflict(
-                ids, "Tag replacements specify different tag sets", note_policies[note_id]
-            )
+            mark_conflict(ids, "Different tag replacements", note_policies[note_id])
         if replacements and (added or removed):
             mark_conflict(
                 ids,
-                "Replacing tags is combined with adding or removing tags",
+                "Replacing tags combined with adding or removing tags",
                 note_policies[note_id],
             )
     for note_id, actions in all_note_actions.items():
@@ -194,7 +192,7 @@ def build_execution_plan(  # noqa: PLR0912
         ):
             mark_conflict(
                 note_cards.get(note_id, ()),
-                "Deleting a note is combined with another action on that note",
+                "Note deletion combined with other actions",
                 note_policies[note_id],
             )
     # A note-wide operation is atomic: never apply it to only some siblings.
@@ -255,24 +253,24 @@ def build_execution_plan(  # noqa: PLR0912
             return reason
         types = (
             (MoveAction,)
-            if reason.startswith("Move actions")
+            if reason.startswith("Different move")
             else (SuspendAction, UnsuspendAction)
             if reason.startswith("Suspend and unsuspend")
             else (TagAction, RemoveTagAction, ReplaceTagsAction)
-            if reason.startswith(("Tags are", "Tag replacements", "Replacing tags"))
+            if reason.startswith(("Tags are", "Different tag replacements", "Replacing tags"))
             else None
         )
         descriptions: set[str] = set()
         note_id = card_notes[card_id]
         sources = action_sources[note_id]
         if note_id not in note_wide_ids and reason.startswith(
-            ("Move actions", "Suspend and unsuspend", "Deletion is")
+            ("Different move", "Suspend and unsuspend", "Deletion combined")
         ):
             sources = card_action_sources[card_id]
         for resolved, policies in sources.items():
             if types is not None and not isinstance(resolved.action, types):
                 continue
-            if reason.startswith("Tag replacements") and not isinstance(
+            if reason.startswith("Different tag replacements") and not isinstance(
                 resolved.action, ReplaceTagsAction
             ):
                 continue

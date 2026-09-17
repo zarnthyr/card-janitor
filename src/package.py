@@ -30,7 +30,7 @@ REQUIRED_PACKAGE_FILES = {
     "configuration.py",
     "action_row.py",
     "condition_row.py",
-    "conflict_dialog.py",
+    "cleanup_preview.py",
     "editor_utils.py",
     "json_editor.py",
     "line_numbers.py",

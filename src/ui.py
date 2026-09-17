@@ -45,13 +45,14 @@ from aqt.utils import askUser, showText, showWarning, tooltip
 
 from .actions import ExecutionResult, build_execution_plan
 from .browsing import open_cards_in_browser
+from .cleanup_preview import CleanupPreviewDialog, build_preview_rows
 from .configuration import (
     ConfigWriteError,
     load_config,
     remove_policy,
     save_policy,
 )
-from .conflict_dialog import ConflictDialog
+from .editor_utils import fit_initial_table_height
 from .evaluator import evaluate_policies
 from .execution import execute_approved_reports
 from .json_editor import open_policy_json
@@ -179,7 +180,9 @@ class CardJanitorDialog(QDialog):
         self._running = False
         self._columns_initialized = False
         self._policy_editor: PolicyEditorDialog | None = None
-        self._conflict_dialog: ConflictDialog | None = None
+        self._preview_dialog: CleanupPreviewDialog | None = None
+        self._preview_collection = mw.col
+        self._preview_profile = mw.pm.profile
         self._cleanup_details: QDialog | None = None
         self._editor_widget_states: list[tuple[QWidget, bool]] = []
         self.setWindowTitle("Card Janitor")
@@ -276,8 +279,6 @@ class CardJanitorDialog(QDialog):
         self.summary.setWordWrap(True)
         summary_layout.addWidget(self.summary)
         self.conflict_summary = QLabel(summary_panel)
-        self.conflict_summary.setOpenExternalLinks(False)
-        qconnect(self.conflict_summary.linkActivated, self._show_conflicts)
         summary_layout.addWidget(self.conflict_summary)
         self.cleanup_status = QLabel(summary_panel)
         self.cleanup_status.setContentsMargins(0, 6, 0, 0)
@@ -298,7 +299,7 @@ class CardJanitorDialog(QDialog):
         layout.addWidget(footer)
         self.automatic_disabled = warning_panel("Automatic cleanup is disabled", self)
         layout.insertWidget(1, self.automatic_disabled)
-        qconnect(self.finished, lambda _result: self._close_conflicts())
+        qconnect(self.finished, lambda _result: self._close_preview())
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
         self.settings_button = buttons.addButton(
@@ -321,10 +322,11 @@ class CardJanitorDialog(QDialog):
             QDialogButtonBox.ButtonRole.ActionRole,
         )
         self.view_button.setToolTip("Open cards from the checked policies in Anki's Browser")
-        self.run_button = buttons.addButton(
-            "Clean Up",
-            QDialogButtonBox.ButtonRole.AcceptRole,
-        )
+        self.preview_button = QPushButton("Preview…", self)
+        self.preview_button.setAutoDefault(False)
+        self.preview_button.setToolTip("Preview merged changes from the checked policies")
+        qconnect(self.preview_button.clicked, lambda: self._show_preview("planned"))
+        self.run_button = QPushButton("Clean Up", self)
         self.run_button.setToolTip("Apply the actions from the checked policies")
         if isinstance(self.run_button, QPushButton):
             self.run_button.setDefault(True)
@@ -334,7 +336,11 @@ class CardJanitorDialog(QDialog):
         qconnect(self.view_button.clicked, self._view_included)
         qconnect(self.run_button.clicked, self._run)
         qconnect(buttons.rejected, self.close)
-        footer_layout.addWidget(buttons)
+        button_row = QHBoxLayout()
+        button_row.addWidget(buttons, stretch=1)
+        button_row.addWidget(self.preview_button)
+        button_row.addWidget(self.run_button)
+        footer_layout.addLayout(button_row)
         self.close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
 
         tab_widgets = (
@@ -349,12 +355,14 @@ class CardJanitorDialog(QDialog):
             self.refresh_button,
             self.view_button,
             self.close_button,
+            self.preview_button,
             self.run_button,
         )
         for current, following in itertools.pairwise(tab_widgets):
             QWidget.setTabOrder(current, following)
 
         self.set_dashboard(parsed, reports)
+        self._initial_table_height = fit_initial_table_height(self, self.table)
         QTimer.singleShot(0, self._focus_initial)
 
     def _focus_initial(self) -> None:
@@ -565,11 +573,12 @@ class CardJanitorDialog(QDialog):
         return super().eventFilter(watched, event)
 
     def _update_summary(self) -> None:
-        self._close_conflicts()
+        self.preview_button.setEnabled(False)
         self.conflict_summary.hide()
         self.summary.setVisible(True)
         reports = self.checked_reports()
         if self._parsed.issues:
+            self._close_preview()
             self.summary.setText(
                 "Configuration needs repair before cleaning up:\n"
                 + "\n".join(f"• {issue}" for issue in self._parsed.issues)
@@ -578,11 +587,13 @@ class CardJanitorDialog(QDialog):
             self.run_button.setEnabled(False)
             return
         if not self._rows:
+            self._close_preview()
             self.summary.setVisible(False)
             self.view_button.setEnabled(False)
             self.run_button.setEnabled(False)
             return
         if not reports:
+            self._close_preview()
             messages = ["No policies are selected for cleanup"]
             if any(row.record.policy is None for row in self._rows):
                 messages.append("Edit policies marked Invalid to repair them")
@@ -595,45 +606,64 @@ class CardJanitorDialog(QDialog):
         candidate_ids = set(match_counts)
         overlap_count = sum(count > 1 for count in match_counts.values())
         plan = build_execution_plan(reports, mw.col)
-        messages = [f"{card_count_text(plan.card_count).capitalize()} would be cleaned up"]
+        text = f"{card_count_text(plan.card_count).capitalize()} would be cleaned up."
+        messages = [text]
         if overlap_count:
-            messages.append(
-                f"{card_count_text(overlap_count).capitalize()} would be affected by more than one policy"
-            )
+            verb = "is" if overlap_count == 1 else "are"
+            text = f"{card_count_text(overlap_count).capitalize()} {verb} affected by more than one policy."
+            messages.append(text)
         if plan.conflicted_card_ids:
             conflict_count = len(plan.conflicted_card_ids)
             text = f"{card_count_text(conflict_count).capitalize()} with conflicting actions would be skipped."
-            self.conflict_summary.setText(f'<a href="conflicts">{escape(text)}</a>')
+            self.conflict_summary.setText(text)
             self.conflict_summary.show()
         if errors:
             messages.append(
-                "A checked policy has an error. Uncheck it or fix the configuration before cleaning up"
+                "A checked policy has an error. Uncheck it or fix the configuration before cleaning up."
             )
-        self.summary.setText(messages[0] if len(messages) == 1 else ".\n".join(messages) + ".")
+            self._close_preview()
+        elif self._preview_dialog is not None:
+            self._preview_dialog.set_rows(build_preview_rows(plan, reports, self._preview_decks()))
+        self.summary.setText("\n".join(messages))
+        self.preview_button.setEnabled(not errors)
         self.view_button.setEnabled(bool(candidate_ids))
         self.run_button.setEnabled(plan.card_count > 0 and not errors)
 
-    def _close_conflicts(self) -> None:
-        if self._conflict_dialog is not None:
-            self._conflict_dialog.close()
-            self._conflict_dialog.deleteLater()
-            self._conflict_dialog = None
+    def _close_preview(self) -> None:
+        if self._preview_dialog is not None:
+            self._preview_dialog.close()
+            self._preview_dialog.deleteLater()
+            self._preview_dialog = None
 
-    def _show_conflicts(self, _link: str) -> None:
+    def _show_preview(self, _link: str) -> None:
+        if mw.col is not self._preview_collection or mw.pm.profile is not self._preview_profile:
+            self._close_preview()
+            return
         if self._policy_editor is not None:
             return
-        if self._conflict_dialog is not None and self._conflict_dialog.isVisible():
-            self._conflict_dialog.raise_()
-            self._conflict_dialog.activateWindow()
+        if self._preview_dialog is not None and self._preview_dialog.isVisible():
+            self._preview_dialog.view.setCurrentIndex(self._preview_dialog.view.findData(_link))
+            self._preview_dialog.raise_()
+            self._preview_dialog.activateWindow()
             return
-        self._close_conflicts()
+        self._close_preview()
         plan = build_execution_plan(self.checked_reports(), mw.col)
-        if not plan.conflict_details:
+        if any(report.errors for report in self.checked_reports()) or self._parsed.issues:
             return
-        self._conflict_dialog = ConflictDialog(plan.conflict_details, self, self.checked_reports())
-        self._conflict_dialog.show()
-        self._conflict_dialog.raise_()
-        self._conflict_dialog.activateWindow()
+        self._preview_dialog = CleanupPreviewDialog(
+            build_preview_rows(plan, self.checked_reports(), self._preview_decks()),
+            self,
+            view=_link,
+            is_current=lambda: (
+                mw.col is self._preview_collection and mw.pm.profile is self._preview_profile
+            ),
+        )
+        self._preview_dialog.show()
+        self._preview_dialog.raise_()
+        self._preview_dialog.activateWindow()
+
+    def _preview_decks(self) -> dict[int, str]:
+        return {int(deck.id): deck.name for deck in mw.col.decks.all_names_and_ids()}
 
     def _view_included(self) -> None:
         card_ids = {card.card_id for report in self.checked_reports() for card in report.actionable}
@@ -661,7 +691,7 @@ class CardJanitorDialog(QDialog):
             if result:
                 dialog, _buttons = result
                 self._cleanup_details = dialog
-                qconnect(self.finished, lambda _result: dialog.close())
+                qconnect(self.finished, dialog.close)
                 browser = dialog.findChild(QTextBrowser)
                 browser.setOpenLinks(False)
                 browser.setOpenExternalLinks(False)
@@ -800,6 +830,7 @@ class CardJanitorDialog(QDialog):
             self.json_button,
             self.refresh_button,
             self.view_button,
+            self.preview_button,
             self.close_button,
             self.run_button,
         )

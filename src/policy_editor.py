@@ -33,7 +33,11 @@ from aqt.qt import (
 )
 from aqt.utils import askUser, showWarning, tooltip
 
+from .action_row import ActionRow
+from .actions import build_execution_plan
 from .browsing import open_cards_in_browser
+from .cleanup_preview import CleanupPreviewDialog, build_preview_rows
+from .condition_row import ConditionRow
 from .deck_picker import DeckPicker
 from .editor_utils import _split_tags, pad_text_field
 from .evaluator import evaluate_policy
@@ -80,11 +84,7 @@ from .presentation import (
 from .trigger_picker import TriggerPicker
 
 if TYPE_CHECKING:
-    from .engine import PolicyReport
-
-
-from .action_row import ActionRow
-from .condition_row import ConditionRow
+    from anki.collection import Collection
 
 
 class PolicyEditorDialog(QDialog):
@@ -97,6 +97,12 @@ class PolicyEditorDialog(QDialog):
         initial_policy: Policy | None = None,
     ) -> None:
         super().__init__(parent)
+        self._manual_size = False
+        self._adjusting_size = False
+        self._size_ready = False
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        qconnect(self._fit_timer.timeout, self._fit_form_height)
         self._record = record
         self._existing_ids = existing_ids
         self.result_policy: Policy | None = None
@@ -243,17 +249,16 @@ class PolicyEditorDialog(QDialog):
                 for condition in (_best_effort_condition(item) for item in condition_values)
                 if condition is not None
             )
-            if not conditions:
-                conditions = (AgeCondition(365, "first_review", "gte"),)
         if isinstance(source_conditions, AllCardsCondition) or any(
             isinstance(condition, AllCardsCondition) for condition in conditions
         ):
             self.match.setCurrentIndex(self.match.findData("all_cards"))
         conditions = tuple(
             condition for condition in conditions if not isinstance(condition, AllCardsCondition)
-        ) or (AgeCondition(365, "first_review", "gte"),)
+        )
         for condition in conditions:
             self._add_condition(condition)
+        self._update_conditions_extent()
         qconnect(self.add_condition_button.clicked, lambda: self._add_condition(None))
         qconnect(self.match.currentIndexChanged, self._update_condition_warning)
         self._update_condition_warning()
@@ -306,6 +311,7 @@ class PolicyEditorDialog(QDialog):
         actions_group_layout.addWidget(self.actions_scroll)
         source_actions = policy.actions if policy else _best_effort_actions(raw.get("actions"))
         self._load_actions(source_actions)
+        self._update_actions_extent()
         qconnect(self.add_action_button.clicked, self._add_default_action)
         self._update_action_warnings()
         layout.addWidget(actions_group, alignment=Qt.AlignmentFlag.AlignTop)
@@ -336,23 +342,66 @@ class PolicyEditorDialog(QDialog):
             QDialogButtonBox.ButtonRole.ActionRole,
         )
         self.browse_button.setToolTip(
-            "Open cards this policy would clean up using the current unsaved settings"
+            "Open cards this policy would clean up using the current settings"
         )
+        self._preview_dialog: CleanupPreviewDialog | None = None
+        self.preview_button = QPushButton("Preview…", self)
+        self.preview_button.setAutoDefault(False)
+        self.preview_button.setToolTip("Preview changes from this policy alone")
+        qconnect(self.preview_button.clicked, self._preview)
+        qconnect(self.finished, lambda _result: self._close_preview())
         self.json_button = buttons.addButton(
             "Edit as JSON…", QDialogButtonBox.ButtonRole.ActionRole
         )
-        self.json_button.setToolTip("Edit this policy's unsaved settings as JSON")
+        self.json_button.setToolTip("Edit this policy's settings as JSON")
         qconnect(self.json_button.clicked, self._toggle_json)
         qconnect(buttons.accepted, self._accept)
         qconnect(buttons.rejected, self.reject)
         qconnect(self.browse_button.clicked, self._browse)
-        layout.addWidget(buttons)
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
+        buttons.removeButton(self.save_button)
+        button_row = QHBoxLayout()
+        button_row.addWidget(buttons, stretch=1)
+        button_row.addWidget(self.preview_button)
+        button_row.addWidget(self.save_button)
+        layout.addLayout(button_row)
+        self.save_button.setDefault(True)
+        qconnect(self.save_button.clicked, self._accept)
         self.cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         self._update_warning_panels()
         self._update_tab_order()
         self._initial_snapshot = self._form_payload()
+        if record is None and initial_policy is None:
+            layout.activate()
+            self.resize(self.width(), self.minimumSizeHint().height())
         QTimer.singleShot(0, self._focus_initial)
+        self._size_ready = True
+
+    def resizeEvent(self, event: object) -> None:  # noqa: N802 - Qt override
+        super().resizeEvent(event)
+        if (
+            self._size_ready
+            and self.isVisible()
+            and not self._adjusting_size
+            and not self._fit_timer.isActive()
+            and not self._json_mode
+            and self.height() > self.minimumSizeHint().height()
+        ):
+            self._manual_size = True
+
+    def _schedule_form_fit(self) -> None:
+        if self._size_ready and not self._json_mode:
+            self._fit_timer.start(0)
+
+    def _fit_form_height(self) -> None:
+        if self._manual_size or self.isMaximized() or self._json_mode:
+            return
+        self._adjusting_size = True
+        try:
+            self.layout().activate()
+            self.resize(self.width(), self.minimumSizeHint().height())
+        finally:
+            self._adjusting_size = False
 
     def _focus_initial(self) -> None:
         self.name.setFocus()
@@ -374,7 +423,15 @@ class PolicyEditorDialog(QDialog):
         widgets.append(self.add_action_button)
         for row in self._actions:
             widgets.extend(row.focus_widgets())
-        widgets.extend((self.browse_button, self.json_button, self.save_button, self.cancel_button))
+        widgets.extend(
+            (
+                self.browse_button,
+                self.json_button,
+                self.cancel_button,
+                self.preview_button,
+                self.save_button,
+            )
+        )
         for current, following in itertools.pairwise(widgets):
             QWidget.setTabOrder(current, following)
 
@@ -393,9 +450,6 @@ class PolicyEditorDialog(QDialog):
             row.kind.setFocus()
 
     def _remove_condition(self, row: ConditionRow) -> None:
-        if len(self._conditions) == 1:
-            showWarning("A policy must have at least one condition", parent=self)
-            return
         index = self._conditions.index(row)
         self._conditions.remove(row)
         self.conditions_layout.removeWidget(row)
@@ -404,13 +458,19 @@ class PolicyEditorDialog(QDialog):
         self._update_condition_warning()
         self._update_conditions_extent()
         self._update_tab_order()
-        self._conditions[min(index, len(self._conditions) - 1)].kind.setFocus()
+        if self._conditions:
+            self._conditions[min(index, len(self._conditions) - 1)].kind.setFocus()
+        else:
+            self.add_condition_button.setFocus()
 
     def _renumber_conditions(self) -> None:
         for index, row in enumerate(self._conditions, start=1):
             row.number_label.setText(f"{index}.")
 
     def _update_conditions_extent(self) -> None:
+        self.conditions_scroll.setVisible(
+            bool(self._conditions) and self.match.currentData() != "all_cards"
+        )
         spacing = max(0, self.conditions_layout.spacing())
         row_heights = [max(1, row.sizeHint().height()) for row in self._conditions]
         height = sum(row_heights)
@@ -423,11 +483,12 @@ class PolicyEditorDialog(QDialog):
         visible_height = min(height, two_rows_height)
         self.conditions_scroll.setMinimumHeight(visible_height)
         self.conditions_scroll.setMaximumHeight(visible_height)
+        self._schedule_form_fit()
 
     def _update_condition_warning(self, _value: object = None) -> None:
         all_cards = self.match.currentData() == "all_cards"
         self.add_condition_button.setVisible(not all_cards)
-        self.conditions_scroll.setVisible(not all_cards)
+        self.conditions_scroll.setVisible(not all_cards and bool(self._conditions))
         show_creation_warning = not all_cards and any(
             row.kind.currentData() == "age_card_created" for row in self._conditions
         )
@@ -504,8 +565,6 @@ class PolicyEditorDialog(QDialog):
                 self._add_action("delete_card")
             elif isinstance(action, DeleteNoteAction):
                 self._add_action("delete_note")
-        if not self._actions:
-            self._add_action("add_tags")
 
     def _add_default_action(self, _checked: object = None) -> None:
         used = {row.action_kind() for row in self._actions}
@@ -536,9 +595,6 @@ class PolicyEditorDialog(QDialog):
         self._add_action(kind)
 
     def _remove_action(self, row: ActionRow) -> None:
-        if len(self._actions) == 1:
-            showWarning("A policy must have at least one action", parent=self)
-            return
         index = self._actions.index(row)
         self._actions.remove(row)
         self.actions_layout.removeWidget(row)
@@ -547,13 +603,17 @@ class PolicyEditorDialog(QDialog):
         self._update_action_warnings()
         self._update_actions_extent()
         self._update_tab_order()
-        self._actions[min(index, len(self._actions) - 1)].kind.setFocus()
+        if self._actions:
+            self._actions[min(index, len(self._actions) - 1)].kind.setFocus()
+        else:
+            self.add_action_button.setFocus()
 
     def _renumber_actions(self) -> None:
         for index, row in enumerate(self._actions, start=1):
             row.number_label.setText(f"{index}.")
 
     def _update_actions_extent(self) -> None:
+        self.actions_scroll.setVisible(bool(self._actions))
         spacing = max(0, self.actions_layout.spacing())
         row_heights = [max(1, row.sizeHint().height()) for row in self._actions]
         height = sum(row_heights) + spacing * max(0, len(row_heights) - 1)
@@ -565,6 +625,7 @@ class PolicyEditorDialog(QDialog):
         visible_height = min(height, two_rows_height)
         self.actions_scroll.setMinimumHeight(visible_height)
         self.actions_scroll.setMaximumHeight(visible_height)
+        self._schedule_form_fit()
 
     def _update_action_warnings(self, _value: object = None) -> None:
         kinds = {row.action_kind() for row in self._actions}
@@ -583,10 +644,12 @@ class PolicyEditorDialog(QDialog):
             return
         self.automatic_warning.setVisible(bool(self.triggers.selected()))
 
-    def _policy_from_form(self) -> Policy | None:  # noqa: PLR0911, PLR0912
+    def _policy_from_form(self, *, preview: bool = False) -> Policy | None:  # noqa: PLR0911, PLR0912
         if self._json_mode:
-            return self._policy_from_json()
+            return self._policy_from_json(preview=preview)
         name = self.name.text().strip()
+        if preview and not name:
+            name = "Unnamed policy"
         decks = self.decks.selectors()
         if not name:
             showWarning("Enter a policy name", parent=self)
@@ -602,6 +665,9 @@ class PolicyEditorDialog(QDialog):
             if self.match.currentData() == "all_cards"
             else tuple(row.condition() for row in self._conditions)
         )
+        if not simple_conditions:
+            showWarning("Add a condition or choose All cards", parent=self)
+            return None
         if any(isinstance(item, TagCondition) and not item.tags for item in simple_conditions):
             showWarning("Enter one or more tags for every note-tags condition", parent=self)
             return None
@@ -611,6 +677,9 @@ class PolicyEditorDialog(QDialog):
             else AnyConditions(simple_conditions)
         )
         kinds = [row.action_kind() for row in self._actions]
+        if not kinds:
+            showWarning("Add at least one action", parent=self)
+            return None
         if len(kinds) != len(set(kinds)):
             showWarning("Each action type can only be selected once", parent=self)
             return None
@@ -709,11 +778,17 @@ class PolicyEditorDialog(QDialog):
             )
         )
 
-    def _policy_from_json(self) -> Policy | None:
+    def _policy_from_json(self, *, preview: bool = False) -> Policy | None:
         try:
             raw = json.loads(self.json_text.toPlainText())
             if isinstance(raw, dict):
                 raw["id"] = self._policy_id
+                if (
+                    preview
+                    and isinstance(raw.get("name", ""), str)
+                    and not raw.get("name", "").strip()
+                ):
+                    raw["name"] = "Unnamed policy"
             return parse_policy(raw)
         except (ValueError, TypeError) as exc:
             showWarning(f"Invalid policy JSON:\n\n{exc}", parent=self)
@@ -727,6 +802,8 @@ class PolicyEditorDialog(QDialog):
         self._set_json_mode(enabled=True)
 
     def _set_json_mode(self, *, enabled: bool) -> None:
+        if enabled:
+            self._form_size = self.size()
         self._json_mode = enabled
         self._form_spacer.changeSize(
             0,
@@ -735,9 +812,16 @@ class PolicyEditorDialog(QDialog):
             QSizePolicy.Policy.Fixed if self._json_mode else QSizePolicy.Policy.Expanding,
         )
         self.layout().invalidate()
-        for group in self._form_groups:
-            group.setVisible(not self._json_mode)
-        self.json_text.setVisible(self._json_mode)
+        # Hide the outgoing content before showing the other view. Otherwise
+        # Qt can briefly size the window to fit both the form and JSON editor.
+        if enabled:
+            for group in self._form_groups:
+                group.hide()
+            self.json_text.show()
+        else:
+            self.json_text.hide()
+            for group in self._form_groups:
+                group.show()
         self.json_button.setVisible(not self._json_mode)
         self.save_button.setText("Apply" if self._json_mode else "Save")
         self.save_button.setToolTip(
@@ -746,6 +830,13 @@ class PolicyEditorDialog(QDialog):
         self.cancel_button.setToolTip(
             "Discard JSON edits and return to the form" if self._json_mode else "Close this editor"
         )
+        self.layout().activate()
+        if not enabled and not self.isMaximized():
+            self._adjusting_size = True
+            try:
+                self.resize(self._form_size)
+            finally:
+                self._adjusting_size = False
         (self.json_text if self._json_mode else self.name).setFocus()
 
     def _apply_json(self) -> None:
@@ -807,9 +898,9 @@ class PolicyEditorDialog(QDialog):
         for condition in conditions:
             if not isinstance(condition, AllCardsCondition):
                 self._add_condition(condition)
-        if not self._conditions:
-            self._add_condition(AgeCondition(365, "first_review", "gte"))
         self._load_actions(policy.actions)
+        self._update_conditions_extent()
+        self._update_actions_extent()
         self.include_suspended.setChecked(policy.scope.include_suspended)
         self._update_warning_panels()
         self._update_tab_order()
@@ -839,23 +930,57 @@ class PolicyEditorDialog(QDialog):
         self.result_policy = policy
         self.accept()
 
-    def _browse(self, _checked: object = None) -> None:
-        policy = self._policy_from_form()
+    def _close_preview(self) -> None:
+        if self._preview_dialog is not None:
+            self._preview_dialog.close()
+            self._preview_dialog.deleteLater()
+            self._preview_dialog = None
+
+    def _preview(self, _checked: object = None) -> None:
+        self._browse(preview=True)
+
+    def _browse(self, _checked: object = None, *, preview: bool = False) -> None:
+        self._close_preview()
+        policy = self._policy_from_form(preview=preview)
         if policy is None:
             return
         collection = mw.col
+        profile = mw.pm.profile
+        snapshot = self.json_text.toPlainText() if self._json_mode else self._form_payload()
+        json_mode = self._json_mode
+
+        def is_current() -> bool:
+            return (
+                mw.col is collection
+                and mw.pm.profile is profile
+                and json_mode == self._json_mode
+                and snapshot
+                == (self.json_text.toPlainText() if self._json_mode else self._form_payload())
+            )
+
         self.browse_button.setEnabled(False)
+        self.preview_button.setEnabled(False)
 
         def restore_button() -> None:
             if self.isVisible():
                 self.browse_button.setEnabled(True)
+                self.preview_button.setEnabled(True)
 
-        def on_success(report: PolicyReport) -> None:
+        def on_success(result: tuple) -> None:
+            report, rows = result
             restore_button()
-            if mw.col is not collection or not self.isVisible():
+            if not is_current() or not self.isVisible():
                 return
             if report.errors:
                 showWarning("\n".join(report.errors), parent=self)
+                return
+            if preview:
+                self._preview_dialog = CleanupPreviewDialog(
+                    rows, self, policy_name=policy.name, is_current=is_current
+                )
+                self._preview_dialog.show()
+                self._preview_dialog.raise_()
+                self._preview_dialog.activateWindow()
                 return
             card_ids = {card.card_id for card in report.actionable}
             if not card_ids:
@@ -866,12 +991,21 @@ class PolicyEditorDialog(QDialog):
         def on_failure(exception: Exception) -> None:
             restore_button()
             error("policy preview failed", reason=str(exception))
-            if self.isVisible():
+            if self.isVisible() and mw.col is collection and mw.pm.profile is profile:
                 showWarning(f"Could not preview this policy:\n\n{exception}", parent=self)
+
+        def evaluate(col: Collection) -> tuple:
+            report = evaluate_policy(col, policy)
+            rows = ()
+            if preview and not report.errors:
+                plan = build_execution_plan((report,), col)
+                names = {int(deck.id): deck.name for deck in col.decks.all_names_and_ids()}
+                rows = build_preview_rows(plan, (report,), names)
+            return report, rows
 
         QueryOp(
             parent=self,
-            op=lambda col: evaluate_policy(col, policy),
+            op=evaluate,
             success=on_success,
         ).failure(on_failure).with_progress("Finding cards…").run_in_background()
 
