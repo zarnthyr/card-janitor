@@ -104,6 +104,20 @@ checks. Counts remain one each. **Dev — Unsuspend Note** should match through
 that condition to `none` should show no matches. The other two fixtures check
 `none` studied across both cards of the note.
 
+## Cleanup preview smoke test
+
+Open **Preview…** beside **Clean Up** and check Planned changes, All affected,
+Overlapping policies and Conflicts. Compatible overlapping actions should be
+merged; skipped cards should explain conflicting intentions without planned
+changes. Select rows to Browse just those cards, or clear selection to Browse
+the entire current view. Closing Browser should restore the preview's focus.
+
+Preview a policy from its form and JSON views. This evaluates that policy alone,
+without saving or applying it; its title identifies the current policy. Check
+that note-action siblings explain why they are included and already-satisfied
+actions are omitted. Add/remove editor rows and return from JSON with Apply or
+Cancel to check window sizing. Preview itself must not create an Undo entry.
+
 ## Linked development installation
 
 On macOS, install a live development copy into Anki with:

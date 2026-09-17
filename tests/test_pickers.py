@@ -3,6 +3,8 @@
 
 import json
 import os
+import sys
+import traceback
 from collections.abc import Iterator
 from dataclasses import replace
 from pathlib import Path
@@ -12,10 +14,19 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from anki.collection import Collection
-from aqt.qt import QApplication, QDialog, QPlainTextEdit, QPoint, Qt, QTextBrowser, QUrl, QWidget
-from card_janitor import conflict_dialog, policy_editor, settings_dialog, ui
+from aqt.qt import (
+    QApplication,
+    QDialog,
+    QEvent,
+    QPlainTextEdit,
+    QPoint,
+    Qt,
+    QTextBrowser,
+    QUrl,
+    QWidget,
+)
+from card_janitor import cleanup_preview, policy_editor, settings_dialog, ui
 from card_janitor.action_row import ActionRow
-from card_janitor.actions import ConflictDetail
 from card_janitor.condition_row import CardStatePicker, ConditionRow
 from card_janitor.configuration import DEFAULT_CONFIG
 from card_janitor.deck_picker import DeckPicker
@@ -40,6 +51,35 @@ from card_janitor.presentation import LAST_CLEANUP_KEY, last_cleanup, record_cle
 from PyQt6.QtTest import QTest
 
 pytestmark = pytest.mark.usefixtures("_application")
+
+
+def test_preview_initial_height_ends_on_whole_row_and_only_adjusts_once() -> None:
+    parent = QWidget()
+    rows = tuple(
+        cleanup_preview.PreviewRow(index, ("A",), ("Suspend card", "Add tag 'retired'"))
+        for index in range(30)
+    )
+    dialog = cleanup_preview.CleanupPreviewDialog(rows, parent)
+    dialog.show()
+    QApplication.processEvents()
+    QApplication.processEvents()
+    boundaries = []
+    height = 0
+    for row in range(dialog.table.rowCount()):
+        height += dialog.table.rowHeight(row)
+        boundaries.append(height)
+    assert dialog.table.viewport().height() in boundaries
+    dialog.resize(dialog.width(), dialog.height() + 11)
+    QApplication.processEvents()
+    manual = dialog.size()
+    dialog.set_rows(rows)
+    QApplication.processEvents()
+    assert dialog.size() == manual
+    dialog.hide()
+    dialog.show()
+    QApplication.processEvents()
+    assert dialog.size() == manual
+    dialog.close()
 
 
 def test_settings_disable_cancels_pending_automatic_work(
@@ -485,7 +525,7 @@ def test_conflict_summary_opens_modeless_details_and_browses_skipped_cards(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     parent = QWidget()
-    parent.col = SimpleNamespace()
+    parent.col = SimpleNamespace(decks=SimpleNamespace(all_names_and_ids=list))
     parent.pm = SimpleNamespace(profile={})
     monkeypatch.setattr(ui, "mw", parent)
     raw = [
@@ -513,21 +553,27 @@ def test_conflict_summary_opens_modeless_details_and_browses_skipped_cards(
     assert summary_panel.layout().spacing() == 0
     assert summary_panel.layout().contentsMargins().top() == 0
     assert summary_panel.layout().contentsMargins().bottom() == 0
-    assert 'href="conflicts"' in dashboard.conflict_summary.text()
+    assert "href=" not in dashboard.conflict_summary.text()
+    assert "href=" not in dashboard.summary.text()
     assert "0 cards would be cleaned up" in dashboard.summary.text()
-    dashboard.conflict_summary.linkActivated.emit("conflicts")
-    details = dashboard._conflict_dialog
+    dashboard.preview_button.click()
+    details = dashboard._preview_dialog
     assert details is not None
     assert not details.isModal()
+    assert dashboard._preview_dialog is details
+    assert details.table.rowCount() == 0
+    details.view.setCurrentIndex(details.view.findData("overlapping"))
+    assert details.table.rowCount() == 1
+    details.view.setCurrentIndex(details.view.findData("conflicts"))
     assert details.table.item(0, 1).text() == "A\nB"
-    assert details.table.item(0, 2).text() == "A:\n  Move cards to 'A'\nB:\n  Move cards to 'B'"
-    assert details.table.item(0, 3).text() == (
-        "Move actions specify different destination decks\n"
-        "A: Move cards to 'A'\nB: Move cards to 'B'"
+    assert details.table.item(0, 2).text() == "None"
+    assert details.table.item(0, 3).text() == "Skipped"
+    assert details.table.item(0, 4).text() == (
+        "Different move destinations\nA: Move cards to 'A'\nB: Move cards to 'B'"
     )
     browsed = []
     monkeypatch.setattr(
-        conflict_dialog, "open_cards_in_browser", lambda ids, **_kwargs: browsed.append(ids)
+        cleanup_preview, "open_cards_in_browser", lambda ids, **_kwargs: browsed.append(ids)
     )
     details.browse_button.click()
     assert browsed == [{1}]
@@ -535,9 +581,13 @@ def test_conflict_summary_opens_modeless_details_and_browses_skipped_cards(
     dashboard._view_included()
     assert browsed == [{1}, {1}]
     dashboard.table.item(1, dashboard.COLUMN_RUN).setCheckState(Qt.CheckState.Unchecked)
-    assert dashboard._conflict_dialog is None
+    assert dashboard._preview_dialog is details
+    assert details.table.rowCount() == 0
     assert dashboard.conflict_summary.isHidden()
     assert "1 card would be cleaned up" in dashboard.summary.text()
+    dashboard.preview_button.click()
+    assert details.table.rowCount() == 1
+    assert details.table.item(0, 3).text() == "Planned"
     dashboard.close()
 
 
@@ -798,22 +848,321 @@ def test_dashboard_scope_displays_each_deck_on_its_own_line(edit_fixture: Simple
     dashboard.close()
 
 
-def test_conflict_actions_group_multiple_actions_under_each_policy() -> None:
+def test_preview_conflicts_show_no_planned_changes() -> None:
     parent = QWidget()
-    reports = tuple(
-        SimpleNamespace(
-            policy=SimpleNamespace(name=name, actions=(TagAction(name), MoveAction(name)))
-        )
-        for name in ("A", "B")
+    dialog = cleanup_preview.CleanupPreviewDialog(
+        (cleanup_preview.PreviewRow(1, ("A", "B"), (), ("Conflicting moves",), overlapping=True),),
+        parent,
+        view="conflicts",
     )
-    dialog = conflict_dialog.ConflictDialog(
-        (ConflictDetail(1, ("A", "B"), ("Conflicting moves",)),), parent, reports
-    )
-    assert dialog.table.item(0, 2).text() == (
-        "A:\n  Add tag 'A'\n  Move cards to 'A'\nB:\n  Add tag 'B'\n  Move cards to 'B'"
-    )
+    assert dialog.table.item(0, 2).text() == "None"
+    assert dialog.table.item(0, 3).text() == "Skipped"
+    assert dialog.table.item(0, 4).text() == "Conflicting moves"
+    assert dialog.table.item(0, 1).textAlignment() & Qt.AlignmentFlag.AlignTop
     dialog.close()
     parent.deleteLater()
+
+
+def test_dashboard_preview_sits_between_close_and_cleanup(edit_fixture: SimpleNamespace) -> None:
+    parsed = parse_config({**DEFAULT_CONFIG, "policies": [edit_fixture.raw]})
+    dashboard = ui.CardJanitorDialog(parsed, ())
+    dashboard.show()
+    QApplication.processEvents()
+    positions = [
+        button.mapTo(dashboard, QPoint(0, 0)).x()
+        for button in (
+            dashboard.close_button,
+            dashboard.preview_button,
+            dashboard.run_button,
+        )
+    ]
+    assert positions[0] < positions[1] < positions[2]
+    assert not dashboard.preview_button.autoDefault()
+    assert dashboard.run_button.isDefault()
+    dashboard.close()
+
+
+def test_preview_filters_and_browse_use_visible_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = QWidget()
+    rows = (
+        cleanup_preview.PreviewRow(1, ("A",), ("Suspend card",)),
+        cleanup_preview.PreviewRow(2, ("A", "B"), ("Suspend card",), overlapping=True),
+        cleanup_preview.PreviewRow(3, ("A", "C"), (), ("Conflicting moves",), overlapping=True),
+    )
+    dialog = cleanup_preview.CleanupPreviewDialog(rows, parent)
+    browsed = []
+    monkeypatch.setattr(
+        cleanup_preview, "open_cards_in_browser", lambda ids, **_kwargs: browsed.append(ids)
+    )
+    for view, ids in (
+        ("planned", {1, 2}),
+        ("overlapping", {2, 3}),
+        ("conflicts", {3}),
+        ("all", {1, 2, 3}),
+    ):
+        dialog.view.setCurrentIndex(dialog.view.findData(view))
+        assert dialog.table.rowCount() == len(ids)
+        dialog.browse_button.click()
+        assert browsed[-1] == ids
+    dialog.set_rows(())
+    assert dialog.table.rowCount() == 0
+    assert not dialog.browse_button.isEnabled()
+    dialog.close()
+
+
+def test_preview_does_not_browse_stale_context(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = QWidget()
+    current = [True]
+    dialog = cleanup_preview.CleanupPreviewDialog(
+        (cleanup_preview.PreviewRow(1, ("A",), ("Suspend card",)),),
+        parent,
+        is_current=lambda: current[0],
+    )
+    dialog.show()
+    browsed = []
+    monkeypatch.setattr(
+        cleanup_preview, "open_cards_in_browser", lambda ids, **_kwargs: browsed.append(ids)
+    )
+    current[0] = False
+    dialog.browse_button.click()
+    assert not browsed
+    assert not dialog.isVisible()
+
+
+def test_deleted_preview_disconnects_parent_close_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = QDialog()
+    first = cleanup_preview.CleanupPreviewDialog((), parent)
+    first.show()
+    first.close()
+    first.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    with pytest.raises(RuntimeError):
+        first.isVisible()
+    second = cleanup_preview.CleanupPreviewDialog((), parent)
+    second.show()
+    errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *args: errors.append(args))
+    parent.reject()
+    assert errors == []
+    assert not second.isVisible()
+
+
+def test_preview_column_widths_remain_stable_across_views() -> None:
+    parent = QWidget()
+    rows = (
+        cleanup_preview.PreviewRow(1, ("A",), ("Suspend card",)),
+        *(
+            cleanup_preview.PreviewRow(
+                1234567890000 + index,
+                ("B", "C"),
+                (),
+                ("Conflicting moves\n" * 6,),
+                overlapping=True,
+            )
+            for index in range(12)
+        ),
+    )
+    dialog = cleanup_preview.CleanupPreviewDialog(rows, parent)
+    dialog.show()
+    QApplication.processEvents()
+    widths = [dialog.table.columnWidth(column) for column in range(5)]
+    for view in ("all", "conflicts", "overlapping", "planned"):
+        dialog.view.setCurrentIndex(dialog.view.findData(view))
+        QApplication.processEvents()
+        assert [dialog.table.columnWidth(column) for column in range(5)] == widths
+    dialog.close()
+
+
+@pytest.mark.parametrize("json_mode", [False, True])
+def test_editor_preview_uses_unsaved_policy_without_requiring_name(
+    edit_fixture: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    json_mode: bool,
+) -> None:
+    operations = []
+
+    class Query:
+        def __init__(self, *, parent: object, op: object, success: object) -> None:
+            self.parent = parent
+            self.op, self.success = op, success
+            operations.append(self)
+
+        def failure(self, _callback: object) -> "Query":
+            return self
+
+        def with_progress(self, _text: str) -> "Query":
+            return self
+
+        def run_in_background(self) -> None:
+            pass
+
+    monkeypatch.setattr(policy_editor, "QueryOp", Query)
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, edit_fixture.raw, edit_fixture.policy, ()),
+        set(),
+        edit_fixture.parent,
+    )
+    editor.name.clear()
+    if json_mode:
+        editor._toggle_json()
+    editor.show()
+    before = editor._form_payload()
+    json_before = editor.json_text.toPlainText()
+    editor.preview_button.click()
+    assert len(operations) == 1
+    operations[0].success(operations[0].op(edit_fixture.collection))
+    assert editor._preview_dialog is not None
+    assert editor._preview_dialog.isVisible()
+    assert editor._preview_dialog.windowTitle().endswith("Cleanup Preview: Unnamed policy")
+    assert editor._preview_dialog.view.isHidden()
+    assert editor._preview_dialog.view.currentData() == "planned"
+    assert editor.result_policy is None
+    assert editor._form_payload() == before
+    assert editor.json_text.toPlainText() == json_before
+    assert not editor._preview_dialog.isModal()
+    editor.name.setText("Changed")
+    if json_mode:
+        editor.json_text.setPlainText(json_before + " ")
+    assert not editor._preview_dialog._check_context()
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    if json_mode:
+        editor.reject()
+    editor.reject()
+
+
+def test_new_policy_starts_empty_and_requires_explicit_choices(
+    edit_fixture: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings = []
+    monkeypatch.setattr(policy_editor, "showWarning", lambda text, **_kwargs: warnings.append(text))
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    assert editor._conditions == []
+    assert editor._actions == []
+    assert editor.conditions_scroll.isHidden()
+    assert editor.actions_scroll.isHidden()
+    assert editor._form_payload()["conditions"] == []
+    assert editor._form_payload()["actions"] == []
+    assert not editor._has_unsaved_changes()
+    editor.decks._clicked(editor.decks._items["Mining"], 0)
+    editor.name.setText("Test")
+    assert editor._policy_from_form() is None
+    assert warnings[-1] == "Add a condition or choose All cards"
+    editor.match.setCurrentIndex(editor.match.findData("all_cards"))
+    assert editor._policy_from_form() is None
+    assert warnings[-1] == "Add at least one action"
+    editor._add_action("suspend")
+    assert not editor.actions_scroll.isHidden()
+    assert editor._policy_from_form() is not None
+    editor._remove_action(editor._actions[0])
+    assert editor._actions == []
+    assert editor.actions_scroll.isHidden()
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    editor.reject()
+
+
+@pytest.mark.parametrize("expanded", [False, True])
+def test_single_policy_preview_hides_redundant_columns(expanded: bool) -> None:
+    parent = QWidget()
+    rows = (cleanup_preview.PreviewRow(1, ("A",), ("Suspend card",), expanded_sibling=expanded),)
+    dialog = cleanup_preview.CleanupPreviewDialog(rows, parent, policy_name="A")
+    assert dialog.table.isColumnHidden(1)
+    assert dialog.table.isColumnHidden(3)
+    assert dialog.table.isColumnHidden(4) is not expanded
+    if expanded:
+        assert dialog.table.item(0, 4).text() == "Included by note action"
+    combined = cleanup_preview.CleanupPreviewDialog(rows, parent)
+    assert not combined.table.isColumnHidden(1)
+    assert not combined.table.isColumnHidden(3)
+    assert not combined.table.isColumnHidden(4)
+    dialog.close()
+    combined.close()
+
+
+def test_popup_guard_ignores_events_after_menu_is_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
+    parent = QWidget()
+    picker = CardStatePicker(parent)
+    parent.show()
+    QApplication.processEvents()
+    errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *args: errors.append(args))
+    picker._menu.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    assert picker._anchor_guard.menu is None
+    parent.move(parent.x() + 10, parent.y() + 10)
+    QApplication.processEvents()
+    assert not errors, "".join(traceback.format_exception(*errors[0])) if errors else ""
+    parent.close()
+
+
+def test_removing_final_condition_does_not_leave_stale_popup_watchers(
+    edit_fixture: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, edit_fixture.raw, edit_fixture.policy, ()),
+        set(),
+        edit_fixture.parent,
+    )
+    editor.show()
+    QApplication.processEvents()
+    errors = []
+    monkeypatch.setattr(sys, "excepthook", lambda *args: errors.append(args))
+    editor._remove_condition(editor._conditions[0])
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    editor.resize(editor.width() + 10, editor.height() + 10)
+    QApplication.processEvents()
+    assert errors == []
+    assert editor.conditions_scroll.isHidden()
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    editor.reject()
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_returning_from_json_preserves_form_size(
+    edit_fixture: SimpleNamespace,
+    apply: bool,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, edit_fixture.raw, edit_fixture.policy, ()),
+        set(),
+        edit_fixture.parent,
+    )
+    editor.show()
+    QApplication.processEvents()
+    original = editor.size()
+    for _ in range(3):
+        editor._toggle_json()
+        QApplication.processEvents()
+        if apply:
+            editor._apply_json()
+        else:
+            editor._cancel_json()
+        QApplication.processEvents()
+        assert editor.size() == original
+    editor.reject()
+
+
+@pytest.mark.parametrize("manual", [False, True])
+def test_editor_shrinks_after_removing_rows_unless_manually_resized(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, manual: bool
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    QApplication.processEvents()
+    initial = editor.height()
+    editor._add_condition(None)
+    QApplication.processEvents()
+    assert editor.height() > initial
+    if manual:
+        editor.resize(editor.width() + 20, editor.height() + 100)
+        QApplication.processEvents()
+    expanded = editor.height()
+    editor._remove_condition(editor._conditions[0])
+    QApplication.processEvents()
+    assert editor.height() == (expanded if manual else initial)
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    editor.reject()
 
 
 def test_invalid_trigger_type_can_be_repaired_in_form(edit_fixture: SimpleNamespace) -> None:
@@ -966,16 +1315,20 @@ def test_duplicate_opens_draft_with_fresh_id_and_does_not_save(
 
 def test_conflict_browse_respects_selected_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     parent = QWidget()
-    dialog = conflict_dialog.ConflictDialog(
-        tuple(ConflictDetail(card_id, ("Policy",), ("Reason",)) for card_id in (1, 2)), parent, ()
+    dialog = cleanup_preview.CleanupPreviewDialog(
+        tuple(
+            cleanup_preview.PreviewRow(card_id, ("Policy",), (), ("Reason",)) for card_id in (1, 2)
+        ),
+        parent,
+        view="conflicts",
     )
     browsed = []
     monkeypatch.setattr(
-        conflict_dialog, "open_cards_in_browser", lambda ids, **_kwargs: browsed.append(ids)
+        cleanup_preview, "open_cards_in_browser", lambda ids, **_kwargs: browsed.append(ids)
     )
     dialog.browse_button.click()
     dialog.table.selectRow(1)
-    assert dialog.browse_button.text() == "Browse selected"
+    assert dialog.browse_button.text() == "Browse"
     dialog.browse_button.click()
     assert browsed == [{1, 2}, {2}]
     dialog.close()

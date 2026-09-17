@@ -2,9 +2,10 @@
 
 Configurable policy-based cleanup for Anki cards.
 
-Applies cleanup policies according to deck scope, age, interval, card state,
-review history, note tags, or suspension state, either on demand or automatically
-on daily, open, or sync triggers.
+Card Janitor is for periodic, non-urgent housekeeping.
+Apply cleanup policies on demand or automatically on daily, open, or sync triggers.
+It deliberately does not react to individual edits or reviews, keeping cleanup
+predictable and unobtrusive.
 
 > [!WARNING]
 > Card Janitor can make destructive collection changes, including permanently
@@ -115,9 +116,10 @@ that require an action.
 Compatible actions from overlapping policies are combined. Cards are skipped
 and reported when policies specify conflicting move destinations or combine
 deletion with another action.
-Click the skipped-card summary to inspect involved policies and conflict
+Open **Preview…** and choose **Conflicts** to inspect involved policies and conflict
 reasons. Cleanup totals exclude conflicts; **Browse** includes them so you can
-inspect all candidates. The conflict window's **Browse** shows only skipped cards.
+inspect all candidates. Preview's **Browse** opens selected cards, or all cards
+in its current view when nothing is selected.
 
 ### Example policies
 
@@ -161,14 +163,18 @@ Tools → Card Janitor…
 Card Janitor → Add… or Edit…
 ```
 
-The add-on ships with no policies, so installing it cannot modify a collection. Begin with an on-demand tag-and-suspend policy and open **Card Janitor…** to preview its results. The dashboard can open candidates in Anki's Browser or apply the configured actions.
+The add-on ships with no policies, so installing it cannot modify a collection. Begin with an on-demand tag-and-suspend policy and open **Card Janitor…** to preview its results. Click **Preview…** beside **Clean Up** to open **Cleanup Preview**. It shows the actual merged changes and why conflicting cards would be skipped. Select rows to browse those cards. The dashboard's **Browse** still opens all candidate cards, including conflicts.
 
 Policies can be created and repaired in the manager.
 Use **Duplicate…** to start a new policy from an existing one. Inside Add/Edit,
 **Edit as JSON…** edits that individual policy's unsaved settings; **Apply**
 updates the unsaved form, while **Cancel/Escape** returns to the unchanged form.
-Only the form's **Save** commits the policy. Browse also
-previews unsaved JSON. Internal IDs are managed automatically. Closing a
+Only the form's **Save** commits the policy. **Browse** opens candidate cards;
+**Preview…** beside **Save** shows planned changes from the editor's current policy alone, excluding
+other policies. Both work in the form and JSON views without saving. Preview
+does not require a policy name. New policies start with empty condition and action
+lists; choose conditions or **All cards**, and add at least one action.
+Internal IDs are managed automatically. Closing a
 changed policy editor asks before discarding edits.
 
 **Settings…** controls automatic cleanup, notifications and debug logging.

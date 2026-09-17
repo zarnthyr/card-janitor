@@ -78,6 +78,16 @@ that day's automatic cleanup.
 
 **Browse** in the policy editor validates and evaluates the current form without
 saving it, then opens the cards that would require an action in Anki's Browser.
+**Preview…** beside **Save** opens **Cleanup Preview** with the merged changes from the editor's current
+policy alone. Other policies are not included. A name is optional for preview;
+scope, conditions and actions must still be valid. Neither operation saves or
+applies the policy.
+The title identifies the policy, or **Unnamed policy** if no name is entered.
+The single-policy preview shows planned changes without the combined-policy
+View selector. Only Card and Changes are shown by default; Reason appears only for
+note-expansion explanations. New policies start with empty condition and action lists;
+conditions must be chosen or explicitly set to **All cards**, and at least one
+action is required before saving or previewing.
 
 **Duplicate…** opens an editable copy of the selected valid policy with a new
 internal ID. It is not saved until you click **Save**. Inside Add/Edit,
@@ -86,7 +96,7 @@ or unsaved settings. Paste one policy object, not a whole configuration.
 **Apply** validates JSON, updates the unsaved form, and returns to it.
 **Cancel/Escape** returns to the unchanged form without validation, asking
 before discarding changed JSON. Only the form's **Save** persists the policy;
-**Browse** previews either view without saving.
+**Browse** and **Preview…** work in either view without saving.
 Internal IDs are preserved for edited policies and generated for new ones,
 even if pasted JSON contains another ID. Closing a changed policy editor asks
 before discarding its unsaved changes.
@@ -383,11 +393,21 @@ reported as a policy error.
 
 Compatible actions are merged and deduplicated during manual and automatic cleanup. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
 
-When checked policies conflict, click the dashboard's skipped-card summary to
-see the affected card IDs, involved policies, their actions, and reasons.
-Select rows and use **Browse selected** to inspect just those skipped cards,
-or clear the selection and use **Browse** for all skipped cards. The main
-**Browse** button still includes all
+Click **Preview…** beside **Clean Up** on the dashboard to open **Cleanup Preview**
+at **Planned changes**. Switch between **All affected**,
+**Planned changes**, **Overlapping policies**, and **Conflicts**. Each row shows
+the card, targeting policies, actual merged changes, status, and reason. Satisfied
+actions are omitted from planned changes; skipped cards show no changes and
+explain the competing actions. Policy names can include satisfied intentions
+that still matter for conflict detection. Note deletion is labelled explicitly;
+expanded siblings are marked **Included by note action**.
+
+Select rows and use **Browse** to inspect those cards, or clear the
+selection and use **Browse** for all cards in the current view. The preview is
+read-only and reflects the current evaluation, not a guarantee that a later
+cleanup applies an unchanged snapshot. Refresh recalculates it; changing checked
+policies updates it. An editor preview closes if its unsaved settings change.
+The main **Browse** button still includes all
 candidate cards from checked policies, including conflicts; cleanup totals
 exclude conflicting cards. Already-satisfied actions can still conflict with
 another policy's intended changes. A conflict affecting a note-wide action
