@@ -18,6 +18,7 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
     QWidgetAction,
+    pyqtSignal,
     qconnect,
 )
 
@@ -32,6 +33,8 @@ MAX_SUMMARY_LENGTH = 55
 
 
 class DeckPicker(QPushButton):
+    changed = pyqtSignal()
+
     def __init__(
         self,
         names: list[str],
@@ -49,8 +52,9 @@ class DeckPicker(QPushButton):
         layout = QVBoxLayout(container)
         layout.addWidget(
             warning_panel(
-                "Fully checked branches include <b>future subdecks</b>. ",
+                "Fully checked branches include <b>future subdecks</b>.",
                 container,
+                kind="info",
             )
         )
         self.tree = QTreeWidget(container)
@@ -119,6 +123,7 @@ class DeckPicker(QPushButton):
         else:
             self._state.toggle(item.data(0, Qt.ItemDataRole.UserRole))
         self._refresh()
+        self.changed.emit()
 
     def _refresh(self) -> None:
         self._root.setCheckState(

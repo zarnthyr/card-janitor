@@ -85,6 +85,19 @@ def build_preview_rows(  # noqa: PLR0912
                 else "Unknown"
             )
             card_changes.setdefault(card_id, []).append(f"Move: {origin} → {destination}")
+    flag_names = {
+        0: "Clear card flag",
+        1: "Set red card flag",
+        2: "Set orange card flag",
+        3: "Set green card flag",
+        4: "Set blue card flag",
+        5: "Set pink card flag",
+        6: "Set turquoise card flag",
+        7: "Set purple card flag",
+    }
+    for flag, card_ids in plan.flags:
+        for card_id in card_ids:
+            card_changes.setdefault(card_id, []).append(flag_names[flag])
     for note_id in plan.delete_note_ids:
         note_changes.setdefault(note_id, []).append("Delete note and all its cards")
     rows = []

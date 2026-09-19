@@ -11,11 +11,13 @@ from anki.collection import OpChanges
 from .engine import action_is_satisfied
 from .log import exception
 from .models import (
+    ClearFlagAction,
     DeleteCardAction,
     DeleteNoteAction,
     MoveAction,
     RemoveTagAction,
     ReplaceTagsAction,
+    SetFlagAction,
     SuspendAction,
     TagAction,
     UnsuspendAction,
@@ -44,6 +46,7 @@ class ExecutionPlan:
     suspend_card_ids: tuple[int, ...]
     unsuspend_card_ids: tuple[int, ...]
     moves: tuple[tuple[int, tuple[int, ...]], ...]
+    flags: tuple[tuple[int, tuple[int, ...]], ...]
     delete_card_ids: tuple[int, ...]
     delete_note_ids: tuple[int, ...]
     conflicted_card_ids: tuple[int, ...]
@@ -63,6 +66,7 @@ class ExecutionPlan:
             or self.suspend_card_ids
             or self.unsuspend_card_ids
             or self.moves
+            or self.flags
             or self.delete_card_ids
             or self.delete_note_ids
         )
@@ -134,6 +138,11 @@ def build_execution_plan(  # noqa: PLR0912
         )
         has_suspend = any(isinstance(action.action, SuspendAction) for action in actions)
         has_unsuspend = any(isinstance(action.action, UnsuspendAction) for action in actions)
+        flag_values = {
+            0 if isinstance(action.action, ClearFlagAction) else _flag_number(action.action.flag)
+            for action in actions
+            if isinstance(action.action, (SetFlagAction, ClearFlagAction))
+        }
         if card_id in card_actions:
             if len(move_targets) > 1:
                 mark_conflict((card_id,), "Different move destinations")
@@ -141,6 +150,8 @@ def build_execution_plan(  # noqa: PLR0912
                 mark_conflict((card_id,), "Deletion combined with other actions")
             if has_suspend and has_unsuspend:
                 mark_conflict((card_id,), "Suspend and unsuspend conflict")
+            if len(flag_values) > 1:
+                mark_conflict((card_id,), "Different card flags")
 
     note_actions: dict[int, set[ResolvedAction]] = {}
     all_note_actions: dict[int, set[ResolvedAction]] = {}
@@ -216,6 +227,7 @@ def build_execution_plan(  # noqa: PLR0912
     suspend: set[int] = set()
     unsuspend: set[int] = set()
     moves: dict[int, set[int]] = {}
+    flags: dict[int, set[int]] = {}
     delete: set[int] = set()
     delete_notes: set[int] = set()
     for card_id, actions in card_actions.items():
@@ -238,6 +250,10 @@ def build_execution_plan(  # noqa: PLR0912
             elif isinstance(action, MoveAction):
                 if resolved.target_deck_id is not None:
                     moves.setdefault(resolved.target_deck_id, set()).add(card_id)
+            elif isinstance(action, SetFlagAction):
+                flags.setdefault(_flag_number(action.flag), set()).add(card_id)
+            elif isinstance(action, ClearFlagAction):
+                flags.setdefault(0, set()).add(card_id)
             elif isinstance(action, DeleteCardAction):
                 delete.add(card_id)
             elif isinstance(action, DeleteNoteAction):
@@ -258,6 +274,8 @@ def build_execution_plan(  # noqa: PLR0912
             if reason.startswith("Suspend and unsuspend")
             else (TagAction, RemoveTagAction, ReplaceTagsAction)
             if reason.startswith(("Tags are", "Different tag replacements", "Replacing tags"))
+            else (SetFlagAction, ClearFlagAction)
+            if reason.startswith("Different card flags")
             else None
         )
         descriptions: set[str] = set()
@@ -299,6 +317,7 @@ def build_execution_plan(  # noqa: PLR0912
         suspend_card_ids=tuple(sorted(suspend)),
         unsuspend_card_ids=tuple(sorted(unsuspend)),
         moves=tuple((deck_id, tuple(sorted(ids))) for deck_id, ids in sorted(moves.items())),
+        flags=tuple((flag, tuple(sorted(ids))) for flag, ids in sorted(flags.items())),
         delete_card_ids=tuple(sorted(delete)),
         delete_note_ids=tuple(sorted(delete_notes)),
         conflicted_card_ids=tuple(sorted(conflicts)),
@@ -360,6 +379,8 @@ def _apply_plan(col: Collection, plan: ExecutionPlan) -> None:
         col.update_notes(replacement_notes)
     for deck_id, card_ids in plan.moves:
         col.set_deck(card_ids, deck_id)
+    for flag, card_ids in plan.flags:
+        col.set_user_flag_for_cards(flag, card_ids)
     if plan.suspend_card_ids:
         col.sched.suspend_cards(plan.suspend_card_ids)
     if plan.unsuspend_card_ids:
@@ -368,3 +389,15 @@ def _apply_plan(col: Collection, plan: ExecutionPlan) -> None:
         col.remove_cards_and_orphaned_notes(plan.delete_card_ids)
     if plan.delete_note_ids:
         col.remove_notes(plan.delete_note_ids)
+
+
+def _flag_number(flag: str) -> int:
+    return {
+        "red": 1,
+        "orange": 2,
+        "green": 3,
+        "blue": 4,
+        "pink": 5,
+        "turquoise": 6,
+        "purple": 7,
+    }[flag]

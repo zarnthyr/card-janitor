@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from .models import DeckSelector
+from .models import DeckSelector, NoteTypeSelector
 
 
 class DeckSelection:
@@ -112,27 +112,93 @@ class DeckSelection:
 
 
 class NoteTypeSelection:
-    """None selects current/future types; an explicit set selects current names."""
+    """Hierarchical note-type/card-type selection, independent of Qt."""
 
-    def __init__(self, names: list[str], selected: tuple[str, ...] | None) -> None:
-        self._selected = None if selected is None else set(selected)
-        self.names = tuple(sorted(set(names) | (self._selected or set()), key=str.casefold))
+    def __init__(
+        self,
+        note_types: list[tuple[str, tuple[str, ...]]],
+        selected: tuple[NoteTypeSelector, ...] | None,
+    ) -> None:
+        card_types = {name: set(values) for name, values in note_types}
+        if selected is not None:
+            for selector in selected:
+                card_types.setdefault(selector.name, set()).update(selector.card_types or ())
+        self.card_types = {
+            name: tuple(sorted(values, key=str.casefold))
+            for name, values in sorted(card_types.items(), key=lambda item: item[0].casefold())
+        }
+        self.names = tuple(self.card_types)
+        self._selected: dict[str, set[str] | None] | None = (
+            None
+            if selected is None
+            else {
+                selector.name: (None if selector.card_types is None else set(selector.card_types))
+                for selector in selected
+            }
+        )
 
-    def selected(self) -> tuple[str, ...] | None:
-        return None if self._selected is None else tuple(sorted(self._selected, key=str.casefold))
+    def selected(self) -> tuple[NoteTypeSelector, ...] | None:
+        if self._selected is None:
+            return None
+        return tuple(
+            NoteTypeSelector(
+                name,
+                None if card_types is None else tuple(sorted(card_types, key=str.casefold)),
+            )
+            for name, card_types in sorted(
+                self._selected.items(), key=lambda item: item[0].casefold()
+            )
+        )
 
-    def contains(self, name: str) -> bool:
-        return self._selected is None or name in self._selected
+    def note_selection(self, name: str) -> set[str] | bool | None:
+        """Return False for excluded, None for all card types, or an explicit set."""
+        if self._selected is None:
+            return None
+        return self._selected.get(name, False)
+
+    def card_type_selected(self, name: str, card_type: str) -> bool:
+        selected = self.note_selection(name)
+        return selected is None or (isinstance(selected, set) and card_type in selected)
 
     def toggle_all(self) -> None:
-        self._selected = set() if self._selected is None else None
+        self._selected = {} if self._selected is None else None
 
-    def toggle(self, name: str) -> None:
+    def _materialize_all(self) -> None:
+        if self._selected is None:
+            self._selected = dict.fromkeys(self.names)
+
+    def toggle_note(self, name: str) -> None:
         if name not in self.names:
             raise KeyError(name)
-        if self._selected is None:
-            self._selected = set(self.names)
-        if name in self._selected:
-            self._selected.remove(name)
+        self._materialize_all()
+        selected = self._selected
+        if selected is None:
+            return
+        if name in selected:
+            del selected[name]
         else:
-            self._selected.add(name)
+            selected[name] = None
+
+    def toggle_card_type(self, name: str, card_type: str) -> None:
+        if card_type not in self.card_types.get(name, ()):
+            raise KeyError((name, card_type))
+        self._materialize_all()
+        materialized = self._selected
+        if materialized is None:
+            return
+        current = materialized.get(name, False)
+        if current is None:
+            selected = set(self.card_types[name])
+            selected.remove(card_type)
+        elif current is False:
+            selected = {card_type}
+        else:
+            selected = set(current)
+            if card_type in selected:
+                selected.remove(card_type)
+            else:
+                selected.add(card_type)
+        if selected:
+            materialized[name] = selected
+        else:
+            materialized.pop(name, None)

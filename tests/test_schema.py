@@ -42,7 +42,6 @@ def test_collection_schema_accepts_tag_and_suspension_features() -> None:
                 "triggers": [{"type": "daily"}],
                 "scope": {
                     "decks": [{"deck": "Mining", "include_subdecks": True}],
-                    "include_suspended": True,
                 },
                 "match": "all",
                 "conditions": [
@@ -61,6 +60,39 @@ def test_collection_schema_accepts_tag_and_suspension_features() -> None:
     Draft202012Validator(schema).validate(config)
 
 
+def test_collection_schema_accepts_new_scope_conditions_and_flag_actions() -> None:
+    schema = json.loads((ROOT / "src/collection-config.schema.json").read_text(encoding="utf-8"))
+    policy = {
+        "id": "maintenance",
+        "name": "Maintenance",
+        "triggers": [],
+        "scope": {
+            "all_decks": True,
+            "note_types": [
+                {"name": "Basic"},
+                {"name": "Reverse", "card_types": ["Card 2"]},
+            ],
+        },
+        "match": "all",
+        "conditions": [
+            {"type": "card_flag", "flags": ["none", "red"]},
+            {"type": "answer_count", "count": 20, "operator": "gte"},
+            {"type": "correct_answer_count", "count": 10, "operator": "gte"},
+            {"type": "lapse_count", "count": 3, "operator": "gte"},
+            {"type": "correct_answer_rate", "percent": 60, "operator": "lt"},
+            {"type": "overdue", "days": 30, "operator": "gte"},
+            {"type": "age", "days": 60, "source": "last_review", "operator": "gte"},
+        ],
+        "actions": [{"type": "set_flag", "flag": "purple"}],
+    }
+    validator = Draft202012Validator(schema)
+    assert validator.is_valid({"policies": [policy]})
+    policy["actions"] = [{"type": "clear_flag"}]
+    assert validator.is_valid({"policies": [policy]})
+    policy["actions"] = [{"type": "tag", "tags": ["legacy"]}]
+    assert not validator.is_valid({"policies": [policy]})
+
+
 def test_collection_schema_accepts_only_standalone_all_cards_condition() -> None:
     schema = json.loads((ROOT / "src/collection-config.schema.json").read_text(encoding="utf-8"))
     policy = {
@@ -77,7 +109,7 @@ def test_collection_schema_accepts_only_standalone_all_cards_condition() -> None
     assert validator.is_valid({"policies": [policy]})
     policy["scope"] = {"all_decks": True}
     assert validator.is_valid({"policies": [policy]})
-    policy["scope"]["note_types"] = ["Basic"]
+    policy["scope"]["note_types"] = [{"name": "Basic"}]
     assert validator.is_valid({"policies": [policy]})
     policy["scope"]["note_types"] = []
     assert not validator.is_valid({"policies": [policy]})

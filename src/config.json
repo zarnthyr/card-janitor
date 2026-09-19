@@ -2,5 +2,6 @@
   "config_version": 1,
   "automatic_cleanup_enabled": true,
   "notify_after_automatic_run": true,
+  "warn_on_invalid_automatic_policies": true,
   "debug_logging": false
 }

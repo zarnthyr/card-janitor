@@ -2,7 +2,7 @@
 # License: GNU AGPL v3 or later
 
 import pytest
-from card_janitor.models import DeckSelector
+from card_janitor.models import DeckSelector, NoteTypeSelector
 from card_janitor.picker_state import DeckSelection, NoteTypeSelection
 
 
@@ -72,12 +72,15 @@ def test_all_current_roots_do_not_select_future_roots() -> None:
 
 
 def test_note_types_explicit_selection_retains_future_exclusion() -> None:
-    state = NoteTypeSelection(["Basic", "Cloze"], None)
-    assert state.contains("Future")
-    state.toggle("Basic")
-    state.toggle("Basic")
-    assert state.selected() == ("Basic", "Cloze")
-    assert not state.contains("Future")
+    state = NoteTypeSelection([("Basic", ("Card 1",)), ("Cloze", ("Cloze",))], None)
+    assert state.note_selection("Future") is None
+    state.toggle_note("Basic")
+    state.toggle_note("Basic")
+    assert state.selected() == (
+        NoteTypeSelector("Basic"),
+        NoteTypeSelector("Cloze"),
+    )
+    assert state.note_selection("Future") is False
     state.toggle_all()
     assert state.selected() is None
     state.toggle_all()
@@ -85,17 +88,32 @@ def test_note_types_explicit_selection_retains_future_exclusion() -> None:
 
 
 def test_note_types_keep_missing_selected_name() -> None:
-    state = NoteTypeSelection(["Basic"], ("Missing",))
+    state = NoteTypeSelection(
+        [("Basic", ("Card 1",))],
+        (NoteTypeSelector("Missing", ("Gone",)),),
+    )
     assert state.names == ("Basic", "Missing")
-    assert state.selected() == ("Missing",)
+    assert state.selected() == (NoteTypeSelector("Missing", ("Gone",)),)
+
+
+def test_note_type_card_type_selection_preserves_future_exclusion() -> None:
+    state = NoteTypeSelection(
+        [("Basic", ("Card 1", "Card 2"))],
+        (NoteTypeSelector("Basic"),),
+    )
+    state.toggle_card_type("Basic", "Card 1")
+    assert state.selected() == (NoteTypeSelector("Basic", ("Card 2",)),)
+    state.toggle_card_type("Basic", "Card 1")
+    assert state.selected() == (NoteTypeSelector("Basic", ("Card 1", "Card 2")),)
 
 
 @pytest.mark.parametrize(
-    "state", [DeckSelection(["A"], (), all_decks=True), NoteTypeSelection(["A"], None)]
+    "state",
+    [DeckSelection(["A"], (), all_decks=True), NoteTypeSelection([("A", ())], None)],
 )
 def test_unknown_toggle_does_not_mutate_selection(state: DeckSelection | NoteTypeSelection) -> None:
     with pytest.raises(KeyError):
-        state.toggle("Unknown")
+        (state.toggle if isinstance(state, DeckSelection) else state.toggle_note)("Unknown")
     if isinstance(state, DeckSelection):
         assert state.all_decks
     else:

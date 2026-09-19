@@ -5,27 +5,48 @@ from __future__ import annotations
 
 from aqt.qt import (
     QComboBox,
-    QHBoxLayout,
+    QGridLayout,
     QLabel,
     QLineEdit,
     QPushButton,
     QStackedWidget,
+    QStandardItem,
     QWidget,
     qconnect,
 )
 
-from .editor_utils import _split_tags, pad_text_field
+from .editor_utils import (
+    _split_tags,
+    configure_policy_row_layout,
+    ignore_policy_row_size_hints,
+    pad_text_field,
+    show_text_from_start,
+)
 from .models import (
     Action,
+    ClearFlagAction,
     DeleteCardAction,
     DeleteNoteAction,
     MoveAction,
     RemoveTagAction,
     ReplaceTagsAction,
+    SetFlagAction,
     SuspendAction,
     TagAction,
     UnsuspendAction,
 )
+
+
+def _add_action_group(combo: QComboBox, title: str, choices: tuple[tuple[str, str], ...]) -> None:
+    header = QStandardItem(title)
+    header.setEnabled(False)
+    header.setSelectable(False)
+    font = header.font()
+    font.setBold(True)
+    header.setFont(font)
+    combo.model().appendRow(header)
+    for label, value in choices:
+        combo.addItem(label, value)
 
 
 class ActionRow(QWidget):
@@ -36,20 +57,47 @@ class ActionRow(QWidget):
         kind: str = "add_tags",
         tags: tuple[str, ...] = (),
         deck: str = "",
+        flag: str = "red",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        layout = QHBoxLayout(self)
+        layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        configure_policy_row_layout(layout)
         self.number_label = QLabel(self)
         self.number_label.setMinimumWidth(20)
         self.kind = QComboBox(self)
-        self.kind.addItem("Tags", "tags")
-        self.kind.addItem("Cards", "cards")
-        self.kind.addItem("Notes", "notes")
-        self.kind.setMinimumWidth(105)
-        self.operator = QComboBox(self)
-        self.operator.setMinimumWidth(125)
+        for group, choices in (
+            (
+                "Tags",
+                (
+                    ("Add tags", "add_tags"),
+                    ("Remove tags", "remove_tags"),
+                    ("Replace all tags", "replace_tags"),
+                ),
+            ),
+            (
+                "Cards",
+                (
+                    ("Suspend card", "suspend"),
+                    ("Unsuspend card", "unsuspend"),
+                    ("Move card to deck", "move"),
+                    ("Delete card", "delete_card"),
+                ),
+            ),
+            (
+                "Notes",
+                (
+                    ("Suspend note", "suspend_note"),
+                    ("Unsuspend note", "unsuspend_note"),
+                    ("Move note to deck", "move_note"),
+                    ("Delete note", "delete_note"),
+                ),
+            ),
+            ("Flags", (("Set card flag", "set_flag"), ("Clear card flag", "clear_flag"))),
+        ):
+            _add_action_group(self.kind, group, choices)
+        self.kind.setMinimumWidth(165)
         self.tags = QLineEdit(self)
         pad_text_field(self.tags)
         self.tags.setPlaceholderText("Separate tags with spaces or commas")
@@ -59,54 +107,39 @@ class ActionRow(QWidget):
         pad_text_field(self.deck.lineEdit())
         self.deck.addItems(deck_names)
         self.deck.setToolTip("Choose or enter the destination deck")
+        self.flag = QComboBox(self)
+        for name in ("red", "orange", "green", "blue", "pink", "turquoise", "purple"):
+            self.flag.addItem(name.title(), name)
+        self.flag.setToolTip("Choose the card flag colour")
         self.no_value = QWidget(self)
         self.value_stack = QStackedWidget(self)
-        self.value_stack.setMinimumWidth(150)
+        self.value_stack.setMinimumWidth(140)
         self.value_stack.addWidget(self.tags)
         self.value_stack.addWidget(self.deck)
+        self.value_stack.addWidget(self.flag)
         self.value_stack.addWidget(self.no_value)
+        self.blank_column = QWidget(self)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(75)
         self.remove_button.setToolTip("Remove this action")
-        layout.addWidget(self.number_label)
-        layout.addWidget(self.kind, 2)
-        layout.addWidget(self.operator, 2)
-        layout.addWidget(self.value_stack, 3)
-        layout.addWidget(self.remove_button)
-        category, operator = {
-            "add_tags": ("tags", "add"),
-            "remove_tags": ("tags", "remove"),
-            "replace_tags": ("tags", "replace"),
-            "suspend": ("cards", "suspend"),
-            "unsuspend": ("cards", "unsuspend"),
-            "move": ("cards", "move"),
-            "delete_card": ("cards", "delete"),
-            "delete_note": ("notes", "delete"),
-            "suspend_note": ("notes", "suspend"),
-            "unsuspend_note": ("notes", "unsuspend"),
-            "move_note": ("notes", "move"),
-        }.get(kind, ("tags", "add"))
-        self.kind.setCurrentIndex(max(self.kind.findData(category), 0))
+        ignore_policy_row_size_hints(self.kind, self.value_stack, self.blank_column)
+        layout.addWidget(self.number_label, 0, 0)
+        layout.addWidget(self.kind, 0, 1)
+        # Actions have no operator. Fill optional controls from the left and
+        # leave the final middle column empty, while keeping Remove aligned.
+        layout.addWidget(self.value_stack, 0, 2)
+        layout.addWidget(self.blank_column, 0, 3)
+        layout.addWidget(self.remove_button, 0, 4)
+        selected_index = self.kind.findData(kind)
+        self.kind.setCurrentIndex(
+            selected_index if selected_index >= 0 else self.kind.findData("add_tags")
+        )
         self.tags.setText(" ".join(tags))
+        show_text_from_start(self.tags)
         self.deck.setCurrentText(deck)
-        qconnect(self.kind.currentIndexChanged, self._update_controls)
-        self._update_controls()
-        self.operator.setCurrentIndex(max(self.operator.findData(operator), 0))
-        qconnect(self.operator.currentIndexChanged, self._update_value)
-        self._update_value()
-
-    def _update_controls(self, _index: int = 0) -> None:
-        kind = self.kind.currentData()
-        self.operator.clear()
-        if kind == "tags":
-            self.operator.addItem("add", "add")
-            self.operator.addItem("remove", "remove")
-            self.operator.addItem("replace", "replace")
-        else:
-            self.operator.addItem("suspend", "suspend")
-            self.operator.addItem("unsuspend", "unsuspend")
-            self.operator.addItem("move to deck", "move")
-            self.operator.addItem("delete", "delete")
+        show_text_from_start(self.deck.lineEdit())
+        self.flag.setCurrentIndex(max(self.flag.findData(flag), 0))
+        qconnect(self.kind.currentIndexChanged, self._update_value)
         self._update_value()
 
     def _update_value(self, _index: int = 0) -> None:
@@ -118,25 +151,13 @@ class ActionRow(QWidget):
             )
         elif kind in {"move", "move_note"}:
             self.value_stack.setCurrentWidget(self.deck)
+        elif kind == "set_flag":
+            self.value_stack.setCurrentWidget(self.flag)
         else:
             self.value_stack.setCurrentWidget(self.no_value)
 
     def action_kind(self) -> str:
-        category = self.kind.currentData()
-        operator = self.operator.currentData()
-        if category == "tags":
-            return {"add": "add_tags", "remove": "remove_tags"}.get(operator, "replace_tags")
-        if category == "cards":
-            return {
-                "unsuspend": "unsuspend",
-                "move": "move",
-                "delete": "delete_card",
-            }.get(operator, "suspend")
-        return {
-            "unsuspend": "unsuspend_note",
-            "move": "move_note",
-            "delete": "delete_note",
-        }.get(operator, "suspend_note")
+        return self.kind.currentData()
 
     def actions(self) -> tuple[Action, ...]:  # noqa: PLR0911
         kind = self.action_kind()
@@ -158,7 +179,11 @@ class ActionRow(QWidget):
             )
         if kind == "delete_card":
             return (DeleteCardAction(),)
-        return (DeleteNoteAction(),)
+        if kind == "delete_note":
+            return (DeleteNoteAction(),)
+        if kind == "set_flag":
+            return (SetFlagAction(self.flag.currentData()),)
+        return (ClearFlagAction(),)
 
     def focus_widgets(self) -> tuple[QWidget, ...]:
-        return (self.kind, self.operator, self.tags, self.deck, self.remove_button)
+        return (self.kind, self.tags, self.deck, self.flag, self.remove_button)

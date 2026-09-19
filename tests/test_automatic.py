@@ -113,6 +113,7 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         config=SimpleNamespace(
             policies=(SimpleNamespace(id="p", name="Daily policy", triggers=(Trigger("daily"),)),),
             notify_after_automatic_run=False,
+            warn_on_invalid_automatic_policies=False,
             automatic_cleanup_enabled=True,
         ),
     )
@@ -130,6 +131,72 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         lambda *_args: SimpleNamespace(is_empty=True, conflicted_card_ids=()),
     )
     return SimpleNamespace(window=window, operations=operations, mutations=mutations, parsed=parsed)
+
+
+def test_profile_open_warns_about_invalid_inactive_automatic_policy_without_recording_cleanup(
+    runner: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner.parsed.config.warn_on_invalid_automatic_policies = True
+    runner.parsed.config.policies = (
+        SimpleNamespace(id="daily", name="Daily", triggers=(Trigger("daily"),)),
+        SimpleNamespace(id="sync", name="Sync", triggers=(Trigger("on_sync"),)),
+    )
+    monkeypatch.setattr(
+        automatic,
+        "validate_policy_references",
+        lambda _col, policy: ("missing deck",) if policy.id == "sync" else (),
+    )
+    notices = []
+    monkeypatch.setattr(automatic, "_notify_automatic", notices.append)
+
+    automatic.run_automatic_policies(events=frozenset({"on_open"}))
+
+    assert len(runner.operations) == 2
+    validation = runner.operations[0]
+    validation.success(validation.op(runner.window.col))
+    assert notices == [("Card Janitor: “Sync” was not applied because it has an error.")]
+    assert "card_janitor_last_cleanup" not in runner.window.pm.profile
+
+
+def test_startup_warning_counts_multiple_invalid_automatic_policies(
+    runner: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner.parsed.config.warn_on_invalid_automatic_policies = True
+    runner.parsed.config.policies = tuple(
+        SimpleNamespace(id=name.casefold(), name=name, triggers=(Trigger("on_sync"),))
+        for name in ("First", "Second")
+    )
+    monkeypatch.setattr(
+        automatic,
+        "validate_policy_references",
+        lambda _col, _policy: ("missing deck",),
+    )
+    notices = []
+    monkeypatch.setattr(automatic, "_notify_automatic", notices.append)
+
+    automatic.run_automatic_policies(events=frozenset({"on_open"}))
+    validation = runner.operations[0]
+    validation.success(validation.op(runner.window.col))
+    assert notices == [
+        ("Card Janitor: 2 automatic policies were not applied because they have errors.")
+    ]
+
+
+def test_due_invalid_policy_notification_names_policy(
+    runner: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    notices = []
+    monkeypatch.setattr(automatic, "_notify_automatic", notices.append)
+    policy = runner.parsed.config.policies[0]
+    report = SimpleNamespace(policy=policy, errors=("missing deck",))
+
+    automatic.run_automatic_policies(events=frozenset({"on_open"}))
+    runner.operations[0].success((report,))
+
+    assert notices == [("Card Janitor: “Daily policy” was not applied because it has an error.")]
+    assert runner.window.pm.profile["card_janitor_last_cleanup"]["failure"] == (
+        "Daily policy: missing deck"
+    )
 
 
 @pytest.mark.parametrize("event", ["on_open", "day_change", "on_sync"])

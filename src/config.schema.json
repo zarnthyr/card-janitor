@@ -5,6 +5,7 @@
   "required": [
     "config_version",
     "notify_after_automatic_run",
+    "warn_on_invalid_automatic_policies",
     "debug_logging"
   ],
   "properties": {
@@ -19,6 +20,11 @@
     "notify_after_automatic_run": {
       "type": "boolean",
       "description": "Show a summary when cards are cleaned up automatically"
+    },
+    "warn_on_invalid_automatic_policies": {
+      "type": "boolean",
+      "default": true,
+      "description": "Warn on profile open when automatic policies cannot run"
     },
     "debug_logging": {
       "type": "boolean",

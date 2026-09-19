@@ -16,18 +16,30 @@ from card_janitor.models import (
     AgeCondition,
     AllCardsCondition,
     AllConditions,
+    AnswerCountCondition,
     AnyConditions,
+    CardFlagCondition,
     CardStateCondition,
+    ClearFlagAction,
     ConditionExpression,
+    CorrectAnswerCountCondition,
+    CorrectAnswerRateCondition,
     DeckSelector,
+    FsrsDifficultyCondition,
+    FsrsRetrievabilityCondition,
+    FsrsStabilityCondition,
     IntervalCondition,
+    LapseCountCondition,
+    OverdueCondition,
     Policy,
     RemoveTagAction,
     ReplaceTagsAction,
     ReviewHistoryCondition,
     Scope,
+    SetFlagAction,
     SiblingReviewHistoryCondition,
     SiblingSuspensionCondition,
+    Sm2EaseCondition,
     SuspendAction,
     SuspensionCondition,
     TagAction,
@@ -114,7 +126,7 @@ def test_report_retains_satisfied_intentions_for_conflict_detection() -> None:
     outside = facts(card_id=3, deck_id=9)
     action = ResolvedAction(SuspendAction())
     value = evaluate_facts(
-        policy(AllCardsCondition(), scope=Scope((DeckSelector("Mining"),), include_suspended=True)),
+        policy(AllCardsCondition(), scope=Scope((DeckSelector("Mining"),))),
         [satisfied, pending, outside],
         {1},
         (action,),
@@ -189,7 +201,7 @@ def test_exact_age_matches_one_completed_day_bucket() -> None:
     assert not matches_conditions(condition, card, 5000 + 31 * MILLIS_PER_DAY)
 
 
-def test_scope_excludes_suspended_and_filtered_by_default() -> None:
+def test_scope_includes_suspended_but_excludes_filtered_cards() -> None:
     cards = [facts(), facts(card_id=2, queue=-1), facts(card_id=3, original_deck_id=1)]
     report = evaluate_facts(
         policy(conditions=IntervalCondition(1, "gte")),
@@ -198,14 +210,14 @@ def test_scope_excludes_suspended_and_filtered_by_default() -> None:
         (ResolvedAction(SuspendAction()),),
         now_ms=10**12,
     )
-    assert [card.card_id for card in report.qualifying] == [1000]
+    assert [card.card_id for card in report.qualifying] == [1000, 2]
 
 
 def test_actionable_excludes_cards_with_all_actions_satisfied() -> None:
     card = facts(tags=frozenset({"retired"}), queue=-1)
     configured = policy(
         actions=(TagAction("retired"), SuspendAction()),
-        scope=Scope((DeckSelector("Mining"),), include_suspended=True),
+        scope=Scope((DeckSelector("Mining"),)),
         conditions=IntervalCondition(1, "gte"),
     )
     actions = (ResolvedAction(TagAction("retired")), ResolvedAction(SuspendAction()))
@@ -226,3 +238,45 @@ def test_inverse_and_replace_action_satisfaction() -> None:
     assert action_is_satisfied(ResolvedAction(RemoveTagAction("missing")), card)
     assert action_is_satisfied(ResolvedAction(ReplaceTagsAction(("Difficult", "Leech"))), card)
     assert not action_is_satisfied(ResolvedAction(UnsuspendAction()), card)
+
+
+def test_accumulated_review_conditions_match_card_facts() -> None:
+    card = facts(
+        answer_count=10,
+        correct_answer_count=8,
+        lapses=3,
+        last_review_ms=5_000,
+    )
+    assert matches_conditions(AnswerCountCondition(10, "eq"), card, 0)
+    assert matches_conditions(CorrectAnswerCountCondition(7, "gt"), card, 0)
+    assert matches_conditions(CorrectAnswerRateCondition(80, "gte"), card, 0)
+    assert matches_conditions(LapseCountCondition(3, "eq"), card, 0)
+    assert matches_conditions(
+        AgeCondition(2, "last_review", "gte"), card, 5_000 + 2 * MILLIS_PER_DAY
+    )
+    assert not matches_conditions(CorrectAnswerRateCondition(0, "gte"), facts(answer_count=0), 0)
+
+
+def test_schedule_metric_conditions_match_available_values_only() -> None:
+    card = facts(
+        overdue_days=20,
+        fsrs_stability=50.5,
+        fsrs_difficulty_percent=70.0,
+        fsrs_retrievability_percent=65.0,
+        sm2_ease_percent=250.0,
+    )
+    assert matches_conditions(OverdueCondition(20, "eq"), card, 0)
+    assert matches_conditions(FsrsStabilityCondition(50, "gt"), card, 0)
+    assert matches_conditions(FsrsDifficultyCondition(70, "lte"), card, 0)
+    assert matches_conditions(FsrsRetrievabilityCondition(70, "lt"), card, 0)
+    assert matches_conditions(Sm2EaseCondition(250, "eq"), card, 0)
+    assert not matches_conditions(OverdueCondition(0, "gte"), facts(), 0)
+
+
+def test_card_flags_match_and_actions_detect_satisfaction() -> None:
+    purple = facts(flag=7)
+    assert matches_conditions(CardFlagCondition(("purple",)), purple, 0)
+    assert not matches_conditions(CardFlagCondition(("none",)), purple, 0)
+    assert action_is_satisfied(ResolvedAction(SetFlagAction("purple")), purple)
+    assert not action_is_satisfied(ResolvedAction(ClearFlagAction()), purple)
+    assert action_is_satisfied(ResolvedAction(ClearFlagAction()), facts(flag=0))

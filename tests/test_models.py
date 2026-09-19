@@ -8,16 +8,29 @@ from card_janitor.models import (
     AgeCondition,
     AllCardsCondition,
     AllConditions,
+    AnswerCountCondition,
+    CardFlagCondition,
     CardStateCondition,
+    ClearFlagAction,
+    CorrectAnswerCountCondition,
+    CorrectAnswerRateCondition,
     DeckSelector,
     DeleteCardAction,
     DeleteNoteAction,
+    FsrsDifficultyCondition,
+    FsrsRetrievabilityCondition,
+    FsrsStabilityCondition,
+    LapseCountCondition,
     MoveAction,
+    NoteTypeSelector,
+    OverdueCondition,
     RemoveTagAction,
     ReplaceTagsAction,
     ReviewHistoryCondition,
+    SetFlagAction,
     SiblingReviewHistoryCondition,
     SiblingSuspensionCondition,
+    Sm2EaseCondition,
     SuspensionCondition,
     TagAction,
     TagCondition,
@@ -44,6 +57,21 @@ def test_automatic_cleanup_defaults_enabled_and_rejects_invalid_values() -> None
     assert not parsed.config.automatic_cleanup_enabled
 
 
+def test_invalid_automatic_policy_warning_setting_defaults_on_and_validates() -> None:
+    assert parse_config(
+        {"config_version": 1, "policies": []}
+    ).config.warn_on_invalid_automatic_policies
+    parsed = parse_config(
+        {
+            **DEFAULT_CONFIG,
+            "warn_on_invalid_automatic_policies": "yes",
+            "policies": [],
+        }
+    )
+    assert any(issue.path == "warn_on_invalid_automatic_policies" for issue in parsed.issues)
+    assert parsed.config.warn_on_invalid_automatic_policies
+
+
 def policy_config(**overrides: object) -> dict:
     policy = {
         "id": "mining",
@@ -59,7 +87,7 @@ def policy_config(**overrides: object) -> dict:
                 "operator": "gte",
             }
         ],
-        "actions": [{"type": "tag", "tags": ["retired"]}, {"type": "suspend"}],
+        "actions": [{"type": "add_tags", "tags": ["retired"]}, {"type": "suspend"}],
     }
     policy.update(overrides)
     return {
@@ -112,14 +140,25 @@ def test_legacy_scope_format_is_rejected() -> None:
     assert "include_subdecks: unknown field" in str(parsed.issues[0])
     assert not parsed.config.policies
 
+    parsed = parse_config(
+        policy_config(
+            scope={
+                "decks": [{"deck": "Mining", "include_subdecks": True}],
+                "include_suspended": False,
+            }
+        )
+    )
+    assert "include_suspended: unknown field" in str(parsed.issues[0])
+    assert not parsed.config.policies
+
 
 def test_all_decks_scope_round_trip_and_excludes_individual_selectors() -> None:
-    parsed = parse_config(policy_config(scope={"all_decks": True, "include_suspended": True}))
+    parsed = parse_config(policy_config(scope={"all_decks": True}))
     assert not parsed.issues
     policy = parsed.config.policies[0]
     assert policy.scope.all_decks
     assert not policy.scope.decks
-    assert policy_to_dict(policy)["scope"] == {"all_decks": True, "include_suspended": True}
+    assert policy_to_dict(policy)["scope"] == {"all_decks": True}
     for scope in ({"all_decks": False}, {"all_decks": True, "decks": []}, {}):
         assert parse_config(policy_config(scope=scope)).issues
 
@@ -129,15 +168,33 @@ def test_note_type_scope_round_trip_and_validation() -> None:
         {"all_decks": True},
         {"decks": [{"deck": "Mining", "include_subdecks": True}]},
     ):
-        scope = {**deck_scope, "note_types": ["Cloze", " Basic "]}
+        scope = {
+            **deck_scope,
+            "note_types": [
+                {"name": "Cloze"},
+                {"name": " Basic ", "card_types": ["Card 2"]},
+            ],
+        }
         parsed = parse_config(policy_config(scope=scope))
         assert not parsed.issues
-        assert parsed.config.policies[0].scope.note_types == ("Basic", "Cloze")
+        assert parsed.config.policies[0].scope.note_types == (
+            NoteTypeSelector("Basic", ("Card 2",)),
+            NoteTypeSelector("Cloze"),
+        )
         assert policy_to_dict(parsed.config.policies[0])["scope"]["note_types"] == [
-            "Basic",
-            "Cloze",
+            {"name": "Basic", "card_types": ["Card 2"]},
+            {"name": "Cloze"},
         ]
-    for names in ([], ["Basic", " Basic "], [" "], [1], None, "Basic"):
+    for names in (
+        [],
+        [{"name": "Basic"}, {"name": " Basic "}],
+        [{"name": " "}],
+        [{"name": "Basic", "card_types": []}],
+        ["Basic"],
+        [1],
+        None,
+        "Basic",
+    ):
         assert parse_config(policy_config(scope={"all_decks": True, "note_types": names})).issues
 
 
@@ -150,7 +207,7 @@ def test_sibling_conditions_round_trip_and_validate_operators() -> None:
             condition = {"type": kind, "operator": operator}
             parsed = parse_config(
                 policy_config(
-                    scope={"all_decks": True, "include_suspended": True},
+                    scope={"all_decks": True},
                     conditions=[condition],
                 )
             )
@@ -162,13 +219,10 @@ def test_sibling_conditions_round_trip_and_validate_operators() -> None:
         assert parse_config(
             policy_config(conditions=[{"type": kind, "operator": "invalid"}])
         ).issues
-    assert parse_config(
-        policy_config(conditions=[{"type": "sibling_suspension", "operator": "all"}])
-    ).issues
 
 
 def test_scope_summary_only_adds_restricted_note_types() -> None:
-    def scope(names: list[str] | None) -> object:
+    def scope(names: list[dict] | None) -> object:
         return (
             parse_config(
                 policy_config(
@@ -183,9 +237,13 @@ def test_scope_summary_only_adds_restricted_note_types() -> None:
         )
 
     assert describe_scope(scope(None)) == "All decks"
-    assert describe_scope(scope(["Basic"])) == "All decks\nNote type: Basic"
-    assert describe_scope(scope(["Basic", "Cloze"])) == "All decks\n2 note types"
-    assert "Note types: Basic, Cloze" in scope_tooltip(scope(["Cloze", "Basic"]))
+    assert describe_scope(scope([{"name": "Basic"}])) == "All decks\nNote type: Basic"
+    assert (
+        describe_scope(scope([{"name": "Basic"}, {"name": "Cloze"}])) == "All decks\n2 note types"
+    )
+    assert "Note types: Basic, Cloze" in scope_tooltip(
+        scope([{"name": "Cloze"}, {"name": "Basic"}])
+    )
 
 
 def test_all_cards_condition_parses_round_trips_and_must_be_used_alone() -> None:
@@ -261,7 +319,7 @@ def test_malformed_json_fields_produce_repairable_issues(field: str, value: obje
 
 
 @pytest.mark.parametrize("tag", ["two words", "two\twords", "two,words"])
-@pytest.mark.parametrize("kind", ["tag", "remove_tags", "replace_tags"])
+@pytest.mark.parametrize("kind", ["add_tags", "remove_tags", "replace_tags"])
 def test_individual_json_tags_cannot_be_split_by_anki_or_editor(tag: str, kind: str) -> None:
     parsed = parse_config(policy_config(actions=[{"type": kind, "tags": [tag]}]))
     assert "individual tags" in str(parsed.issues[0])
@@ -325,21 +383,20 @@ def test_note_actions_parse_and_round_trip() -> None:
 
 def test_tag_action_parses_multiple_tags_and_round_trips_as_one_action() -> None:
     parsed = parse_config(
-        policy_config(actions=[{"type": "tag", "tags": ["retired", "vocabulary"]}])
+        policy_config(actions=[{"type": "add_tags", "tags": ["retired", "vocabulary"]}])
     )
     policy = parsed.config.policies[0]
 
     assert policy.actions == (TagAction("retired"), TagAction("vocabulary"))
-    assert policy_to_dict(policy)["actions"] == [{"type": "tag", "tags": ["retired", "vocabulary"]}]
+    assert policy_to_dict(policy)["actions"] == [
+        {"type": "add_tags", "tags": ["retired", "vocabulary"]}
+    ]
 
 
 def test_tag_and_suspension_conditions_parse_and_round_trip() -> None:
     parsed = parse_config(
         policy_config(
-            scope={
-                "decks": [{"deck": "Mining", "include_subdecks": True}],
-                "include_suspended": True,
-            },
+            scope={"decks": [{"deck": "Mining", "include_subdecks": True}]},
             conditions=[
                 {
                     "type": "tags",
@@ -368,22 +425,19 @@ def test_tag_and_suspension_conditions_parse_and_round_trip() -> None:
     ]
 
 
-def test_matching_suspended_cards_requires_suspended_scope() -> None:
+def test_matching_suspended_cards_needs_only_a_condition() -> None:
     parsed = parse_config(
         policy_config(conditions=[{"type": "suspension", "operator": "is_suspended"}])
     )
 
-    assert "include_suspended" in str(parsed.issues[0])
-    assert not parsed.config.policies
+    assert not parsed.issues
+    assert parsed.config.policies
 
 
 def test_inverse_and_replacement_actions_parse_and_round_trip() -> None:
     parsed = parse_config(
         policy_config(
-            scope={
-                "decks": [{"deck": "Mining", "include_subdecks": True}],
-                "include_suspended": True,
-            },
+            scope={"decks": [{"deck": "Mining", "include_subdecks": True}]},
             actions=[
                 {"type": "remove_tags", "tags": ["leech"]},
                 {"type": "unsuspend"},
@@ -409,18 +463,15 @@ def test_conflicting_inverse_actions_are_rejected_within_policy() -> None:
     for actions in (
         [{"type": "suspend"}, {"type": "unsuspend"}],
         [
-            {"type": "tag", "tags": ["leech"]},
+            {"type": "add_tags", "tags": ["leech"]},
             {"type": "remove_tags", "tags": ["Leech"]},
         ],
         [
             {"type": "replace_tags", "tags": ["only"]},
-            {"type": "tag", "tags": ["extra"]},
+            {"type": "add_tags", "tags": ["extra"]},
         ],
     ):
-        raw = policy_config(actions=actions)
-        if any(action["type"] == "unsuspend" for action in actions):
-            raw["policies"][0]["scope"]["include_suspended"] = True
-        parsed = parse_config(raw)
+        parsed = parse_config(policy_config(actions=actions))
         assert parsed.issues
         assert not parsed.config.policies
 
@@ -573,11 +624,10 @@ def test_wrong_config_version_fails_closed() -> None:
     assert str(parsed.issues[0]) == "config_version: must be 1"
 
 
-def test_removed_answer_conditions_are_rejected() -> None:
-    for condition_type in ("answer_count", "successful_answers"):
-        parsed = parse_config(policy_config(conditions=[{"type": condition_type, "count": 3}]))
-        assert "unknown condition type" in str(parsed.issues[0])
-        assert not parsed.config.policies
+def test_removed_successful_answers_condition_is_rejected() -> None:
+    parsed = parse_config(policy_config(conditions=[{"type": "successful_answers", "count": 3}]))
+    assert "unknown condition type" in str(parsed.issues[0])
+    assert not parsed.config.policies
 
 
 def test_review_history_condition_parses() -> None:
@@ -611,3 +661,91 @@ def test_serialized_policy_round_trips() -> None:
     round_tripped = parse_config({**policy_config(), "policies": [policy_to_dict(policy)]})
     assert not round_tripped.issues
     assert round_tripped.config.policies == (policy,)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            {"type": "card_flag", "flags": ["none", "purple"]},
+            CardFlagCondition(("none", "purple")),
+        ),
+        (
+            {"type": "answer_count", "count": 20, "operator": "gte"},
+            AnswerCountCondition(20, "gte"),
+        ),
+        (
+            {"type": "correct_answer_count", "count": 10, "operator": "lt"},
+            CorrectAnswerCountCondition(10, "lt"),
+        ),
+        (
+            {"type": "lapse_count", "count": 3, "operator": "eq"},
+            LapseCountCondition(3, "eq"),
+        ),
+        (
+            {"type": "correct_answer_rate", "percent": 80, "operator": "gte"},
+            CorrectAnswerRateCondition(80, "gte"),
+        ),
+        (
+            {"type": "overdue", "days": 30, "operator": "gte"},
+            OverdueCondition(30, "gte"),
+        ),
+        (
+            {"type": "fsrs_stability", "days": 90, "operator": "gt"},
+            FsrsStabilityCondition(90, "gt"),
+        ),
+        (
+            {"type": "fsrs_difficulty", "percent": 70, "operator": "lte"},
+            FsrsDifficultyCondition(70, "lte"),
+        ),
+        (
+            {"type": "fsrs_retrievability", "percent": 60, "operator": "lt"},
+            FsrsRetrievabilityCondition(60, "lt"),
+        ),
+        (
+            {"type": "sm2_ease", "percent": 250, "operator": "eq"},
+            Sm2EaseCondition(250, "eq"),
+        ),
+        (
+            {"type": "age", "days": 7, "source": "last_review", "operator": "gte"},
+            AgeCondition(7, "last_review", "gte"),
+        ),
+    ],
+)
+def test_new_card_conditions_round_trip(raw: dict, expected: object) -> None:
+    parsed = parse_config(policy_config(conditions=[raw]))
+    assert not parsed.issues
+    assert parsed.config.policies[0].conditions == AllConditions((expected,))
+    assert policy_to_dict(parsed.config.policies[0])["conditions"] == [raw]
+
+
+def test_flag_actions_round_trip_and_conflict() -> None:
+    parsed = parse_config(policy_config(actions=[{"type": "set_flag", "flag": "purple"}]))
+    assert not parsed.issues
+    assert parsed.config.policies[0].actions == (SetFlagAction("purple"),)
+    assert policy_to_dict(parsed.config.policies[0])["actions"] == [
+        {"type": "set_flag", "flag": "purple"}
+    ]
+    cleared = parse_config(policy_config(actions=[{"type": "clear_flag"}]))
+    assert cleared.config.policies[0].actions == (ClearFlagAction(),)
+    conflicting = parse_config(
+        policy_config(actions=[{"type": "set_flag", "flag": "red"}, {"type": "clear_flag"}])
+    )
+    assert "different card flags" in str(conflicting.issues[0])
+
+
+def test_legacy_tag_action_name_is_rejected() -> None:
+    parsed = parse_config(policy_config(actions=[{"type": "tag", "tags": ["old"]}]))
+    assert "unknown action type" in str(parsed.issues[0])
+
+
+def test_fsrs_and_sm2_conditions_cannot_be_combined() -> None:
+    parsed = parse_config(
+        policy_config(
+            conditions=[
+                {"type": "fsrs_stability", "days": 30, "operator": "gte"},
+                {"type": "sm2_ease", "percent": 250, "operator": "gte"},
+            ]
+        )
+    )
+    assert "FSRS and SM-2 conditions cannot be used together" in str(parsed.issues[0])

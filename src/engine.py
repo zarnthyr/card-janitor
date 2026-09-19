@@ -11,19 +11,31 @@ from .models import (
     AgeCondition,
     AllCardsCondition,
     AllConditions,
+    AnswerCountCondition,
     AnyConditions,
+    CardFlagCondition,
     CardStateCondition,
+    ClearFlagAction,
     ConditionExpression,
+    CorrectAnswerCountCondition,
+    CorrectAnswerRateCondition,
     DeleteCardAction,
     DeleteNoteAction,
+    FsrsDifficultyCondition,
+    FsrsRetrievabilityCondition,
+    FsrsStabilityCondition,
     IntervalCondition,
+    LapseCountCondition,
     MoveAction,
+    OverdueCondition,
     Policy,
     RemoveTagAction,
     ReplaceTagsAction,
     ReviewHistoryCondition,
+    SetFlagAction,
     SiblingReviewHistoryCondition,
     SiblingSuspensionCondition,
+    Sm2EaseCondition,
     SuspendAction,
     SuspensionCondition,
     TagAction,
@@ -47,6 +59,18 @@ class CardFacts:
     created_at_ms: int
     first_review_ms: int | None
     tags: frozenset[str]
+    note_type_id: int = 0
+    card_type_idx: int = 0
+    flag: int = 0
+    answer_count: int = 0
+    correct_answer_count: int = 0
+    lapses: int = 0
+    overdue_days: int | None = None
+    fsrs_stability: float | None = None
+    fsrs_difficulty_percent: float | None = None
+    fsrs_retrievability_percent: float | None = None
+    sm2_ease_percent: float | None = None
+    last_review_ms: int | None = None
 
     @property
     def home_deck_id(self) -> int:
@@ -88,7 +112,7 @@ class PolicyReport:
     errors: tuple[str, ...] = ()
 
 
-def _matches_number(actual: int, operator: str, expected: int) -> bool:
+def _matches_number(actual: float, operator: str, expected: float) -> bool:
     if operator == "gt":
         return actual > expected
     if operator == "gte":
@@ -113,7 +137,11 @@ def matches_conditions(  # noqa: PLR0911, PLR0912
         return True
     if isinstance(condition, AgeCondition):
         timestamp = (
-            card.first_review_ms if condition.source == "first_review" else card.created_at_ms
+            card.first_review_ms
+            if condition.source == "first_review"
+            else card.last_review_ms
+            if condition.source == "last_review"
+            else card.created_at_ms
         )
         if timestamp is None:
             return False
@@ -126,6 +154,50 @@ def matches_conditions(  # noqa: PLR0911, PLR0912
         if state is None:
             return False
         return state in condition.states
+    if isinstance(condition, CardFlagCondition):
+        flag_names = (
+            "none",
+            "red",
+            "orange",
+            "green",
+            "blue",
+            "pink",
+            "turquoise",
+            "purple",
+        )
+        flag = flag_names[card.flag] if 0 <= card.flag < len(flag_names) else "none"
+        return flag in condition.flags
+    if isinstance(condition, AnswerCountCondition):
+        return _matches_number(card.answer_count, condition.operator, condition.count)
+    if isinstance(condition, CorrectAnswerCountCondition):
+        return _matches_number(card.correct_answer_count, condition.operator, condition.count)
+    if isinstance(condition, LapseCountCondition):
+        return _matches_number(card.lapses, condition.operator, condition.count)
+    if isinstance(condition, CorrectAnswerRateCondition):
+        if not card.answer_count:
+            return False
+        percent = card.correct_answer_count * 100 / card.answer_count
+        return _matches_number(percent, condition.operator, condition.percent)
+    if isinstance(condition, OverdueCondition):
+        return card.overdue_days is not None and _matches_number(
+            card.overdue_days, condition.operator, condition.days
+        )
+    if isinstance(condition, FsrsStabilityCondition):
+        return card.fsrs_stability is not None and _matches_number(
+            card.fsrs_stability, condition.operator, condition.days
+        )
+    if isinstance(condition, FsrsDifficultyCondition):
+        return card.fsrs_difficulty_percent is not None and _matches_number(
+            card.fsrs_difficulty_percent, condition.operator, condition.percent
+        )
+    if isinstance(condition, FsrsRetrievabilityCondition):
+        return card.fsrs_retrievability_percent is not None and _matches_number(
+            card.fsrs_retrievability_percent, condition.operator, condition.percent
+        )
+    if isinstance(condition, Sm2EaseCondition):
+        return card.sm2_ease_percent is not None and _matches_number(
+            card.sm2_ease_percent, condition.operator, condition.percent
+        )
     if isinstance(condition, ReviewHistoryCondition):
         exists = card.first_review_ms is not None
         return exists if condition.operator == "exists" else not exists
@@ -180,12 +252,40 @@ def conditions_need_first_review(condition: ConditionExpression) -> bool:
 
 
 def conditions_need_history(condition: ConditionExpression) -> bool:
-    if isinstance(condition, (ReviewHistoryCondition, SiblingReviewHistoryCondition)):
+    if isinstance(
+        condition,
+        (
+            ReviewHistoryCondition,
+            SiblingReviewHistoryCondition,
+            AnswerCountCondition,
+            CorrectAnswerCountCondition,
+            CorrectAnswerRateCondition,
+        ),
+    ):
         return True
     if isinstance(condition, AgeCondition):
-        return condition.source == "first_review"
+        return condition.source in {"first_review", "last_review"}
     if isinstance(condition, (AllConditions, AnyConditions)):
         return any(conditions_need_history(child) for child in condition.conditions)
+    return False
+
+
+def conditions_need_fsrs(condition: ConditionExpression) -> bool:
+    if isinstance(
+        condition,
+        (FsrsStabilityCondition, FsrsDifficultyCondition, FsrsRetrievabilityCondition),
+    ):
+        return True
+    if isinstance(condition, (AllConditions, AnyConditions)):
+        return any(conditions_need_fsrs(child) for child in condition.conditions)
+    return False
+
+
+def conditions_need_sm2(condition: ConditionExpression) -> bool:
+    if isinstance(condition, Sm2EaseCondition):
+        return True
+    if isinstance(condition, (AllConditions, AnyConditions)):
+        return any(conditions_need_sm2(child) for child in condition.conditions)
     return False
 
 
@@ -204,6 +304,21 @@ def action_is_satisfied(  # noqa: PLR0911
         return card.queue != SUSPENDED_QUEUE
     if isinstance(action.action, MoveAction):
         return card.home_deck_id == action.target_deck_id
+    if isinstance(action.action, SetFlagAction):
+        return (
+            card.flag
+            == {
+                "red": 1,
+                "orange": 2,
+                "green": 3,
+                "blue": 4,
+                "pink": 5,
+                "turquoise": 6,
+                "purple": 7,
+            }[action.action.flag]
+        )
+    if isinstance(action.action, ClearFlagAction):
+        return card.flag == 0
     if isinstance(action.action, DeleteCardAction):
         return False
     if isinstance(action.action, DeleteNoteAction):
@@ -224,8 +339,6 @@ def evaluate_facts(
     in_scope: list[CardFacts] = []
     for card in cards:
         if card.home_deck_id not in deck_ids:
-            continue
-        if not policy.scope.include_suspended and card.queue == SUSPENDED_QUEUE:
             continue
         if card.is_filtered:
             continue

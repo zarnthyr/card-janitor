@@ -137,6 +137,7 @@ def test_save_settings_does_not_change_collection_policies(
                 "config_version": 1,
                 "notify_after_automatic_run": False,
                 "automatic_cleanup_enabled": False,
+                "warn_on_invalid_automatic_policies": True,
                 "debug_logging": True,
             },
         )
