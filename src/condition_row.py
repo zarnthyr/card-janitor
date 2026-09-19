@@ -6,7 +6,7 @@ from __future__ import annotations
 from aqt.qt import (
     QCheckBox,
     QComboBox,
-    QHBoxLayout,
+    QGridLayout,
     QLabel,
     QLineEdit,
     QMenu,
@@ -19,19 +19,41 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
     QWidgetAction,
+    pyqtSignal,
     qconnect,
 )
 
-from .editor_utils import PopupCheckBox, _split_tags, guard_popup_anchor, pad_text_field
+from .editor_utils import (
+    PopupCheckBox,
+    _split_tags,
+    configure_policy_row_layout,
+    guard_popup_anchor,
+    ignore_policy_row_size_hints,
+    pad_text_field,
+    show_text_from_start,
+)
 from .models import (
+    FLAG_NAMES,
+    MAX_COUNT,
     MAX_DAYS,
+    MAX_EASE_PERCENT,
     AgeCondition,
+    AnswerCountCondition,
+    CardFlagCondition,
     CardStateCondition,
     ConditionExpression,
+    CorrectAnswerCountCondition,
+    CorrectAnswerRateCondition,
+    FsrsDifficultyCondition,
+    FsrsRetrievabilityCondition,
+    FsrsStabilityCondition,
     IntervalCondition,
+    LapseCountCondition,
+    OverdueCondition,
     ReviewHistoryCondition,
     SiblingReviewHistoryCondition,
     SiblingSuspensionCondition,
+    Sm2EaseCondition,
     SuspensionCondition,
     TagCondition,
 )
@@ -43,9 +65,19 @@ from .presentation import (
 
 
 class CardStatePicker(QComboBox):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    changed = pyqtSignal()
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        choices: tuple[tuple[str, str], ...] = CARD_STATES,
+        noun: str = "states",
+    ) -> None:
         super().__init__(parent)
-        self._states = ("new",)
+        self._choices = choices
+        self._noun = noun
+        self._states = (choices[0][1],)
         self._checkboxes: dict[str, QCheckBox] = {}
         self._menu = QMenu(self)
         container = QWidget(self._menu)
@@ -54,7 +86,7 @@ class CardStatePicker(QComboBox):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(10, 6, 10, 6)
         layout.setSpacing(4)
-        for label, value in CARD_STATES:
+        for label, value in self._choices:
             checkbox = PopupCheckBox(label, container)
             self._checkboxes[value] = checkbox
             qconnect(
@@ -82,7 +114,7 @@ class CardStatePicker(QComboBox):
         return self._states
 
     def set_states(self, states: tuple[str, ...]) -> None:
-        self._states = tuple(value for _label, value in CARD_STATES if value in states)
+        self._states = tuple(value for _label, value in self._choices if value in states)
         blockers = [QSignalBlocker(checkbox) for checkbox in self._checkboxes.values()]
         for value, checkbox in self._checkboxes.items():
             checkbox.setChecked(value in self._states)
@@ -90,14 +122,14 @@ class CardStatePicker(QComboBox):
         self._update_text()
 
     def _update_text(self) -> None:
-        selected = [label for label, value in CARD_STATES if value in self._states]
-        summary = ", ".join(selected) if selected else "Choose states"
+        selected = [label for label, value in self._choices if value in self._states]
+        summary = ", ".join(selected) if selected else f"Choose {self._noun}"
         self.setItemText(0, summary)
-        self.setToolTip(f"Match cards whose current state is any of: {summary}")
+        self.setToolTip(f"Match cards whose current {self._noun[:-1]} is any of: {summary}")
 
     def _state_toggled(self, state: str, _checked: bool) -> None:
         selected = tuple(
-            value for _label, value in CARD_STATES if self._checkboxes[value].isChecked()
+            value for _label, value in self._choices if self._checkboxes[value].isChecked()
         )
         if not selected:
             blocker = QSignalBlocker(self._checkboxes[state])
@@ -106,6 +138,7 @@ class CardStatePicker(QComboBox):
             return
         self._states = selected
         self._update_text()
+        self.changed.emit()
 
 
 def _add_combo_group(combo: QComboBox, title: str, choices: tuple[tuple[str, str], ...]) -> None:
@@ -121,12 +154,15 @@ def _add_combo_group(combo: QComboBox, title: str, choices: tuple[tuple[str, str
 
 
 class ConditionRow(QWidget):
-    def __init__(
+    # Each supported condition has a small initialization branch by design.
+
+    def __init__(  # noqa: PLR0912
         self, condition: ConditionExpression | None = None, parent: QWidget | None = None
     ) -> None:
         super().__init__(parent)
-        layout = QHBoxLayout(self)
+        layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        configure_policy_row_layout(layout)
         self.number_label = QLabel(self)
         self.number_label.setMinimumWidth(20)
         self.kind = QComboBox(self)
@@ -135,11 +171,32 @@ class ConditionRow(QWidget):
                 "Cards",
                 (
                     ("Age since first review", "age_first_review"),
+                    ("Age since last review", "age_last_review"),
                     ("Age since creation", "age_card_created"),
                     ("Current interval", "interval"),
+                    ("Days overdue", "overdue"),
                     ("Card state", "card_state"),
+                    ("Card flag", "card_flag"),
                     ("Review history", "review_history"),
                     ("Suspension state", "suspension"),
+                ),
+            ),
+            (
+                "Review history",
+                (
+                    ("Answer count", "answer_count"),
+                    ("Correct-answer count", "correct_answer_count"),
+                    ("Correct-answer rate", "correct_answer_rate"),
+                    ("Lapse count", "lapse_count"),
+                ),
+            ),
+            ("SM-2", (("Ease", "sm2_ease"),)),
+            (
+                "FSRS",
+                (
+                    ("Stability", "fsrs_stability"),
+                    ("Difficulty", "fsrs_difficulty"),
+                    ("Retrievability", "fsrs_retrievability"),
                 ),
             ),
             (
@@ -166,6 +223,25 @@ class ConditionRow(QWidget):
         self.days.setMinimumWidth(140)
         self.states = CardStatePicker(self)
         self.states.setMinimumWidth(140)
+        flag_choices = tuple(
+            ("No flag" if name == "none" else name.title(), name) for name in FLAG_NAMES
+        )
+        self.flags = CardStatePicker(self, choices=flag_choices, noun="flags")
+        self.flags.setMinimumWidth(140)
+        self.count = QSpinBox(self)
+        pad_text_field(self.count.lineEdit())
+        self.count.setRange(0, MAX_COUNT)
+        self.count.setMinimumWidth(140)
+        self.percent = QSpinBox(self)
+        pad_text_field(self.percent.lineEdit())
+        self.percent.setRange(0, 100)
+        self.percent.setSuffix(" %")
+        self.percent.setMinimumWidth(140)
+        self.ease = QSpinBox(self)
+        pad_text_field(self.ease.lineEdit())
+        self.ease.setRange(0, MAX_EASE_PERCENT)
+        self.ease.setSuffix(" %")
+        self.ease.setMinimumWidth(140)
         self.tags = QLineEdit(self)
         pad_text_field(self.tags)
         self.tags.setPlaceholderText("tag1, tag2")
@@ -174,25 +250,32 @@ class ConditionRow(QWidget):
         self.value_stack.setMinimumWidth(140)
         self.value_stack.addWidget(self.days)
         self.value_stack.addWidget(self.states)
+        self.value_stack.addWidget(self.flags)
+        self.value_stack.addWidget(self.count)
+        self.value_stack.addWidget(self.percent)
+        self.value_stack.addWidget(self.ease)
         self.value_stack.addWidget(self.tags)
         self.no_value = QWidget(self)
         self.value_stack.addWidget(self.no_value)
         self.remove_button = QPushButton("Remove", self)
         self.remove_button.setMinimumWidth(75)
         self.remove_button.setToolTip("Remove this condition")
-        for widget in (
-            self.number_label,
-            self.kind,
-            self.operator_stack,
-            self.value_stack,
-            self.remove_button,
-        ):
-            layout.addWidget(widget)
+        ignore_policy_row_size_hints(self.kind, self.operator_stack, self.value_stack)
+        layout.addWidget(self.number_label, 0, 0)
+        layout.addWidget(self.kind, 0, 1)
+        layout.addWidget(self.operator_stack, 0, 2)
+        layout.addWidget(self.value_stack, 0, 3)
+        layout.addWidget(self.remove_button, 0, 4)
         selected_states: tuple[str, ...] | None = None
+        selected_flags: tuple[str, ...] | None = None
         selected_tags: tuple[str, ...] | None = None
         selected_operator: str | None = None
         if isinstance(condition, AgeCondition):
-            kind = "age_first_review" if condition.source == "first_review" else "age_card_created"
+            kind = {
+                "first_review": "age_first_review",
+                "last_review": "age_last_review",
+                "card_created": "age_card_created",
+            }[condition.source]
             self.kind.setCurrentIndex(self.kind.findData(kind))
             self.days.setValue(condition.days)
             selected_operator = condition.operator
@@ -203,6 +286,46 @@ class ConditionRow(QWidget):
         elif isinstance(condition, CardStateCondition):
             self.kind.setCurrentIndex(self.kind.findData("card_state"))
             selected_states = condition.states
+        elif isinstance(condition, CardFlagCondition):
+            self.kind.setCurrentIndex(self.kind.findData("card_flag"))
+            selected_flags = condition.flags
+        elif isinstance(
+            condition,
+            (AnswerCountCondition, CorrectAnswerCountCondition, LapseCountCondition),
+        ):
+            kind = {
+                AnswerCountCondition: "answer_count",
+                CorrectAnswerCountCondition: "correct_answer_count",
+                LapseCountCondition: "lapse_count",
+            }[type(condition)]
+            self.kind.setCurrentIndex(self.kind.findData(kind))
+            self.count.setValue(condition.count)
+            selected_operator = condition.operator
+        elif isinstance(condition, CorrectAnswerRateCondition):
+            self.kind.setCurrentIndex(self.kind.findData("correct_answer_rate"))
+            self.percent.setValue(condition.percent)
+            selected_operator = condition.operator
+        elif isinstance(condition, OverdueCondition):
+            self.kind.setCurrentIndex(self.kind.findData("overdue"))
+            self.days.setValue(condition.days)
+            selected_operator = condition.operator
+        elif isinstance(condition, FsrsStabilityCondition):
+            self.kind.setCurrentIndex(self.kind.findData("fsrs_stability"))
+            self.days.setValue(condition.days)
+            selected_operator = condition.operator
+        elif isinstance(condition, (FsrsDifficultyCondition, FsrsRetrievabilityCondition)):
+            kind = (
+                "fsrs_difficulty"
+                if isinstance(condition, FsrsDifficultyCondition)
+                else "fsrs_retrievability"
+            )
+            self.kind.setCurrentIndex(self.kind.findData(kind))
+            self.percent.setValue(condition.percent)
+            selected_operator = condition.operator
+        elif isinstance(condition, Sm2EaseCondition):
+            self.kind.setCurrentIndex(self.kind.findData("sm2_ease"))
+            self.ease.setValue(condition.percent)
+            selected_operator = condition.operator
         elif isinstance(condition, ReviewHistoryCondition):
             self.kind.setCurrentIndex(self.kind.findData("review_history"))
             selected_operator = condition.operator
@@ -233,17 +356,20 @@ class ConditionRow(QWidget):
             self.operator.setCurrentIndex(self.operator.findData(selected_operator))
         if selected_states is not None:
             self.states.set_states(selected_states)
+        if selected_flags is not None:
+            self.flags.set_states(selected_flags)
         if selected_tags is not None:
             self.tags.setText(" ".join(selected_tags))
+            show_text_from_start(self.tags)
 
     def _update_controls(self, _index: int = 0) -> None:
         kind = self.kind.currentData()
         help_text = CONDITION_HELP[kind]
         self.kind.setToolTip(help_text)
         self.operator.clear()
-        if kind == "card_state":
+        if kind in {"card_state", "card_flag"}:
             self.operator_stack.setCurrentWidget(self.fixed_operator)
-            self.value_stack.setCurrentWidget(self.states)
+            self.value_stack.setCurrentWidget(self.states if kind == "card_state" else self.flags)
         elif kind == "review_history":
             self.operator_stack.setCurrentWidget(self.operator)
             self.operator.addItem("exists", "exists")
@@ -272,21 +398,50 @@ class ConditionRow(QWidget):
             self.value_stack.setCurrentWidget(self.no_value)
         else:
             self.operator_stack.setCurrentWidget(self.operator)
-            for label, value in NUMERIC_OPERATOR_LABELS:
+            operators = (
+                tuple(item for item in NUMERIC_OPERATOR_LABELS if item[1] != "eq")
+                if kind.startswith("fsrs_")
+                else NUMERIC_OPERATOR_LABELS
+            )
+            for label, value in operators:
                 self.operator.addItem(label, value)
             self.operator.setCurrentIndex(self.operator.findData("gte"))
-            self.value_stack.setCurrentWidget(self.days)
+            if kind in {"answer_count", "correct_answer_count", "lapse_count"}:
+                self.value_stack.setCurrentWidget(self.count)
+            elif kind in {
+                "correct_answer_rate",
+                "fsrs_difficulty",
+                "fsrs_retrievability",
+            }:
+                self.value_stack.setCurrentWidget(self.percent)
+            elif kind == "sm2_ease":
+                self.value_stack.setCurrentWidget(self.ease)
+            else:
+                self.value_stack.setCurrentWidget(self.days)
         self.operator.setToolTip("Choose how this condition should match")
         self.fixed_operator.setToolTip("A card matches when its state is one of those selected")
         self.days.setToolTip(help_text)
+        self.count.setToolTip(help_text)
+        self.percent.setToolTip(help_text)
+        self.ease.setToolTip(help_text)
         self.tags.setToolTip(help_text)
 
-    def condition(  # noqa: PLR0911
+    def condition(  # noqa: PLR0911, PLR0912
         self,
     ) -> (
         AgeCondition
         | IntervalCondition
         | CardStateCondition
+        | CardFlagCondition
+        | AnswerCountCondition
+        | CorrectAnswerCountCondition
+        | LapseCountCondition
+        | CorrectAnswerRateCondition
+        | OverdueCondition
+        | FsrsStabilityCondition
+        | FsrsDifficultyCondition
+        | FsrsRetrievabilityCondition
+        | Sm2EaseCondition
         | ReviewHistoryCondition
         | TagCondition
         | SuspensionCondition
@@ -296,12 +451,34 @@ class ConditionRow(QWidget):
         kind = self.kind.currentData()
         if kind == "age_first_review":
             return AgeCondition(self.days.value(), "first_review", self.operator.currentData())
+        if kind == "age_last_review":
+            return AgeCondition(self.days.value(), "last_review", self.operator.currentData())
         if kind == "age_card_created":
             return AgeCondition(self.days.value(), "card_created", self.operator.currentData())
         if kind == "interval":
             return IntervalCondition(self.days.value(), self.operator.currentData())
         if kind == "card_state":
             return CardStateCondition(self.states.states())
+        if kind == "card_flag":
+            return CardFlagCondition(self.flags.states())
+        if kind == "answer_count":
+            return AnswerCountCondition(self.count.value(), self.operator.currentData())
+        if kind == "correct_answer_count":
+            return CorrectAnswerCountCondition(self.count.value(), self.operator.currentData())
+        if kind == "lapse_count":
+            return LapseCountCondition(self.count.value(), self.operator.currentData())
+        if kind == "correct_answer_rate":
+            return CorrectAnswerRateCondition(self.percent.value(), self.operator.currentData())
+        if kind == "overdue":
+            return OverdueCondition(self.days.value(), self.operator.currentData())
+        if kind == "fsrs_stability":
+            return FsrsStabilityCondition(self.days.value(), self.operator.currentData())
+        if kind == "fsrs_difficulty":
+            return FsrsDifficultyCondition(self.percent.value(), self.operator.currentData())
+        if kind == "fsrs_retrievability":
+            return FsrsRetrievabilityCondition(self.percent.value(), self.operator.currentData())
+        if kind == "sm2_ease":
+            return Sm2EaseCondition(self.ease.value(), self.operator.currentData())
         if kind == "tags":
             return TagCondition(_split_tags(self.tags.text()), self.operator.currentData())
         if kind == "suspension":
@@ -318,6 +495,10 @@ class ConditionRow(QWidget):
             self.operator,
             self.days,
             self.states,
+            self.flags,
+            self.count,
+            self.percent,
+            self.ease,
             self.tags,
             self.remove_button,
         )

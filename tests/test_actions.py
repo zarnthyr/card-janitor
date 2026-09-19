@@ -7,6 +7,7 @@ from card_janitor.actions import build_execution_plan
 from card_janitor.cleanup_preview import build_preview_rows
 from card_janitor.engine import CardFacts, PolicyReport, ResolvedAction
 from card_janitor.models import (
+    ClearFlagAction,
     DeckSelector,
     DeleteNoteAction,
     IntervalCondition,
@@ -15,6 +16,7 @@ from card_janitor.models import (
     RemoveTagAction,
     ReplaceTagsAction,
     Scope,
+    SetFlagAction,
     SuspendAction,
     TagAction,
     UnsuspendAction,
@@ -153,6 +155,21 @@ def test_build_plan_includes_inverse_actions_and_replacements() -> None:
     assert plan.remove_tags == (("leech", (10,)),)
     assert plan.replace_tags == ((("kept",), (20,)),)
     assert plan.unsuspend_card_ids == (3,)
+
+
+def test_build_plan_includes_card_flags_and_reports_conflicts() -> None:
+    purple = report((ResolvedAction(SetFlagAction("purple")),))
+    plan = build_execution_plan((purple,))
+    assert plan.flags == ((7, (1,)),)
+    assert build_preview_rows(plan, (purple,), {})[0].changes == ("Set purple card flag",)
+
+    cleared = report((ResolvedAction(ClearFlagAction()),))
+    conflicted = build_execution_plan((purple, cleared))
+    assert conflicted.is_empty
+    assert conflicted.conflicted_card_ids == (1,)
+    assert conflicted.conflict_details[0].reasons == (
+        "Different card flags\nPolicy: Clear card flag\nPolicy: Set purple card flag",
+    )
 
 
 def test_note_tag_conflict_applies_across_sibling_cards() -> None:

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from time import perf_counter
+from time import perf_counter, time
 from typing import TYPE_CHECKING
 
 from .engine import (
@@ -13,8 +13,10 @@ from .engine import (
     PolicyReport,
     ResolvedAction,
     action_is_satisfied,
+    conditions_need_fsrs,
     conditions_need_history,
     conditions_need_siblings,
+    conditions_need_sm2,
     evaluate_facts,
 )
 from .log import debug
@@ -22,6 +24,8 @@ from .models import MoveAction, Policy, action_expands_to_siblings
 
 if TYPE_CHECKING:
     from anki.collection import Collection
+
+REVIEW_CARD_TYPE = 2
 
 
 def _resolve_deck_ids(col: Collection, policy: Policy) -> tuple[set[int], list[str]]:
@@ -33,7 +37,7 @@ def _resolve_deck_ids(col: Collection, policy: Policy) -> tuple[set[int], list[s
         name = selector.deck
         deck_id = col.decks.id_for_name(name)
         if deck_id is None:
-            errors.append(f"scope deck does not exist: {name!r}")
+            errors.append(f"deck {name!r} not found")
             continue
         if selector.include_subdecks:
             deck_ids.update(int(value) for value in col.decks.deck_and_child_ids(deck_id))
@@ -51,11 +55,11 @@ def _resolve_actions(
         if isinstance(action, MoveAction):
             deck_id = col.decks.id_for_name(action.deck)
             if deck_id is None:
-                errors.append(f"move destination does not exist: {action.deck!r}")
+                errors.append(f"destination deck {action.deck!r} not found")
                 continue
             deck = col.decks.get(deck_id)
             if deck and deck.get("dyn"):
-                errors.append(f"move destination is a filtered deck: {action.deck!r}")
+                errors.append(f"destination deck {action.deck!r} is filtered")
                 continue
             resolved.append(ResolvedAction(action, int(deck_id)))
         else:
@@ -63,32 +67,103 @@ def _resolve_actions(
     return tuple(resolved), errors
 
 
+def _resolve_note_type_card_types(
+    col: Collection, policy: Policy
+) -> tuple[dict[int, set[int] | None] | None, list[str]]:
+    if policy.scope.note_types is None:
+        return None, []
+    resolved: dict[int, set[int] | None] = {}
+    errors: list[str] = []
+    for selector in policy.scope.note_types:
+        note_type_id = col.models.id_for_name(selector.name)
+        if note_type_id is None:
+            errors.append(f"note type {selector.name!r} not found")
+            continue
+        if selector.card_types is None:
+            resolved[int(note_type_id)] = None
+            continue
+        note_type = col.models.get(note_type_id)
+        card_types = {
+            str(card_type["name"]): int(card_type["ord"])
+            for card_type in note_type.get("tmpls", [])
+        }
+        selected: set[int] = set()
+        for name in selector.card_types:
+            ordinal = card_types.get(name)
+            if ordinal is None:
+                qualified_name = f"{selector.name}::{name}"
+                errors.append(f"card type {qualified_name!r} not found")
+            else:
+                selected.add(ordinal)
+        resolved[int(note_type_id)] = selected
+    return resolved, errors
+
+
+def _fsrs_enabled(col: Collection, deck_ids: set[int]) -> bool:
+    if not deck_ids:
+        return False
+    return bool(col.decks.get_deck_configs_for_update(next(iter(deck_ids))).fsrs)
+
+
+def validate_policy_references(col: Collection, policy: Policy) -> tuple[str, ...]:
+    """Check external references and scheduler compatibility without scanning cards."""
+    deck_ids, errors = _resolve_deck_ids(col, policy)
+    _, action_errors = _resolve_actions(col, policy)
+    _, note_type_errors = _resolve_note_type_card_types(col, policy)
+    errors.extend(action_errors)
+    errors.extend(note_type_errors)
+    needs_fsrs = conditions_need_fsrs(policy.conditions)
+    needs_sm2 = conditions_need_sm2(policy.conditions)
+    fsrs = _fsrs_enabled(col, deck_ids) if needs_fsrs or needs_sm2 else False
+    if needs_fsrs and not fsrs:
+        errors.append("FSRS conditions require FSRS to be enabled")
+    if needs_sm2 and fsrs:
+        errors.append("SM-2 ease conditions require FSRS to be disabled")
+    return tuple(errors)
+
+
 def _load_facts_where(
     col: Collection,
     column: str,
     values: set[int],
     *,
-    note_type_ids: set[int] | None = None,
+    note_type_card_types: dict[int, set[int] | None] | None = None,
     load_history: bool = True,
+    load_fsrs: bool = False,
     eligible_only: bool = False,
-    include_suspended: bool = False,
 ) -> list[CardFacts]:
-    if not values or note_type_ids == set():
+    if not values or note_type_card_types == {}:
         return []
     placeholders = ",".join("?" for _ in values)
     ordered_values = sorted(values)
     note_filter = ""
-    if note_type_ids is not None:
+    if note_type_card_types is not None:
+        note_type_ids = set(note_type_card_types)
         note_filter = f"and n.mid in ({','.join('?' for _ in note_type_ids)})"
         ordered_values.extend(sorted(note_type_ids))
-    history_column = (
-        "min(case when r.ease between 1 and 4 then r.id end)" if load_history else "null"
+
+    first_review = "min(r.id)" if load_history else "null"
+    last_review = "max(r.id)" if load_history else "null"
+    answer_count = "count(r.id)" if load_history else "0"
+    correct_count = (
+        "coalesce(sum(case when r.ease between 2 and 4 then 1 else 0 end), 0)"
+        if load_history
+        else "0"
     )
-    history_join = "left join revlog r on r.cid = c.id" if load_history else ""
+    history_join = (
+        "left join revlog r on r.cid = c.id and r.ease between 1 and 4" if load_history else ""
+    )
     grouping = "group by c.id" if load_history else ""
     eligibility = "and c.odid = 0" if eligible_only else ""
-    if eligible_only and not include_suspended:
-        eligibility += " and c.queue != -1"
+
+    stability = "extract_fsrs_variable(c.data, 's')" if load_fsrs else "null"
+    difficulty = "(extract_fsrs_variable(c.data, 'd') - 1.0) * 100.0 / 9.0" if load_fsrs else "null"
+    retrievability = (
+        "extract_fsrs_retrievability(c.data, c.due, c.ivl, ?, ?, ?) * 100.0"
+        if load_fsrs
+        else "null"
+    )
+    fsrs_args = [int(col.sched.today), int(col.sched.day_cutoff), int(time())] if load_fsrs else []
     rows = col.db.all(
         f"""
 select
@@ -99,17 +174,30 @@ select
     c.queue,
     c.type,
     c.ivl,
+    n.mid,
+    c.ord,
+    c.flags & 7,
+    c.lapses,
+    c.factor / 10.0,
+    c.due,
     n.tags,
-    {history_column} as first_review
+    {first_review} as first_review,
+    {last_review} as last_review,
+    {answer_count} as answer_count,
+    {correct_count} as correct_answer_count,
+    {stability} as fsrs_stability,
+    {difficulty} as fsrs_difficulty,
+    {retrievability} as fsrs_retrievability
 from cards c
 join notes n on n.id = c.nid
 {history_join}
 where {column} in ({placeholders}) {note_filter} {eligibility}
 {grouping}
 """,
+        *fsrs_args,
         *ordered_values,
     )
-    return [
+    facts = [
         CardFacts(
             card_id=int(row[0]),
             note_id=int(row[1]),
@@ -118,30 +206,54 @@ where {column} in ({placeholders}) {note_filter} {eligibility}
             queue=int(row[4]),
             card_type=int(row[5]),
             interval=int(row[6]),
-            tags=frozenset(tag.casefold() for tag in str(row[7]).split()),
+            note_type_id=int(row[7]),
+            card_type_idx=int(row[8]),
+            flag=int(row[9]),
+            lapses=int(row[10]),
+            sm2_ease_percent=float(row[11]) or None,
+            overdue_days=(
+                max(0, int(col.sched.today) - int(row[12]))
+                if int(row[5]) == REVIEW_CARD_TYPE and int(row[12]) <= int(col.sched.today)
+                else None
+            ),
+            tags=frozenset(tag.casefold() for tag in str(row[13]).split()),
             created_at_ms=int(row[0]),
-            first_review_ms=int(row[8]) if row[8] is not None else None,
+            first_review_ms=int(row[14]) if row[14] is not None else None,
+            last_review_ms=int(row[15]) if row[15] is not None else None,
+            answer_count=int(row[16]),
+            correct_answer_count=int(row[17]),
+            fsrs_stability=float(row[18]) if row[18] is not None else None,
+            fsrs_difficulty_percent=float(row[19]) if row[19] is not None else None,
+            fsrs_retrievability_percent=float(row[20]) if row[20] is not None else None,
         )
         for row in rows
+    ]
+    if note_type_card_types is None:
+        return facts
+    return [
+        card
+        for card in facts
+        if note_type_card_types[card.note_type_id] is None
+        or card.card_type_idx in note_type_card_types[card.note_type_id]
     ]
 
 
 def _load_deck_facts(
     col: Collection,
     deck_ids: set[int],
-    note_type_ids: set[int] | None = None,
+    note_type_card_types: dict[int, set[int] | None] | None = None,
     *,
     load_history: bool = True,
-    include_suspended: bool = False,
+    load_fsrs: bool = False,
 ) -> list[CardFacts]:
     return _load_facts_where(
         col,
         "c.did",
         deck_ids,
-        note_type_ids=note_type_ids,
+        note_type_card_types=note_type_card_types,
         load_history=load_history,
+        load_fsrs=load_fsrs,
         eligible_only=True,
-        include_suspended=include_suspended,
     )
 
 
@@ -150,15 +262,15 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
     deck_ids, errors = _resolve_deck_ids(col, policy)
     resolved_actions, action_errors = _resolve_actions(col, policy)
     errors.extend(action_errors)
-    note_type_ids = None
-    if policy.scope.note_types is not None:
-        note_type_ids = set()
-        for name in policy.scope.note_types:
-            note_type_id = col.models.id_for_name(name)
-            if note_type_id is None:
-                errors.append(f"scope note type does not exist: {name!r}")
-            else:
-                note_type_ids.add(int(note_type_id))
+    note_type_card_types, note_type_errors = _resolve_note_type_card_types(col, policy)
+    errors.extend(note_type_errors)
+    needs_fsrs = conditions_need_fsrs(policy.conditions)
+    needs_sm2 = conditions_need_sm2(policy.conditions)
+    fsrs = _fsrs_enabled(col, deck_ids) if needs_fsrs or needs_sm2 else False
+    if needs_fsrs and not fsrs:
+        errors.append("FSRS conditions require FSRS to be enabled")
+    if needs_sm2 and fsrs:
+        errors.append("SM-2 ease conditions require FSRS to be disabled")
     if errors:
         report = PolicyReport(
             policy=policy,
@@ -176,13 +288,15 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
             elapsed_ms=round((perf_counter() - started) * 1000, 2),
         )
         return report
+
     load_history = conditions_need_history(policy.conditions)
+    load_fsrs = conditions_need_fsrs(policy.conditions)
     facts = _load_deck_facts(
         col,
         deck_ids,
-        note_type_ids,
+        note_type_card_types,
         load_history=load_history,
-        include_suspended=policy.scope.include_suspended,
+        load_fsrs=load_fsrs,
     )
     siblings = None
     note_facts = None

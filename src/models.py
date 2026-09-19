@@ -8,6 +8,9 @@ from typing import Any, Literal, TypeAlias
 
 CONFIG_VERSION = 1
 MAX_DAYS = 100000
+MAX_COUNT = 1000000
+MAX_EASE_PERCENT = 1000
+FLAG_NAMES = ("none", "red", "orange", "green", "blue", "pink", "turquoise", "purple")
 
 
 @dataclass(frozen=True)
@@ -27,11 +30,16 @@ class DeckSelector:
 
 
 @dataclass(frozen=True)
+class NoteTypeSelector:
+    name: str
+    card_types: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True)
 class Scope:
     decks: tuple[DeckSelector, ...] = ()
-    include_suspended: bool = False
     all_decks: bool = False
-    note_types: tuple[str, ...] | None = None
+    note_types: tuple[NoteTypeSelector, ...] | None = None
 
     @property
     def selectors(self) -> tuple[DeckSelector, ...]:
@@ -46,7 +54,7 @@ class AllCardsCondition:
 @dataclass(frozen=True)
 class AgeCondition:
     days: int
-    source: Literal["first_review", "card_created"]
+    source: Literal["first_review", "last_review", "card_created"]
     operator: NumericOperator
 
 
@@ -59,6 +67,65 @@ class IntervalCondition:
 @dataclass(frozen=True)
 class CardStateCondition:
     states: tuple[CardState, ...]
+
+
+@dataclass(frozen=True)
+class CardFlagCondition:
+    flags: tuple[CardFlag, ...]
+
+
+@dataclass(frozen=True)
+class AnswerCountCondition:
+    count: int
+    operator: NumericOperator
+
+
+@dataclass(frozen=True)
+class CorrectAnswerCountCondition:
+    count: int
+    operator: NumericOperator
+
+
+@dataclass(frozen=True)
+class LapseCountCondition:
+    count: int
+    operator: NumericOperator
+
+
+@dataclass(frozen=True)
+class CorrectAnswerRateCondition:
+    percent: int
+    operator: NumericOperator
+
+
+@dataclass(frozen=True)
+class OverdueCondition:
+    days: int
+    operator: NumericOperator
+
+
+@dataclass(frozen=True)
+class FsrsStabilityCondition:
+    days: int
+    operator: OrderedNumericOperator
+
+
+@dataclass(frozen=True)
+class FsrsDifficultyCondition:
+    percent: int
+    operator: OrderedNumericOperator
+
+
+@dataclass(frozen=True)
+class FsrsRetrievabilityCondition:
+    percent: int
+    operator: OrderedNumericOperator
+
+
+@dataclass(frozen=True)
+class Sm2EaseCondition:
+    percent: int
+    operator: NumericOperator
 
 
 @dataclass(frozen=True)
@@ -102,6 +169,16 @@ ConditionExpression: TypeAlias = (
     | AgeCondition
     | IntervalCondition
     | CardStateCondition
+    | CardFlagCondition
+    | AnswerCountCondition
+    | CorrectAnswerCountCondition
+    | LapseCountCondition
+    | CorrectAnswerRateCondition
+    | OverdueCondition
+    | FsrsStabilityCondition
+    | FsrsDifficultyCondition
+    | FsrsRetrievabilityCondition
+    | Sm2EaseCondition
     | ReviewHistoryCondition
     | TagCondition
     | SuspensionCondition
@@ -157,6 +234,16 @@ class DeleteNoteAction:
     pass
 
 
+@dataclass(frozen=True)
+class SetFlagAction:
+    flag: UserFlag
+
+
+@dataclass(frozen=True)
+class ClearFlagAction:
+    pass
+
+
 Action: TypeAlias = (
     TagAction
     | RemoveTagAction
@@ -166,6 +253,8 @@ Action: TypeAlias = (
     | MoveAction
     | DeleteCardAction
     | DeleteNoteAction
+    | SetFlagAction
+    | ClearFlagAction
 )
 
 
@@ -185,7 +274,12 @@ class Trigger:
 
 
 NumericOperator: TypeAlias = Literal["gt", "gte", "eq", "lte", "lt"]
+OrderedNumericOperator: TypeAlias = Literal["gt", "gte", "lte", "lt"]
 CardState: TypeAlias = Literal["new", "learning", "review", "relearning"]
+CardFlag: TypeAlias = Literal[
+    "none", "red", "orange", "green", "blue", "pink", "turquoise", "purple"
+]
+UserFlag: TypeAlias = Literal["red", "orange", "green", "blue", "pink", "turquoise", "purple"]
 
 
 @dataclass(frozen=True)
@@ -203,6 +297,7 @@ class AddonConfig:
     config_version: int
     automatic_cleanup_enabled: bool
     notify_after_automatic_run: bool
+    warn_on_invalid_automatic_policies: bool
     debug_logging: bool
     policies: tuple[Policy, ...]
 
@@ -251,10 +346,22 @@ def _bool(data: dict[str, Any], key: str, *, default: bool, path: str) -> bool:
     return value
 
 
-def _nonnegative_int(data: dict[str, Any], key: str, path: str) -> int:
+def _bounded_int(
+    data: dict[str, Any], key: str, path: str, *, maximum: int, minimum: int = 0
+) -> int:
     value = data.get(key)
-    if not _is_int(value) or not 0 <= value <= MAX_DAYS:
-        raise ValueError(f"{path}.{key}: must be an integer between 0 and {MAX_DAYS}")
+    if not _is_int(value) or not minimum <= value <= maximum:
+        raise ValueError(f"{path}.{key}: must be an integer between {minimum} and {maximum}")
+    return value
+
+
+def _numeric_operator(value: object, path: str, *, allow_equal: bool = True) -> str:
+    valid = {"gt", "gte", "lte", "lt"} | ({"eq"} if allow_equal else set())
+    if not isinstance(value, str) or value not in valid:
+        choices = ", ".join(
+            repr(item) for item in ("gt", "gte", "eq", "lte", "lt") if item in valid
+        )
+        raise ValueError(f"{path}: must be {choices}")
     return value
 
 
@@ -282,6 +389,16 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
     | AllCardsCondition
     | IntervalCondition
     | CardStateCondition
+    | CardFlagCondition
+    | AnswerCountCondition
+    | CorrectAnswerCountCondition
+    | LapseCountCondition
+    | CorrectAnswerRateCondition
+    | OverdueCondition
+    | FsrsStabilityCondition
+    | FsrsDifficultyCondition
+    | FsrsRetrievabilityCondition
+    | Sm2EaseCondition
     | ReviewHistoryCondition
     | TagCondition
     | SuspensionCondition
@@ -298,20 +415,24 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
         return AllCardsCondition()
     if condition_type == "age":
         _reject_unknown_keys(value, {"type", "days", "source", "operator"}, path)
-        days = _nonnegative_int(value, "days", path)
+        days = _bounded_int(value, "days", path, maximum=MAX_DAYS)
         source = value.get("source")
-        if not isinstance(source, str) or source not in {"first_review", "card_created"}:
-            raise ValueError(f"{path}.source: must be 'first_review' or 'card_created'")
-        operator = value.get("operator")
-        if not isinstance(operator, str) or operator not in {"gt", "gte", "eq", "lte", "lt"}:
-            raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
+        if not isinstance(source, str) or source not in {
+            "first_review",
+            "last_review",
+            "card_created",
+        }:
+            raise ValueError(
+                f"{path}.source: must be 'first_review', 'last_review', or 'card_created'"
+            )
+        operator = _numeric_operator(value.get("operator"), f"{path}.operator")
         return AgeCondition(days=days, source=source, operator=operator)
     if condition_type == "interval":
         _reject_unknown_keys(value, {"type", "days", "operator"}, path)
-        operator = value.get("operator")
-        if not isinstance(operator, str) or operator not in {"gt", "gte", "eq", "lte", "lt"}:
-            raise ValueError(f"{path}.operator: must be 'gt', 'gte', 'eq', 'lte', or 'lt'")
-        return IntervalCondition(days=_nonnegative_int(value, "days", path), operator=operator)
+        operator = _numeric_operator(value.get("operator"), f"{path}.operator")
+        return IntervalCondition(
+            days=_bounded_int(value, "days", path, maximum=MAX_DAYS), operator=operator
+        )
     if condition_type == "card_state":
         _reject_unknown_keys(value, {"type", "states"}, path)
         states = value.get("states")
@@ -327,6 +448,62 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
                 "'new', 'learning', 'review', or 'relearning'"
             )
         return CardStateCondition(tuple(states))
+    if condition_type == "card_flag":
+        _reject_unknown_keys(value, {"type", "flags"}, path)
+        flags = value.get("flags")
+        if (
+            not isinstance(flags, list)
+            or not flags
+            or any(not isinstance(flag, str) or flag not in FLAG_NAMES for flag in flags)
+            or len(flags) != len(set(flags))
+        ):
+            raise ValueError(f"{path}.flags: must be a non-empty array of unique card flag names")
+        return CardFlagCondition(tuple(flags))
+    count_conditions = {
+        "answer_count": AnswerCountCondition,
+        "correct_answer_count": CorrectAnswerCountCondition,
+        "lapse_count": LapseCountCondition,
+    }
+    if condition_type in count_conditions:
+        _reject_unknown_keys(value, {"type", "count", "operator"}, path)
+        return count_conditions[condition_type](
+            _bounded_int(value, "count", path, maximum=MAX_COUNT),
+            _numeric_operator(value.get("operator"), f"{path}.operator"),
+        )
+    if condition_type == "correct_answer_rate":
+        _reject_unknown_keys(value, {"type", "percent", "operator"}, path)
+        return CorrectAnswerRateCondition(
+            _bounded_int(value, "percent", path, maximum=100),
+            _numeric_operator(value.get("operator"), f"{path}.operator"),
+        )
+    if condition_type == "overdue":
+        _reject_unknown_keys(value, {"type", "days", "operator"}, path)
+        return OverdueCondition(
+            _bounded_int(value, "days", path, maximum=MAX_DAYS),
+            _numeric_operator(value.get("operator"), f"{path}.operator"),
+        )
+    if condition_type == "fsrs_stability":
+        _reject_unknown_keys(value, {"type", "days", "operator"}, path)
+        return FsrsStabilityCondition(
+            _bounded_int(value, "days", path, maximum=MAX_DAYS),
+            _numeric_operator(value.get("operator"), f"{path}.operator", allow_equal=False),
+        )
+    fsrs_percent_conditions = {
+        "fsrs_difficulty": FsrsDifficultyCondition,
+        "fsrs_retrievability": FsrsRetrievabilityCondition,
+    }
+    if condition_type in fsrs_percent_conditions:
+        _reject_unknown_keys(value, {"type", "percent", "operator"}, path)
+        return fsrs_percent_conditions[condition_type](
+            _bounded_int(value, "percent", path, maximum=100),
+            _numeric_operator(value.get("operator"), f"{path}.operator", allow_equal=False),
+        )
+    if condition_type == "sm2_ease":
+        _reject_unknown_keys(value, {"type", "percent", "operator"}, path)
+        return Sm2EaseCondition(
+            _bounded_int(value, "percent", path, maximum=MAX_EASE_PERCENT),
+            _numeric_operator(value.get("operator"), f"{path}.operator"),
+        )
     if condition_type == "review_history":
         _reject_unknown_keys(value, {"type", "operator"}, path)
         operator = value.get("operator")
@@ -381,13 +558,13 @@ def _parse_conditions(value: object, match: object, path: str) -> ConditionExpre
     return AllConditions(conditions) if match == "all" else AnyConditions(conditions)
 
 
-def _parse_action(value: object, path: str) -> tuple[Action, ...]:  # noqa: PLR0911
+def _parse_action(value: object, path: str) -> tuple[Action, ...]:  # noqa: PLR0911, PLR0912
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
     action_type = value.get("type")
     if not isinstance(action_type, str):
         raise ValueError(f"{path}.type: must be a string")
-    if action_type in {"tag", "add_tags"}:
+    if action_type == "add_tags":
         _reject_unknown_keys(value, {"type", "tags"}, path)
         return tuple(TagAction(tag) for tag in _tags(value, path))
     if action_type == "remove_tags":
@@ -416,24 +593,56 @@ def _parse_action(value: object, path: str) -> tuple[Action, ...]:  # noqa: PLR0
     if action_type == "delete_note":
         _reject_unknown_keys(value, {"type"}, path)
         return (DeleteNoteAction(),)
+    if action_type == "set_flag":
+        _reject_unknown_keys(value, {"type", "flag"}, path)
+        flag = value.get("flag")
+        if not isinstance(flag, str) or flag not in FLAG_NAMES[1:]:
+            raise ValueError(f"{path}.flag: must be a named non-empty card flag")
+        return (SetFlagAction(flag),)
+    if action_type == "clear_flag":
+        _reject_unknown_keys(value, {"type"}, path)
+        return (ClearFlagAction(),)
     raise ValueError(f"{path}.type: unknown action type {action_type!r}")
 
 
-def _parse_note_types(names: object, path: str) -> tuple[str, ...]:
-    if not isinstance(names, list) or not names:
+def _parse_note_types(values: object, path: str) -> tuple[NoteTypeSelector, ...]:
+    if not isinstance(values, list) or not values:
         raise ValueError(f"{path}: must be a non-empty array")
-    if any(not isinstance(name, str) or not name.strip() for name in names):
-        raise ValueError(f"{path}: every note type must be a non-empty string")
-    note_types = tuple(sorted((name.strip() for name in names), key=str.casefold))
-    if len(note_types) != len(set(note_types)):
+    selectors: list[NoteTypeSelector] = []
+    for index, value in enumerate(values):
+        selector_path = f"{path}[{index}]"
+        if not isinstance(value, dict):
+            raise ValueError(f"{selector_path}: must be a note type selector object")
+        _reject_unknown_keys(value, {"name", "card_types"}, selector_path)
+        name = _required_string(value, "name", selector_path)
+        card_types_value = value.get("card_types")
+        card_types = None
+        if "card_types" in value:
+            if (
+                not isinstance(card_types_value, list)
+                or not card_types_value
+                or any(
+                    not isinstance(card_type, str) or not card_type.strip()
+                    for card_type in card_types_value
+                )
+            ):
+                raise ValueError(f"{selector_path}.card_types: must be a non-empty array of names")
+            card_types = tuple(
+                sorted((card_type.strip() for card_type in card_types_value), key=str.casefold)
+            )
+            if len(card_types) != len({card_type.casefold() for card_type in card_types}):
+                raise ValueError(f"{selector_path}.card_types: must not contain duplicates")
+        selectors.append(NoteTypeSelector(name, card_types))
+    selectors.sort(key=lambda selector: selector.name.casefold())
+    if len(selectors) != len({selector.name.casefold() for selector in selectors}):
         raise ValueError(f"{path}: must not contain duplicates")
-    return note_types
+    return tuple(selectors)
 
 
 def _parse_scope(value: object, path: str) -> Scope:
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
-    _reject_unknown_keys(value, {"decks", "all_decks", "include_suspended", "note_types"}, path)
+    _reject_unknown_keys(value, {"decks", "all_decks", "note_types"}, path)
     note_types = (
         _parse_note_types(value["note_types"], f"{path}.note_types")
         if "note_types" in value
@@ -445,7 +654,6 @@ def _parse_scope(value: object, path: str) -> Scope:
         return Scope(
             all_decks=True,
             note_types=note_types,
-            include_suspended=_bool(value, "include_suspended", default=False, path=path),
         )
     decks = value.get("decks")
     if not isinstance(decks, list) or not decks:
@@ -470,7 +678,6 @@ def _parse_scope(value: object, path: str) -> Scope:
     return Scope(
         decks=tuple(normalized),
         note_types=note_types,
-        include_suspended=_bool(value, "include_suspended", default=False, path=path),
     )
 
 
@@ -507,10 +714,8 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     triggers = _parse_triggers(value.get("triggers"), f"{path}.triggers")
     scope = _parse_scope(value.get("scope"), f"{path}.scope")
     conditions = _parse_conditions(value.get("conditions"), value.get("match"), path)
-    if not scope.include_suspended and _requires_suspended_scope(conditions):
-        raise ValueError(
-            f"{path}.scope.include_suspended: must be true when matching suspended cards"
-        )
+    if _contains_fsrs_condition(conditions) and _contains_sm2_condition(conditions):
+        raise ValueError(f"{path}.conditions: FSRS and SM-2 conditions cannot be used together")
     actions_value = value.get("actions")
     if not isinstance(actions_value, list) or not actions_value:
         raise ValueError(f"{path}.actions: must be a non-empty array")
@@ -519,10 +724,6 @@ def parse_policy(value: object, index: int = 0) -> Policy:
         for index, action in enumerate(actions_value)
         for parsed_action in _parse_action(action, f"{path}.actions[{index}]")
     )
-    if not scope.include_suspended and any(
-        isinstance(action, UnsuspendAction) and action.target == "card" for action in actions
-    ):
-        raise ValueError(f"{path}.scope.include_suspended: must be true when unsuspending cards")
     delete_actions = [
         action for action in actions if isinstance(action, (DeleteCardAction, DeleteNoteAction))
     ]
@@ -545,6 +746,10 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     removed = {action.tag.casefold() for action in actions if isinstance(action, RemoveTagAction)}
     if added & removed:
         raise ValueError(f"{path}.actions: the same tag cannot be added and removed")
+    flag_values = {action.flag for action in actions if isinstance(action, SetFlagAction)}
+    clear_flag = any(isinstance(action, ClearFlagAction) for action in actions)
+    if len(flag_values) > 1 or (flag_values and clear_flag):
+        raise ValueError(f"{path}.actions: a policy cannot request different card flags")
     return Policy(
         id=policy_id,
         name=name,
@@ -555,13 +760,22 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     )
 
 
-def _requires_suspended_scope(condition: ConditionExpression) -> bool:
-    if isinstance(condition, SiblingSuspensionCondition):
-        return condition.operator == "all"
-    if isinstance(condition, SuspensionCondition):
-        return condition.operator == "is_suspended"
+def _contains_fsrs_condition(condition: ConditionExpression) -> bool:
+    if isinstance(
+        condition,
+        (FsrsStabilityCondition, FsrsDifficultyCondition, FsrsRetrievabilityCondition),
+    ):
+        return True
     if isinstance(condition, (AllConditions, AnyConditions)):
-        return any(_requires_suspended_scope(child) for child in condition.conditions)
+        return any(_contains_fsrs_condition(child) for child in condition.conditions)
+    return False
+
+
+def _contains_sm2_condition(condition: ConditionExpression) -> bool:
+    if isinstance(condition, Sm2EaseCondition):
+        return True
+    if isinstance(condition, (AllConditions, AnyConditions)):
+        return any(_contains_sm2_condition(child) for child in condition.conditions)
     return False
 
 
@@ -572,6 +786,7 @@ def parse_config(value: object) -> ParsedConfig:
             "config_version": CONFIG_VERSION,
             "automatic_cleanup_enabled": True,
             "notify_after_automatic_run": True,
+            "warn_on_invalid_automatic_policies": True,
             "debug_logging": False,
             "policies": [],
         }
@@ -581,6 +796,7 @@ def parse_config(value: object) -> ParsedConfig:
             "config_version",
             "automatic_cleanup_enabled",
             "notify_after_automatic_run",
+            "warn_on_invalid_automatic_policies",
             "debug_logging",
             "policies",
         }
@@ -603,6 +819,11 @@ def parse_config(value: object) -> ParsedConfig:
     if not isinstance(notify, bool):
         issues.append(ConfigIssue("notify_after_automatic_run", "must be a boolean"))
         notify = True
+
+    warn_invalid = value.get("warn_on_invalid_automatic_policies", True)
+    if not isinstance(warn_invalid, bool):
+        issues.append(ConfigIssue("warn_on_invalid_automatic_policies", "must be a boolean"))
+        warn_invalid = True
 
     debug_logging = value.get("debug_logging")
     if not isinstance(debug_logging, bool):
@@ -638,6 +859,7 @@ def parse_config(value: object) -> ParsedConfig:
             config_version=CONFIG_VERSION,
             automatic_cleanup_enabled=automatic_enabled,
             notify_after_automatic_run=notify,
+            warn_on_invalid_automatic_policies=warn_invalid,
             debug_logging=debug_logging,
             policies=tuple(policies),
         ),
@@ -646,7 +868,9 @@ def parse_config(value: object) -> ParsedConfig:
     )
 
 
-def condition_to_dict(condition: ConditionExpression) -> dict[str, Any]:  # noqa: PLR0911
+def condition_to_dict(  # noqa: PLR0911, PLR0912
+    condition: ConditionExpression,
+) -> dict[str, Any]:
     if isinstance(condition, AllCardsCondition):
         return {"type": "all_cards"}
     if isinstance(condition, AgeCondition):
@@ -663,6 +887,46 @@ def condition_to_dict(condition: ConditionExpression) -> dict[str, Any]:  # noqa
             "type": "card_state",
             "states": list(condition.states),
         }
+    if isinstance(condition, CardFlagCondition):
+        return {"type": "card_flag", "flags": list(condition.flags)}
+    if isinstance(condition, AnswerCountCondition):
+        return {"type": "answer_count", "count": condition.count, "operator": condition.operator}
+    if isinstance(condition, CorrectAnswerCountCondition):
+        return {
+            "type": "correct_answer_count",
+            "count": condition.count,
+            "operator": condition.operator,
+        }
+    if isinstance(condition, LapseCountCondition):
+        return {"type": "lapse_count", "count": condition.count, "operator": condition.operator}
+    if isinstance(condition, CorrectAnswerRateCondition):
+        return {
+            "type": "correct_answer_rate",
+            "percent": condition.percent,
+            "operator": condition.operator,
+        }
+    if isinstance(condition, OverdueCondition):
+        return {"type": "overdue", "days": condition.days, "operator": condition.operator}
+    if isinstance(condition, FsrsStabilityCondition):
+        return {
+            "type": "fsrs_stability",
+            "days": condition.days,
+            "operator": condition.operator,
+        }
+    if isinstance(condition, FsrsDifficultyCondition):
+        return {
+            "type": "fsrs_difficulty",
+            "percent": condition.percent,
+            "operator": condition.operator,
+        }
+    if isinstance(condition, FsrsRetrievabilityCondition):
+        return {
+            "type": "fsrs_retrievability",
+            "percent": condition.percent,
+            "operator": condition.operator,
+        }
+    if isinstance(condition, Sm2EaseCondition):
+        return {"type": "sm2_ease", "percent": condition.percent, "operator": condition.operator}
     if isinstance(condition, ReviewHistoryCondition):
         return {"type": "review_history", "operator": condition.operator}
     if isinstance(condition, TagCondition):
@@ -682,7 +946,7 @@ def condition_to_dict(condition: ConditionExpression) -> dict[str, Any]:  # noqa
 
 def action_to_dict(action: Action) -> dict[str, Any]:  # noqa: PLR0911
     if isinstance(action, TagAction):
-        return {"type": "tag", "tags": [action.tag]}
+        return {"type": "add_tags", "tags": [action.tag]}
     if isinstance(action, RemoveTagAction):
         return {"type": "remove_tags", "tags": [action.tag]}
     if isinstance(action, ReplaceTagsAction):
@@ -697,6 +961,10 @@ def action_to_dict(action: Action) -> dict[str, Any]:  # noqa: PLR0911
         return {"type": "delete_card"}
     if isinstance(action, DeleteNoteAction):
         return {"type": "delete_note"}
+    if isinstance(action, SetFlagAction):
+        return {"type": "set_flag", "flag": action.flag}
+    if isinstance(action, ClearFlagAction):
+        return {"type": "clear_flag"}
     raise AssertionError(f"unknown action: {action!r}")
 
 
@@ -717,7 +985,7 @@ def policy_to_dict(policy: Policy) -> dict[str, Any]:
         )
     )
     if added_tags:
-        serialized_actions.append({"type": "tag", "tags": added_tags})
+        serialized_actions.append({"type": "add_tags", "tags": added_tags})
     if removed_tags:
         serialized_actions.append({"type": "remove_tags", "tags": removed_tags})
     serialized_actions.extend(
@@ -740,9 +1008,20 @@ def policy_to_dict(policy: Policy) -> dict[str, Any]:
                     ]
                 }
             ),
-            "include_suspended": policy.scope.include_suspended,
             **(
-                {"note_types": list(policy.scope.note_types)}
+                {
+                    "note_types": [
+                        {
+                            "name": selector.name,
+                            **(
+                                {"card_types": list(selector.card_types)}
+                                if selector.card_types is not None
+                                else {}
+                            ),
+                        }
+                        for selector in policy.scope.note_types
+                    ]
+                }
                 if policy.scope.note_types is not None
                 else {}
             ),

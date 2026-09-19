@@ -109,16 +109,27 @@
             }
           }
         },
-        "include_suspended": {
-          "type": "boolean",
-          "description": "Allow the policy to match cards that are already suspended"
-        },
         "note_types": {
           "type": "array",
           "minItems": 1,
           "uniqueItems": true,
+          "items": {"$ref": "#/$defs/note_type_selector"},
+          "description": "Restrict scope to these note types and optionally their card types; omit to include all current and future note types"
+        }
+      }
+    },
+    "note_type_selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "pattern": "\\S"},
+        "card_types": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
           "items": {"type": "string", "minLength": 1, "pattern": "\\S"},
-          "description": "Restrict scope to these note-type names; omit to include all current and future note types"
+          "description": "Exact card types to include; omit to include all current and future card types"
         }
       }
     },
@@ -139,7 +150,7 @@
           "properties": {
             "type": {"const": "age"},
             "days": {"type": "integer", "minimum": 0, "maximum": 100000},
-            "source": {"enum": ["first_review", "card_created"]},
+            "source": {"enum": ["first_review", "last_review", "card_created"]},
             "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
           }
         },
@@ -165,6 +176,80 @@
               "uniqueItems": true,
               "items": {"enum": ["new", "learning", "review", "relearning"]}
             }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "flags"],
+          "properties": {
+            "type": {"const": "card_flag"},
+            "flags": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {"enum": ["none", "red", "orange", "green", "blue", "pink", "turquoise", "purple"]}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "count", "operator"],
+          "properties": {
+            "type": {"enum": ["answer_count", "correct_answer_count", "lapse_count"]},
+            "count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+            "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "percent", "operator"],
+          "properties": {
+            "type": {"const": "correct_answer_rate"},
+            "percent": {"type": "integer", "minimum": 0, "maximum": 100},
+            "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "days", "operator"],
+          "properties": {
+            "type": {"const": "overdue"},
+            "days": {"type": "integer", "minimum": 0, "maximum": 100000},
+            "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "days", "operator"],
+          "properties": {
+            "type": {"const": "fsrs_stability"},
+            "days": {"type": "integer", "minimum": 0, "maximum": 100000},
+            "operator": {"enum": ["gt", "gte", "lte", "lt"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "percent", "operator"],
+          "properties": {
+            "type": {"enum": ["fsrs_difficulty", "fsrs_retrievability"]},
+            "percent": {"type": "integer", "minimum": 0, "maximum": 100},
+            "operator": {"enum": ["gt", "gte", "lte", "lt"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "percent", "operator"],
+          "properties": {
+            "type": {"const": "sm2_ease"},
+            "percent": {"type": "integer", "minimum": 0, "maximum": 1000},
+            "operator": {"enum": ["gt", "gte", "eq", "lte", "lt"]}
           }
         },
         {
@@ -218,7 +303,7 @@
           "additionalProperties": false,
           "required": ["type", "tags"],
           "properties": {
-            "type": {"enum": ["tag", "add_tags", "remove_tags"]},
+            "type": {"enum": ["add_tags", "remove_tags"]},
             "tags": {
               "type": "array",
               "minItems": 1,
@@ -253,6 +338,23 @@
           "properties": {
             "type": {"enum": ["move", "move_note"]},
             "deck": {"type": "string", "minLength": 1, "pattern": "\\S"}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "flag"],
+          "properties": {
+            "type": {"const": "set_flag"},
+            "flag": {"enum": ["red", "orange", "green", "blue", "pink", "turquoise", "purple"]}
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type"],
+          "properties": {
+            "type": {"const": "clear_flag"}
           }
         }
       ]

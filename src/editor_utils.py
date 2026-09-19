@@ -6,16 +6,36 @@ import re
 from aqt.qt import (
     QCheckBox,
     QEvent,
+    QGridLayout,
     QLineEdit,
     QMenu,
     QMouseEvent,
     QObject,
     QPoint,
+    QSizePolicy,
     QTableWidget,
     QTimer,
     QWidget,
     sip,
 )
+
+POLICY_ROW_MINIMUM_WIDTHS = (20, 165, 140, 140, 75)
+POLICY_ROW_STRETCHES = (0, 4, 3, 3, 0)
+
+
+def configure_policy_row_layout(layout: QGridLayout) -> None:
+    """Keep condition and action controls in the same visual columns."""
+    for column, (minimum, stretch) in enumerate(
+        zip(POLICY_ROW_MINIMUM_WIDTHS, POLICY_ROW_STRETCHES, strict=True)
+    ):
+        layout.setColumnMinimumWidth(column, minimum)
+        layout.setColumnStretch(column, stretch)
+
+
+def ignore_policy_row_size_hints(*widgets: QWidget) -> None:
+    """Let shared grid proportions, rather than control text, size columns."""
+    for widget in widgets:
+        widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
 
 class _InitialTableHeight(QObject):
@@ -123,6 +143,12 @@ def guard_popup_anchor(field: QWidget, menu: QMenu) -> QObject:
 
 def pad_text_field(field: QLineEdit) -> None:
     field.setTextMargins(6, 0, 6, 0)
+
+
+def show_text_from_start(field: QLineEdit) -> None:
+    """Show the beginning of preloaded text until the user moves the cursor."""
+    field.setCursorPosition(0)
+    field.deselect()
 
 
 def _split_tags(value: str) -> tuple[str, ...]:

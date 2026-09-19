@@ -15,8 +15,43 @@ If any policy is invalid, Card Janitor will not clean up until the problem is
 fixed. Invalid policies remain visible in Card Janitor and can be repaired with
 **Edit** or **Edit as JSON**.
 
-Deck names are resolved when a policy is evaluated. A missing or filtered move
-destination is an error.
+The ordinary policy editor checks deck, note-type, card-type and move-deck
+references when saving. It also rejects FSRS conditions while FSRS is disabled,
+and SM-2 ease conditions while FSRS is enabled. Advanced JSON editing can still
+represent an invalid policy; the manager keeps it visible and shows the specific
+reason without allowing cleanup.
+Opening an affected policy shows its saved errors in the editor; Save checks the
+edited policy again and refuses to save while a problem remains.
+The editor does not produce new validation messages while a policy is being
+assembled or repaired. Save is the explicit full validation point. Existing
+saved errors and Save errors are shown in the relevant General, Scope,
+Conditions, or Actions section, with one combined panel directly below that
+section's help text. Multiple messages begin with **Fix the following:** and a
+short list. Only errors that do not belong to one section appear at the top.
+Browse and Preview remain available while editing. Clicking either validates
+only the inputs that operation needs and shows a transient explanation if it
+cannot proceed, without scanning cards first.
+The one immediate validation exception is combining FSRS and SM-2 conditions,
+because that combination cannot work under any scheduler configuration. It is
+an intrinsic policy error: the form shows and clears it immediately, individual
+JSON refuses to apply it with the specific reason, and bulk JSON retains it as
+an invalid policy for repair. Whether FSRS is currently enabled is instead a
+collection-specific check and follows the quieter validation behavior.
+In the individual JSON editor, malformed or schema-invalid JSON remains in the
+JSON view with its full error shown in the visible top panel. Structurally valid
+JSON still applies to the form, even when collection-specific references or
+scheduler requirements are invalid; after applying it, those errors appear in
+the appropriate form section. Bulk
+JSON remains able to store structurally valid policies with collection-specific
+errors so they can be repaired in the manager.
+
+Deck names are resolved when a policy is evaluated. A missing or filtered
+destination deck is an error.
+When enabled in Settings, Card Janitor also checks references in automatic
+policies after the opening sync attempt and warns if a policy needs attention,
+even when its trigger is not due. This lightweight check does not scan cards or
+replace the Last cleanup result. Rows with invalid definitions or references
+are marked with a warning symbol and error-colour tint in the manager.
 
 ## Safety and undo
 
@@ -37,19 +72,18 @@ command.
     {
       "policies": [
         {
-          "id": "retire-mature-cards",
+          "id": "2f87a1d4-956b-4f3c-a80e-d53792a4761b",
           "name": "Retire Mature Cards",
           "triggers": [],
           "scope": {
-            "decks": [{"deck": "Mining", "include_subdecks": true}],
-            "include_suspended": false
+            "decks": [{"deck": "Mining", "include_subdecks": true}]
           },
           "match": "all",
           "conditions": [
             {"type": "interval", "days": 365, "operator": "gte"}
           ],
           "actions": [
-            {"type": "tag", "tags": ["retired"]},
+            {"type": "add_tags", "tags": ["retired"]},
             {"type": "suspend"},
             {"type": "move", "deck": "Retired"}
           ]
@@ -76,11 +110,14 @@ from all checked policies. Select a row and use **Edit** to change that policy;
 **Refresh** recalculates the table. Applying a policy manually does not count as
 that day's automatic cleanup.
 
-**Browse** in the policy editor validates and evaluates the current form without
-saving it, then opens the cards that would require an action in Anki's Browser.
+**Browse** in the policy editor validates and evaluates the current form
+without saving it, then opens every card matching its scope and conditions in
+Anki's Browser. It does not require a policy name or actions.
 **Preview…** beside **Save** opens **Cleanup Preview** with the merged changes from the editor's current
 policy alone. Other policies are not included. A name is optional for preview;
-scope, conditions and actions must still be valid. Neither operation saves or
+scope, conditions and actions must still be usable. If Browse or Preview cannot
+proceed, it shows the relevant errors and places them in their form sections.
+Neither operation saves or
 applies the policy.
 The title identifies the policy, or **Unnamed policy** if no name is entered.
 The single-policy preview shows planned changes without the combined-policy
@@ -98,8 +135,12 @@ or unsaved settings. Paste one policy object, not a whole configuration.
 before discarding changed JSON. Only the form's **Save** persists the policy;
 **Browse** and **Preview…** work in either view without saving.
 Internal IDs are preserved for edited policies and generated for new ones,
-even if pasted JSON contains another ID. Closing a changed policy editor asks
-before discarding its unsaved changes.
+even if pasted JSON contains another ID. Generated IDs are UUIDs rather than
+name-derived labels, so renaming a policy does not change its identity and
+independently shared policies are very unlikely to collide. Bulk JSON preserves
+IDs and rejects duplicates; adding a shared policy through the individual editor
+gives it a fresh ID. Closing a changed policy editor asks before discarding its
+unsaved changes.
 
 ## Automatic triggers
 
@@ -146,18 +187,19 @@ opening/manual sync are uploaded on a later sync, including closing sync.
 Use `"all_decks": true` to cover every current and future deck, or `decks` for
 individual selections. These alternatives cannot be combined. For example:
 
-    "scope": {"all_decks": true, "include_suspended": false}
+    "scope": {"all_decks": true}
 
 `decks` must contain one or more selectors, each with `deck` and
 `include_subdecks`. A recursive selector includes that deck and all current and
 future descendants; an exact selector includes only that deck. Scope is the union
 of these selectors.
-Suspended cards are excluded by default.
+Suspended and non-suspended cards are both eligible. Use a Suspension state
+condition when a policy should include only one of those states.
 Buried cards remain eligible because burial is temporary.
 
 Optionally add `note_types` to restrict scope to one or more note-type names:
 
-    "scope": {"all_decks": true, "note_types": ["Basic", "Cloze"]}
+    "scope": {"all_decks": true, "note_types": [{"name": "Basic"}, {"name": "Cloze"}]}
 
 Cards must satisfy both the deck selection and the note-type selection. Omit
 `note_types` for **All note types**, including types created later. An explicit
@@ -166,7 +208,20 @@ type is reported as a policy error. The compact selector opens a checklist.
 The manager's Scope column shows a single selected type or a count when several
 are selected; hover to see the full list. All note types remains implicit there.
 
-Note-type filtering identifies triggering notes. Notes actions still affect
+Omitting `card_types` from a selected note type includes all its current and
+future card types. To select exact card types, use a non-empty list:
+
+    "note_types": [
+      {"name": "Basic"},
+      {"name": "Basic (and reversed card)", "card_types": ["Card 2"]}
+    ]
+
+Expand a note type in the compact selector to choose card types without adding
+height to the main policy form. Explicit card-type lists exclude future
+card types. A policy referring to a missing or renamed card type is marked as
+invalid and is not applied until it is repaired.
+
+Note-type and card-type filtering identifies triggering cards. Notes actions still affect
 their sibling cards outside the selected decks; all siblings share that note type.
 
 The editor's compact deck selector opens a collapsible tree. Clicking a deck
@@ -200,7 +255,8 @@ are hidden while this option is selected. Choose AND or OR to use conditions.
 
 Age uses completed 24-hour periods. `first_review` is the earliest review-log
 entry with a genuine answer rating. Cards without such history do not match any
-first-review-age comparison. `card_created` uses the creation timestamp embedded
+first-review-age comparison. `last_review` uses the latest genuine answer and
+likewise excludes cards without review history. `card_created` uses the creation timestamp embedded
 in the card ID.
 
 > **Warning:** `card_created` does not mean "imported into this collection." Imported cards usually
@@ -232,6 +288,43 @@ Select one or more Anki states: `new`, `learning`, `review`, or `relearning`.
 A card matches when its current state is one of the selected values. This
 describes the card's current Anki state, not whether it has ever been reviewed.
 
+### Overdue, flags, and accumulated review history
+
+    {"type": "overdue", "days": 30, "operator": "gte"}
+    {"type": "card_flag", "flags": ["none", "red", "purple"]}
+    {"type": "answer_count", "count": 100, "operator": "gte"}
+    {"type": "correct_answer_count", "count": 80, "operator": "gte"}
+    {"type": "correct_answer_rate", "percent": 70, "operator": "lt"}
+    {"type": "lapse_count", "count": 8, "operator": "gte"}
+
+`overdue` matches due Review cards and compares whole overdue days; cards due
+today have value 0. Card flags are `none`, `red`, `orange`, `green`, `blue`,
+`pink`, `turquoise`, and `purple`.
+
+Answer counts use genuine review-log ratings 1 through 4. A correct answer is
+any rating other than Again (ratings 2 through 4); manual/rescheduling entries
+do not count. Correct-answer rate is `correct / all genuine answers * 100`, and
+cards with no genuine answers do not match it. Lapse count uses Anki's
+cumulative per-card lapse value.
+
+### Scheduler metrics
+
+    {"type": "fsrs_stability", "days": 90, "operator": "gte"}
+    {"type": "fsrs_difficulty", "percent": 70, "operator": "lte"}
+    {"type": "fsrs_retrievability", "percent": 60, "operator": "lt"}
+    {"type": "sm2_ease", "percent": 250, "operator": "gte"}
+
+FSRS conditions require FSRS to be enabled. Stability is measured in days;
+difficulty is normalized from FSRS's 1-10 scale to 0-100%; retrievability is
+Anki's current estimate on a 0-100% scale. Floating-point FSRS metrics support
+`gt`, `gte`, `lte`, and `lt`, but not exact equality.
+
+SM-2 ease is the card's ease factor as a percentage (for example, 250%). It is
+available only while FSRS is disabled, avoiding a misleading mix of scheduling
+models. The ordinary editor prevents saving scheduler-incompatible policies.
+Collection-specific scheduler mismatches entered through JSON or caused by a
+later scheduler change are not applied until their requirements are satisfied.
+
 ### Review history
 
     {"type": "review_history", "operator": "not_exists"}
@@ -257,8 +350,7 @@ so every sibling card generated from a note sees the same tags.
 
 Use `is_suspended` or `is_not_suspended`. A suspended card retains its New,
 Learning, Review, or Relearning state, so suspension is separate from the card-state
-condition. A policy that uses `is_suspended` must also set
-`scope.include_suspended` to `true`.
+condition. Without a Suspension state condition, either state can match.
 
 ### Sibling suspension and review history
 
@@ -276,9 +368,6 @@ when those siblings are suspended, buried, or in filtered decks. Scope still
 determines which cards can trigger the policy. For example, `any` suspended can
 match an active in-scope card with a suspended out-of-scope sibling.
 
-`all` suspended requires `scope.include_suspended: true`, since the triggering
-card must also be suspended. The editor enables that setting automatically.
-
 For deleting completely unstudied notes, combine `sibling_review_history` with
 `operator: "none"` and `delete_note`. A card-level `review_history: not_exists`
 condition alone could also delete that card's studied siblings.
@@ -293,8 +382,7 @@ Combining both conditions avoids matching non-suspended sibling cards that share
 note's `leech` tag:
 
     "scope": {
-      "decks": [{"deck": "Mining", "include_subdecks": true}],
-      "include_suspended": true
+      "decks": [{"deck": "Mining", "include_subdecks": true}]
     },
     "match": "all",
     "conditions": [
@@ -332,22 +420,25 @@ to greater than, at least, exactly, at most, and less than.
 
 ## Actions
 
-- `{"type": "tag", "tags": ["retired"]}` adds one or more tags to the note. `add_tags` is also accepted as an alias.
+- `{"type": "add_tags", "tags": ["retired"]}` adds one or more tags to the note.
 - `{"type": "remove_tags", "tags": ["leech"]}` removes one or more tags from the note.
 - `{"type": "replace_tags", "tags": ["reviewed"]}` replaces the note's complete tag set. An empty array clears all tags.
 - `{"type": "suspend"}` suspends the qualifying card.
-- `{"type": "unsuspend"}` unsuspends the qualifying card. The policy scope must include suspended cards.
+- `{"type": "unsuspend"}` unsuspends the qualifying card.
 - `{"type": "move", "deck": "Retired"}` moves the card to an existing normal deck.
 - `{"type": "suspend_note"}` suspends all cards of each matching note.
 - `{"type": "unsuspend_note"}` unsuspends all cards of each matching note.
 - `{"type": "move_note", "deck": "Retired"}` moves all cards of each matching note to an existing normal deck.
 - `{"type": "delete_card"}` deletes the card and removes its note only if no cards remain.
 - `{"type": "delete_note"}` deletes the matching card's note and every card generated from it, including sibling cards outside the selected deck scope.
+- `{"type": "set_flag", "flag": "purple"}` sets the qualifying card's flag. Supported colours are red, orange, green, blue, pink, turquoise, and purple.
+- `{"type": "clear_flag"}` clears the qualifying card's flag.
 
 All tag actions affect notes, so sibling cards share their result. Replacing tags is
 destructive and is highlighted in the policy editor. Overlapping policies are skipped
 as conflicts when they add and remove the same tag, replace a note's tags in
 incompatible ways, or both suspend and unsuspend a card.
+Different requested flags (including setting and clearing) also conflict.
 
 `delete_card` and `delete_note` must each be the policy's only action. Either can
 use automatic triggers, but automatic deletion happens without confirmation.
@@ -357,10 +448,8 @@ with reversible tag, suspend, and move actions.
 
 For **Notes** actions, scope and conditions identify the triggering cards. The
 action then applies to every card of their notes, including siblings outside
-the selected decks or excluded by the scope's suspension setting. Filtered
-cards cannot trigger a policy, but can be affected as siblings of a matching
-note. Note unsuspension does not require including suspended cards in scope
-unless its triggering cards are suspended.
+the selected decks. Filtered cards cannot trigger a policy, but can be affected
+as siblings of a matching note.
 
 Policy counts and **Browse** include sibling cards that require an action,
 including those deleted with a note. An already satisfied triggering card does

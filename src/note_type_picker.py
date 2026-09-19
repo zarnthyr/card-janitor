@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from aqt.qt import (
     QAbstractItemView,
     QEvent,
@@ -16,24 +18,30 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
     QWidgetAction,
+    pyqtSignal,
     qconnect,
 )
 
 from .editor_utils import guard_popup_anchor
 from .picker_state import NoteTypeSelection
 
+if TYPE_CHECKING:
+    from .models import NoteTypeSelector
+
 MAX_SUMMARY_LENGTH = 55
 
 
 class NoteTypePicker(QPushButton):
+    changed = pyqtSignal()
+
     def __init__(
         self,
-        names: list[str],
-        selected: tuple[str, ...] | None,
+        note_types: list[tuple[str, tuple[str, ...]]],
+        selected: tuple[NoteTypeSelector, ...] | None,
         parent: QWidget,
     ) -> None:
         super().__init__(parent)
-        self._state = NoteTypeSelection(names, selected)
+        self._state = NoteTypeSelection(note_types, selected)
         self._menu = QMenu(self)
         self._container = QWidget(self._menu)
         layout = QVBoxLayout(self._container)
@@ -50,13 +58,20 @@ class NoteTypePicker(QPushButton):
         self._root.setToolTip(0, "All current and future note types")
         self.tree.addTopLevelItem(self._root)
         self._root.setExpanded(True)
-        self._items = {}
+        self._items: dict[str, QTreeWidgetItem] = {}
+        self._card_type_items: dict[tuple[str, str], QTreeWidgetItem] = {}
         for name in self._state.names:
             item = QTreeWidgetItem([name])
             item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
             item.setToolTip(0, name)
             self._root.addChild(item)
             self._items[name] = item
+            for card_type in self._state.card_types[name]:
+                child = QTreeWidgetItem([card_type])
+                child.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                child.setToolTip(0, f"{name}: {card_type}")
+                item.addChild(child)
+                self._card_type_items[name, card_type] = child
         layout.addWidget(self.tree)
         action = QWidgetAction(self._menu)
         action.setDefaultWidget(self._container)
@@ -68,7 +83,7 @@ class NoteTypePicker(QPushButton):
         qconnect(self.tree.itemDoubleClicked, self._clicked)
         self._refresh()
 
-    def selected(self) -> tuple[str, ...] | None:
+    def selected(self) -> tuple[NoteTypeSelector, ...] | None:
         return self._state.selected()
 
     def _resize_popup(self) -> None:
@@ -93,9 +108,15 @@ class NoteTypePicker(QPushButton):
     def _clicked(self, item: QTreeWidgetItem, _column: int) -> None:
         if item is self._root:
             self._state.toggle_all()
+        elif item.parent() is self._root:
+            self._state.toggle_note(item.text(0))
         else:
-            self._state.toggle(item.text(0))
+            parent = item.parent()
+            if parent is None:
+                return
+            self._state.toggle_card_type(parent.text(0), item.text(0))
         self._refresh()
+        self.changed.emit()
 
     def _refresh(self) -> None:
         self._root.setCheckState(
@@ -107,9 +128,21 @@ class NoteTypePicker(QPushButton):
             else Qt.CheckState.Unchecked,
         )
         for name, item in self._items.items():
+            note_selection = self._state.note_selection(name)
             item.setCheckState(
                 0,
-                Qt.CheckState.Checked if self._state.contains(name) else Qt.CheckState.Unchecked,
+                Qt.CheckState.Checked
+                if note_selection is None
+                else Qt.CheckState.PartiallyChecked
+                if isinstance(note_selection, set)
+                else Qt.CheckState.Unchecked,
+            )
+        for (name, card_type), item in self._card_type_items.items():
+            item.setCheckState(
+                0,
+                Qt.CheckState.Checked
+                if self._state.card_type_selected(name, card_type)
+                else Qt.CheckState.Unchecked,
             )
         selected = self.selected()
         if selected is None:
@@ -120,11 +153,19 @@ class NoteTypePicker(QPushButton):
             self.setToolTip("Choose one or more note types")
         else:
             summary = (
-                selected[0]
-                if len(selected) == 1 and len(selected[0]) <= MAX_SUMMARY_LENGTH
+                selected[0].name
+                if len(selected) == 1 and len(selected[0].name) <= MAX_SUMMARY_LENGTH
                 else "1 note type"
                 if len(selected) == 1
                 else f"{len(selected)} note types"
             )
             self.setText(summary)
-            self.setToolTip("\n".join(selected) + "\nFuture note types are excluded")
+            details = []
+            for selector in selected:
+                card_types = (
+                    "all current and future card types"
+                    if selector.card_types is None
+                    else ", ".join(selector.card_types)
+                )
+                details.append(f"{selector.name}: {card_types}")
+            self.setToolTip("\n".join(details) + "\nFuture note types are excluded")

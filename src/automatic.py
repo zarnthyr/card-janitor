@@ -14,7 +14,7 @@ from aqt.utils import showWarning, tooltip
 
 from .actions import ExecutionResult, build_execution_plan
 from .configuration import load_config
-from .evaluator import evaluate_policies
+from .evaluator import evaluate_policies, validate_policy_references
 from .execution import execute_approved_reports
 from .log import configure as configure_logging
 from .log import debug, error
@@ -102,6 +102,53 @@ def _automatic_completion_message(*, notify: bool, affected_cards: int, conflict
     return ". ".join(messages) + "."
 
 
+def _automatic_policy_error_message(policy_names: tuple[str, ...]) -> str:
+    if len(policy_names) == 1:
+        return f"Card Janitor: “{policy_names[0]}” was not applied because it has an error."
+    return (
+        f"Card Janitor: {len(policy_names)} automatic policies were not applied because they "
+        "have errors."
+    )
+
+
+def _warn_about_inactive_invalid_policies(parsed: ParsedConfig, eligible_ids: set[str]) -> None:
+    if not getattr(parsed.config, "warn_on_invalid_automatic_policies", False):
+        return
+    collection = mw.col
+    profile = mw.pm.profile
+    policies = tuple(
+        policy
+        for policy in parsed.config.policies
+        if policy.triggers and policy.id not in eligible_ids
+    )
+    if not policies:
+        return
+
+    def validate(col: Collection) -> tuple[tuple[str, tuple[str, ...]], ...]:
+        if col is not collection:
+            return ()
+        invalid = []
+        for policy in policies:
+            errors = validate_policy_references(col, policy)
+            if errors:
+                invalid.append((policy.name, errors))
+        return tuple(invalid)
+
+    def completed(invalid: tuple[tuple[str, tuple[str, ...]], ...]) -> None:
+        if invalid and mw.col is collection and mw.pm.profile is profile:
+            errors = tuple(
+                f"{policy_name}: {item}"
+                for policy_name, policy_errors in invalid
+                for item in policy_errors
+            )
+            error("automatic policy validation failed", errors=errors)
+            _notify_automatic(_automatic_policy_error_message(tuple(name for name, _ in invalid)))
+
+    QueryOp(parent=mw, op=validate, success=completed).failure(
+        lambda exc: error("automatic policy validation failed", reason=str(exc))
+    ).run_in_background()
+
+
 def run_automatic_policies(
     *,
     trigger: AutomaticTrigger = "on_open",
@@ -141,6 +188,8 @@ def run_automatic_policies(
             for item in policy.triggers
         )
     )
+    if "on_open" in events:
+        _warn_about_inactive_invalid_policies(parsed, {policy.id for policy in policies})
     if not policies:
         debug("automatic run skipped", reason="no eligible policies", events=sorted(events))
         return
@@ -230,13 +279,20 @@ def run_automatic_policies(
         if not is_current():
             finish()
             return
-        errors = [f"{report.policy.name}: {item}" for report in reports for item in report.errors]
-        if errors:
+        invalid_reports = tuple(report for report in reports if report.errors)
+        if invalid_reports:
+            errors = [
+                f"{report.policy.name}: {item}"
+                for report in invalid_reports
+                for item in report.errors
+            ]
             record_result(failure="\n".join(errors))
             finish()
             error("automatic run evaluation failed", errors=tuple(errors))
             _notify_automatic(
-                "Card Janitor: an automatic policy has errors; open Card Janitor to repair it",
+                _automatic_policy_error_message(
+                    tuple(report.policy.name for report in invalid_reports)
+                ),
             )
             return
         plan = build_execution_plan(reports, collection)

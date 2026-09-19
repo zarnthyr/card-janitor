@@ -17,6 +17,7 @@ from aqt.operations import CollectionOp, QueryOp
 from aqt.qt import (
     QAbstractItemView,
     QAction,
+    QColor,
     QDialog,
     QDialogButtonBox,
     QEvent,
@@ -401,13 +402,17 @@ class CardJanitorDialog(QDialog):
             header.setSectionResizeMode(column, QHeaderView.ResizeMode.Stretch)
         QTimer.singleShot(0, self._enable_column_resizing)
 
-    def set_dashboard(
+    def set_dashboard(  # noqa: PLR0912
         self,
         parsed: ParsedConfig,
         reports: tuple[PolicyReport, ...],
         checked_keys: set[str] | None = None,
         known_keys: set[str] | None = None,
+        selected_key: str | None = None,
     ) -> None:
+        if selected_key is None:
+            selected = self._selected_record()
+            selected_key = selected.key if selected is not None else None
         definitions_changed = not self._columns_initialized or (
             tuple(record.raw for record in self._parsed.policy_records)
             != tuple(record.raw for record in parsed.policy_records)
@@ -440,7 +445,7 @@ class CardJanitorDialog(QDialog):
             if policy is None:
                 raw = record.raw if isinstance(record.raw, dict) else {}
                 values = (
-                    _raw_policy_name(raw) or f"Invalid policy {record.index + 1}",
+                    "⚠ " + (_raw_policy_name(raw) or f"Invalid policy {record.index + 1}"),
                     "Invalid",
                     "—",
                     "—",
@@ -450,7 +455,7 @@ class CardJanitorDialog(QDialog):
             else:
                 report = dashboard_row.report
                 values = (
-                    policy.name,
+                    ("⚠ " if report is not None and report.errors else "") + policy.name,
                     configured_triggers(policy),
                     describe_scope(policy.scope),
                     describe_conditions(policy.conditions),
@@ -464,6 +469,13 @@ class CardJanitorDialog(QDialog):
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                     )
                 self.table.setItem(row, column, item)
+            invalid = policy is None or bool(
+                dashboard_row.report is not None and dashboard_row.report.errors
+            )
+            if invalid:
+                warning = QColor(210, 45, 45, 48)
+                for column in range(self.table.columnCount()):
+                    self.table.item(row, column).setBackground(warning)
             if policy is None:
                 error_text = "\n".join(str(issue) for issue in record.issues)
                 self.table.item(row, self.COLUMN_COUNT).setToolTip(error_text)
@@ -475,6 +487,9 @@ class CardJanitorDialog(QDialog):
                 if dashboard_row.report and dashboard_row.report.errors:
                     error_text = "\n".join(dashboard_row.report.errors)
                     self.table.item(row, self.COLUMN_COUNT).setToolTip(error_text)
+                    self.table.item(row, self.COLUMN_POLICY).setToolTip(
+                        policy_tooltip(policy) + "\n\nErrors:\n" + error_text
+                    )
         del signal_blocker
         if definitions_changed:
             self._reset_column_sizing()
@@ -482,7 +497,15 @@ class CardJanitorDialog(QDialog):
         self.table.resizeRowsToContents()
         QTimer.singleShot(0, self.table.resizeRowsToContents)
         if self._rows:
-            self.table.selectRow(0)
+            selected_row = next(
+                (
+                    row
+                    for row, dashboard_row in enumerate(self._rows)
+                    if dashboard_row.record.key == selected_key
+                ),
+                0,
+            )
+            self.table.selectRow(selected_row)
         self.content_stack.setCurrentWidget(self.table if self._rows else self.empty_page)
         self._sync_header_check_state()
         self._update_summary()
@@ -579,10 +602,10 @@ class CardJanitorDialog(QDialog):
         reports = self.checked_reports()
         if self._parsed.issues:
             self._close_preview()
-            self.summary.setText(
-                "Configuration needs repair before cleaning up:\n"
-                + "\n".join(f"• {issue}" for issue in self._parsed.issues)
-            )
+            # Invalid rows already carry a warning icon, error tint and the
+            # specific reason in their tooltip/editor. Repeating every parser
+            # issue here overwhelms the useful cleanup summary and status.
+            self.summary.setVisible(False)
             self.view_button.setEnabled(False)
             self.run_button.setEnabled(False)
             return
@@ -601,7 +624,7 @@ class CardJanitorDialog(QDialog):
             self.view_button.setEnabled(False)
             self.run_button.setEnabled(False)
             return
-        errors = [error for report in reports for error in report.errors]
+        has_errors = any(report.errors for report in reports)
         match_counts = Counter(card.card_id for report in reports for card in report.actionable)
         candidate_ids = set(match_counts)
         overlap_count = sum(count > 1 for count in match_counts.values())
@@ -617,17 +640,14 @@ class CardJanitorDialog(QDialog):
             text = f"{card_count_text(conflict_count).capitalize()} with conflicting actions would be skipped."
             self.conflict_summary.setText(text)
             self.conflict_summary.show()
-        if errors:
-            messages.append(
-                "A checked policy has an error. Uncheck it or fix the configuration before cleaning up."
-            )
+        if has_errors:
             self._close_preview()
         elif self._preview_dialog is not None:
             self._preview_dialog.set_rows(build_preview_rows(plan, reports, self._preview_decks()))
         self.summary.setText("\n".join(messages))
-        self.preview_button.setEnabled(not errors)
+        self.preview_button.setEnabled(not has_errors)
         self.view_button.setEnabled(bool(candidate_ids))
-        self.run_button.setEnabled(plan.card_count > 0 and not errors)
+        self.run_button.setEnabled(plan.card_count > 0 and not has_errors)
 
     def _close_preview(self) -> None:
         if self._preview_dialog is not None:
@@ -726,8 +746,8 @@ class CardJanitorDialog(QDialog):
                 dialog.raise_()
                 dialog.activateWindow()
 
-    def _refresh(self) -> None:
-        refresh_on_demand_dialog(self)
+    def _refresh(self, _checked: object = None, *, selected_key: str | None = None) -> None:
+        refresh_on_demand_dialog(self, selected_key=selected_key)
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(self._parsed.config, self)
@@ -766,13 +786,16 @@ class CardJanitorDialog(QDialog):
     def _duplicate_policy(self) -> None:
         record = self._selected_record()
         if record is not None and record.policy is not None:
-            policy = replace(record.policy, id=uuid4().hex, name=record.policy.name + " (copy)")
+            policy = replace(record.policy, id=str(uuid4()), name=record.policy.name + " (copy)")
             self._open_editor(None, initial_policy=policy)
 
     def _remove_policy(self) -> None:
         record = self._selected_record()
         if record is None:
             return
+        row = self.table.currentRow()
+        adjacent_row = row + 1 if row + 1 < len(self._rows) else row - 1
+        remaining_key = self._rows[adjacent_row].record.key if adjacent_row >= 0 else None
         raw = record.raw if isinstance(record.raw, dict) else {}
         name = record.policy.name if record.policy else _raw_policy_name(raw)
         name = name or f"Invalid policy {record.index + 1}"
@@ -790,7 +813,7 @@ class CardJanitorDialog(QDialog):
             showWarning(str(exc), parent=self)
             return
         debug("policy removed", policy_name=name)
-        self._refresh()
+        self._refresh(selected_key=remaining_key)
 
     def _open_editor(
         self, record: PolicyRecord | None, *, initial_policy: Policy | None = None
@@ -873,7 +896,7 @@ class CardJanitorDialog(QDialog):
             policy_id=policy.id,
             operation="updated" if record is not None else "added",
         )
-        self._refresh()
+        self._refresh(selected_key=policy.id)
 
 
 def _show_on_demand_dialog(parsed: ParsedConfig, reports: tuple[PolicyReport, ...]) -> None:
@@ -911,7 +934,7 @@ def open_card_janitor() -> None:
     ).run_in_background()
 
 
-def refresh_on_demand_dialog(dialog: CardJanitorDialog) -> None:
+def refresh_on_demand_dialog(dialog: CardJanitorDialog, *, selected_key: str | None = None) -> None:
     parsed = _load_configured()
     checked = dialog.checked_keys()
     known = dialog.row_keys()
@@ -919,7 +942,7 @@ def refresh_on_demand_dialog(dialog: CardJanitorDialog) -> None:
 
     def on_success(reports: tuple[PolicyReport, ...]) -> None:
         if getattr(mw, ON_DEMAND_DIALOG_ATTR, None) is dialog and dialog.isVisible():
-            dialog.set_dashboard(parsed, reports, checked, known)
+            dialog.set_dashboard(parsed, reports, checked, known, selected_key)
 
     QueryOp(
         parent=dialog,

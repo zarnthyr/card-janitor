@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 from anki.collection import Collection
 from aqt.operations import QueryOp
-from card_janitor import automatic, ui
+from card_janitor import automatic, evaluator, ui
 from card_janitor.actions import CleanupError, build_execution_plan, execute_plan
 from card_janitor.evaluator import evaluate_policy
 from card_janitor.execution import execute_approved_reports
@@ -47,7 +47,7 @@ def test_partial_cleanup_failure_is_grouped_and_recoverable(
                 "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
                 "match": "all",
                 "conditions": [{"type": "tags", "operator": "contains_none", "tags": ["retired"]}],
-                "actions": [{"type": "tag", "tags": ["retired"]}, {"type": "suspend"}],
+                "actions": [{"type": "add_tags", "tags": ["retired"]}, {"type": "suspend"}],
             }
         )
         report = evaluate_policy(collection, policy)
@@ -230,7 +230,7 @@ def test_note_type_scope_filters_triggers_and_preserves_note_siblings(tmp_path: 
 
         scope = {
             "decks": [{"deck": "Source", "include_subdecks": False}],
-            "note_types": [reverse["name"]],
+            "note_types": [{"name": reverse["name"]}],
         }
         report = evaluate(scope, {"type": "delete_note"})
         assert [card.card_id for card in report.qualifying] == [first]
@@ -238,14 +238,35 @@ def test_note_type_scope_filters_triggers_and_preserves_note_siblings(tmp_path: 
         assert (
             len(
                 evaluate(
-                    {"all_decks": True, "note_types": [basic["name"]]}, {"type": "suspend"}
+                    {"all_decks": True, "note_types": [{"name": basic["name"]}]},
+                    {"type": "suspend"},
                 ).actionable
             )
             == 1
         )
         assert len(evaluate({"all_decks": True}, {"type": "suspend"}).actionable) == 3
-        missing = evaluate({"all_decks": True, "note_types": ["Missing"]}, {"type": "suspend"})
-        assert missing.errors == ("scope note type does not exist: 'Missing'",)
+        card_type_only = evaluate(
+            {
+                "all_decks": True,
+                "note_types": [{"name": reverse["name"], "card_types": ["Card 2"]}],
+            },
+            {"type": "suspend"},
+        )
+        assert [card.card_type_idx for card in card_type_only.qualifying] == [1]
+        missing_card_type = evaluate(
+            {
+                "all_decks": True,
+                "note_types": [{"name": reverse["name"], "card_types": ["Missing"]}],
+            },
+            {"type": "suspend"},
+        )
+        missing_card_type_name = f"{reverse['name']}::Missing"
+        assert missing_card_type.errors == (f"card type {missing_card_type_name!r} not found",)
+        missing = evaluate(
+            {"all_decks": True, "note_types": [{"name": "Missing"}]},
+            {"type": "suspend"},
+        )
+        assert missing.errors == ("note type 'Missing' not found",)
         assert not missing.actionable
     finally:
         collection.close()
@@ -364,6 +385,96 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         collection.close()
 
 
+def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path: Path) -> None:
+    collection = Collection(str(tmp_path / "history.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "history"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+        for offset, ease in ((3000, 1), (2000, 3), (1000, 0)):
+            collection.db.execute(
+                "insert into revlog values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                card_id - offset,
+                card_id,
+                -1,
+                ease,
+                1,
+                0,
+                2500,
+                1000,
+                0,
+            )
+        policy = parse_policy(
+            {
+                "id": "history",
+                "name": "History",
+                "triggers": [],
+                "scope": {"all_decks": True},
+                "match": "all",
+                "conditions": [
+                    {"type": "answer_count", "count": 2, "operator": "eq"},
+                    {"type": "correct_answer_count", "count": 1, "operator": "eq"},
+                    {"type": "correct_answer_rate", "percent": 50, "operator": "eq"},
+                    {"type": "age", "source": "last_review", "days": 0, "operator": "gte"},
+                ],
+                "actions": [{"type": "set_flag", "flag": "purple"}],
+            }
+        )
+        report = evaluate_policy(collection, policy, now_ms=card_id)
+        assert [card.card_id for card in report.actionable] == [card_id]
+        assert report.qualifying[0].answer_count == 2
+        assert report.qualifying[0].correct_answer_count == 1
+        result = execute_plan(
+            collection, build_execution_plan((report,), collection), "Set test flag"
+        )
+        assert result.affected_cards == 1
+        assert collection.get_card(card_id).user_flag() == 7
+    finally:
+        collection.close()
+
+
+def test_scheduler_specific_conditions_fail_closed_and_fsrs_sql_handles_missing_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection = Collection(str(tmp_path / "scheduler.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "scheduler"
+        collection.add_note(note, deck_id)
+
+        def policy(condition: dict) -> Policy:
+            return parse_policy(
+                {
+                    "id": "scheduler",
+                    "name": "Scheduler",
+                    "triggers": [],
+                    "scope": {"all_decks": True},
+                    "match": "all",
+                    "conditions": [condition],
+                    "actions": [{"type": "suspend"}],
+                }
+            )
+
+        fsrs_policy = policy({"type": "fsrs_stability", "days": 30, "operator": "gte"})
+        assert evaluate_policy(collection, fsrs_policy).errors == (
+            "FSRS conditions require FSRS to be enabled",
+        )
+        assert not evaluate_policy(
+            collection,
+            policy({"type": "sm2_ease", "percent": 250, "operator": "gte"}),
+        ).errors
+
+        monkeypatch.setattr(evaluator, "_fsrs_enabled", lambda *_args: True)
+        report = evaluate_policy(collection, fsrs_policy)
+        assert not report.errors
+        assert not report.qualifying  # New cards have no FSRS memory state yet.
+    finally:
+        collection.close()
+
+
 def test_delete_action_can_be_undone(tmp_path: Path) -> None:
     collection = Collection(str(tmp_path / "collection.anki2"))
     try:
@@ -469,7 +580,6 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
                 "triggers": [],
                 "scope": {
                     "decks": [{"deck": "Source", "include_subdecks": False}],
-                    "include_suspended": kind == "suspend_note",
                 },
                 "match": "all",
                 "conditions": [{"type": "all_cards"}],
@@ -539,7 +649,7 @@ def test_replace_tags_and_unsuspend_can_be_undone(tmp_path: Path) -> None:
             id="repair-leech",
             name="Repair Leech",
             triggers=(),
-            scope=Scope((DeckSelector("Leeches"),), include_suspended=True),
+            scope=Scope((DeckSelector("Leeches"),)),
             conditions=AllConditions(
                 (
                     TagCondition(("leech",), "contains_any"),
@@ -584,7 +694,6 @@ def test_note_actions_skip_whole_note_on_sibling_conflict(tmp_path: Path) -> Non
                     "triggers": [],
                     "scope": {
                         "decks": [{"deck": deck, "include_subdecks": False}],
-                        "include_suspended": True,
                     },
                     "match": "all",
                     "conditions": [{"type": "all_cards"}],

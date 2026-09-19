@@ -51,19 +51,23 @@ Then install `card-janitor.ankiaddon` from Anki's add-ons screen or by double cl
 Each policy has four parts:
 
 * Triggers — when to apply the policy automatically; None keeps it manual-only
-* Scope — deck selections, optionally restricted to selected note types
+* Scope — deck selections, optionally restricted to selected note types and card types
 * Conditions — card properties, note tags, or sibling suspension/review history, combined with AND/OR
-* Actions — change tags, suspend or unsuspend, move, or delete the qualifying cards
+* Actions — change tags or flags, suspend or unsuspend, move, or delete the qualifying cards
 
 ### Scope
 
 Scope limits a policy to one or more decks. It can optionally include their
-subdecks and cards that are already suspended. Filtered-deck cards are excluded.
+subdecks and restrict matches to selected note types or card types.
+Suspended and non-suspended cards are both eligible; use a Suspension state
+condition to restrict either state. Filtered-deck cards are excluded.
 The compact deck selector opens a collapsible tree. Each deck can include all
 current and future descendants, only itself, or nothing. Partial checks indicate
 an exact selection or a mixed branch.
 The note-type selector defaults to **All note types**, including types created
 later. Selecting specific types restricts the cards matched within those decks.
+Each selected note type includes all its current and future card types by
+default; expand it to choose an exact set of card types instead.
 The manager's Scope column shows note-type restrictions when present; its
 tooltip lists every selected type.
 Choose **All decks** at the tree root to include every current and future deck.
@@ -82,12 +86,21 @@ Choose **All decks** at the tree root to include every current and future deck.
 | --- | --- | --- |
 | All cards | Every card allowed by the selected scope | Must be the policy's only condition |
 | Age since first review | Whole days since the card's first genuine answer | Cards without review history do not match |
+| Age since last review | Whole days since the card's latest genuine answer | Cards without review history do not match |
 | Age since creation | Whole days since the card's original creation timestamp | Imported cards may retain much older creation dates |
 | Current interval | The card's current scheduled interval in days | Supports greater than, at least, exactly, at most, and less than comparisons |
+| Days overdue | Whole days since a Review card became due | New, learning, and future-due cards do not match |
 | Card state | New, Learning, Review, or Relearning cards | One or more states can be selected |
+| Card flag | Unflagged cards or selected Anki flag colours | One or more values can be selected |
 | Review history | Whether the card has ever received a genuine answer | History remains after a studied card is reset to New |
+| Answer count | Number of genuine review-log answers | Manual/rescheduling log entries are excluded |
+| Correct-answer count | Number of answers other than Again | Uses the card's accumulated review log |
+| Correct-answer rate | Correct answers as a percentage of genuine answers | Cards with no answers do not match |
+| Lapse count | The card's cumulative Anki lapse count | Useful for periodic leech housekeeping |
+| FSRS stability, difficulty, retrievability | Current FSRS memory-state metrics | Require FSRS; equality is deliberately unavailable for floating-point values |
+| SM-2 ease | The card's ease percentage | Available only while FSRS is disabled |
 | Note tags | Notes containing any, all, or none of the selected tags | Tags are shared by sibling cards |
-| Suspension state | Suspended or non-suspended cards | Matching suspended cards also requires the scope option |
+| Suspension state | Suspended or non-suspended cards | Omit this condition to allow either state |
 | Sibling suspension | All, any, or none of a note's cards are suspended | Checks every card of the note, including cards outside scope |
 | Sibling review history | None, any, or all of a note's cards have been studied | Checks every card of the note, including cards outside scope |
 
@@ -99,6 +112,12 @@ and filtered siblings. Use **Sibling review history → none studied** when
 deleting notes that must be completely unstudied, rather than checking only
 the matching card's review history.
 
+The editor refuses to save policies whose FSRS or SM-2 conditions are
+incompatible with the collection's current scheduler. Policies entered through
+JSON, or made invalid by a later scheduler change, remain visible with their
+reason shown in the manager and are not applied until the problem is fixed.
+Opening an affected policy also shows its saved errors in the relevant section.
+
 ### Actions
 
 Matching cards can be:
@@ -106,6 +125,7 @@ Matching cards can be:
 * given, stripped of, or assigned an exact set of tags — tags belong to notes, so sibling cards share them
 * suspended or unsuspended
 * moved to another existing deck
+* assigned a selected card flag, or have its flag cleared
 * deleted individually, or deleted together with their complete note and every sibling card — deletion must be the policy's only action
 
 Choose **Cards** to act on matching cards, or **Notes** to suspend, unsuspend,
@@ -169,17 +189,25 @@ Policies can be created and repaired in the manager.
 Use **Duplicate…** to start a new policy from an existing one. Inside Add/Edit,
 **Edit as JSON…** edits that individual policy's unsaved settings; **Apply**
 updates the unsaved form, while **Cancel/Escape** returns to the unchanged form.
-Only the form's **Save** commits the policy. **Browse** opens candidate cards;
+Only the form's **Save** commits the policy. **Browse** opens every card
+matching the current scope and conditions without requiring a name or actions;
 **Preview…** beside **Save** shows planned changes from the editor's current policy alone, excluding
 other policies. Both work in the form and JSON views without saving. Preview
 does not require a policy name. New policies start with empty condition and action
-lists; choose conditions or **All cards**, and add at least one action.
-Internal IDs are managed automatically. Closing a
-changed policy editor asks before discarding edits.
+lists; choose conditions or **All cards**, and add at least one action. Browse,
+Preview, and Save are explicit validation points; Browse and Preview show a
+concise message if their required inputs are not usable. The editor otherwise
+waits before presenting new validation errors while a policy is being built or
+repaired, except for combinations such as FSRS with SM-2 that can never work.
+Internal IDs are generated UUIDs and managed automatically. Individual JSON
+imports receive the draft's fresh ID; bulk JSON preserves IDs and rejects
+duplicates. Closing a changed policy editor asks before discarding edits.
 
-**Settings…** controls automatic cleanup, notifications and debug logging.
+**Settings…** controls automatic cleanup, notifications, startup policy warnings,
+and debug logging.
 Turn off **Enable automatic cleanup** to pause all triggers without changing
-policies; manual cleanup remains available. The manager's
+policies; manual cleanup remains available. Notification and startup-warning
+choices are retained but disabled until automatic cleanup is re-enabled. The manager's
 **Edit as JSON…** opens the current
 collection's policies for advanced editing.
 
@@ -206,7 +234,7 @@ See [policies.md](./docs/policies.md) for the complete policy schema and example
 * Tags belong to notes in Anki, so tagging a qualifying card tags its note and any sibling cards
 * First-review age cannot recover review history that was deleted or omitted during import
 * Anki does not store a reliable per-card timestamp for when a card was imported into the current collection
-* Decks are configured by name, so renamed or missing decks cause that policy to fail closed
+* Decks, note types, and card types are configured by name, so a policy using a missing name is not applied until it is repaired; the optional startup warning checks automatic policies after opening sync
 * Notification and debug settings are shared across Anki profiles on the same installation
 
 ## Development

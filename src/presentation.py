@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from html import escape
+from typing import Literal
 from urllib.parse import quote
 
 from aqt.qt import QLabel, QWidget
@@ -14,20 +15,33 @@ from .models import (
     AgeCondition,
     AllCardsCondition,
     AllConditions,
+    AnswerCountCondition,
     AnyConditions,
+    CardFlagCondition,
     CardStateCondition,
+    ClearFlagAction,
     ConditionExpression,
+    CorrectAnswerCountCondition,
+    CorrectAnswerRateCondition,
     DeleteCardAction,
     DeleteNoteAction,
+    FsrsDifficultyCondition,
+    FsrsRetrievabilityCondition,
+    FsrsStabilityCondition,
     IntervalCondition,
+    LapseCountCondition,
     MoveAction,
+    NoteTypeSelector,
+    OverdueCondition,
     Policy,
     RemoveTagAction,
     ReplaceTagsAction,
     ReviewHistoryCondition,
     Scope,
+    SetFlagAction,
     SiblingReviewHistoryCondition,
     SiblingSuspensionCondition,
+    Sm2EaseCondition,
     SuspendAction,
     SuspensionCondition,
     TagAction,
@@ -51,18 +65,32 @@ CARD_STATES = (
     ("Relearning", "relearning"),
 )
 CONDITION_HELP = {
-    "all_cards": "Every card allowed by the selected scope",
     "age_first_review": (
         "Elapsed whole days since the card's earliest genuine answer in Anki's review log"
+    ),
+    "age_last_review": (
+        "Elapsed whole days since the card's most recent genuine answer in Anki's review log"
     ),
     "age_card_created": (
         "Elapsed whole days since the original creation timestamp stored in the card ID. "
         "Imported cards may appear much older."
     ),
     "interval": "The card's current Anki interval in days. New cards normally have interval 0.",
+    "overdue": "Whole days since a review card became due; only due review cards can match.",
     "card_state": (
         "The card's current scheduling state. This does not indicate whether it has review history."
     ),
+    "card_flag": "The card's current Anki flag colour, including no flag",
+    "answer_count": "Number of genuine answers in the card's review log (ratings 1-4)",
+    "correct_answer_count": "Number of non-Again answers in the card's review log",
+    "correct_answer_rate": (
+        "Percentage of genuine answers that were not Again. Cards with no answers do not match."
+    ),
+    "lapse_count": "The card's cumulative lapse count stored by Anki",
+    "sm2_ease": "The card's SM-2 ease percentage",
+    "fsrs_stability": "The card's current FSRS stability in days",
+    "fsrs_difficulty": "The card's current FSRS difficulty, normalized to 0-100%",
+    "fsrs_retrievability": "The card's current estimated FSRS retrievability percentage",
     "review_history": "Whether Anki's review log contains a genuine answer for the card",
     "tags": "Tags on the card's note. Sibling cards share the same tags.",
     "suspension": "Whether the card is currently suspended from Anki's schedule",
@@ -107,6 +135,10 @@ def describe_action(action: Action) -> str:  # noqa: PLR0911
         return "Delete matching cards"
     if isinstance(action, DeleteNoteAction):
         return "Delete matching notes and all their cards"
+    if isinstance(action, SetFlagAction):
+        return f"Set {action.flag} card flag"
+    if isinstance(action, ClearFlagAction):
+        return "Clear card flag"
     message = f"unknown cleanup action: {action!r}"
     raise AssertionError(message)
 
@@ -129,7 +161,7 @@ def describe_scope(scope: Scope) -> str:
     if scope.note_types is None:
         return decks
     types = (
-        f"Note type: {scope.note_types[0]}"
+        f"Note type: {_describe_note_type(scope.note_types[0])}"
         if len(scope.note_types) == 1
         else f"{len(scope.note_types)} note types"
     )
@@ -140,8 +172,12 @@ def scope_tooltip(scope: Scope) -> str:
     return "\n".join(
         (
             f"Decks: {_describe_decks(scope)}",
-            f"Note types: {', '.join(scope.note_types) if scope.note_types is not None else 'All note types'}",
-            f"Include suspended cards: {'Yes' if scope.include_suspended else 'No'}",
+            "Note types: "
+            + (
+                ", ".join(_describe_note_type(selector) for selector in scope.note_types)
+                if scope.note_types is not None
+                else "All note types"
+            ),
         )
     )
 
@@ -149,7 +185,8 @@ def scope_tooltip(scope: Scope) -> str:
 def policy_tooltip(policy: Policy) -> str:
     decks = _describe_decks(policy.scope)
     types = (
-        f" with note types {', '.join(policy.scope.note_types)}"
+        " with note types "
+        + ", ".join(_describe_note_type(selector) for selector in policy.scope.note_types)
         if policy.scope.note_types is not None
         else ""
     )
@@ -160,21 +197,41 @@ def policy_tooltip(policy: Policy) -> str:
     )
 
 
-def describe_conditions(  # noqa: PLR0911
+def describe_conditions(  # noqa: PLR0911, PLR0912
     condition: ConditionExpression, *, nested: bool = False
 ) -> str:
     if isinstance(condition, AllCardsCondition):
         return "All cards"
     if isinstance(condition, AgeCondition):
-        source = (
-            "Age since first review" if condition.source == "first_review" else "Age since creation"
-        )
+        source = {
+            "first_review": "Age since first review",
+            "last_review": "Age since last review",
+            "card_created": "Age since creation",
+        }[condition.source]
         return f"{source} {NUMERIC_OPERATOR_SYMBOLS[condition.operator]} {condition.days} days"
     if isinstance(condition, IntervalCondition):
         return f"Interval {NUMERIC_OPERATOR_SYMBOLS[condition.operator]} {condition.days} days"
     if isinstance(condition, CardStateCondition):
         states = ", ".join(state.capitalize() for state in condition.states)
         return f"Card state is {states}"
+    if isinstance(condition, CardFlagCondition):
+        flags = ", ".join("No flag" if flag == "none" else flag.title() for flag in condition.flags)
+        return f"Card flag is {flags}"
+    numeric = (
+        (AnswerCountCondition, "Answer count", "", "count"),
+        (CorrectAnswerCountCondition, "Correct-answer count", "", "count"),
+        (LapseCountCondition, "Lapse count", "", "count"),
+        (CorrectAnswerRateCondition, "Correct-answer rate", "%", "percent"),
+        (OverdueCondition, "Days overdue", " days", "days"),
+        (FsrsStabilityCondition, "FSRS stability", " days", "days"),
+        (FsrsDifficultyCondition, "FSRS difficulty", "%", "percent"),
+        (FsrsRetrievabilityCondition, "FSRS retrievability", "%", "percent"),
+        (Sm2EaseCondition, "SM-2 ease", "%", "percent"),
+    )
+    for condition_type, label, suffix, attribute in numeric:
+        if isinstance(condition, condition_type):
+            value = getattr(condition, attribute)
+            return f"{label} {NUMERIC_OPERATOR_SYMBOLS[condition.operator]} {value}{suffix}"
     if isinstance(condition, ReviewHistoryCondition):
         operator = "exists" if condition.operator == "exists" else "does not exist"
         return f"Review history {operator}"
@@ -201,6 +258,12 @@ def describe_conditions(  # noqa: PLR0911
         return f"({description})" if nested else description
     message = f"unknown cleanup condition: {condition!r}"
     raise AssertionError(message)
+
+
+def _describe_note_type(selector: NoteTypeSelector) -> str:
+    if selector.card_types is None:
+        return selector.name
+    return f"{selector.name} ({', '.join(selector.card_types)})"
 
 
 TRIGGER_LABELS = {
@@ -329,15 +392,20 @@ def trigger_tooltip(triggers: tuple[Trigger, ...]) -> str:
     )
 
 
-def warning_panel(text: str, parent: QWidget, *, destructive: bool = False) -> QLabel:
-    panel = QLabel(f"⚠ {text}", parent)
+def warning_panel(
+    text: str,
+    parent: QWidget,
+    *,
+    kind: Literal["info", "warning", "error"] = "warning",
+) -> QLabel:
+    icon = "ⓘ" if kind == "info" else "⚠"
+    panel = QLabel(f"{icon} {text}", parent)
     panel.setWordWrap(True)
-    if destructive:
-        background = "rgba(210, 45, 45, 42)"
-        border = "rgba(210, 45, 45, 145)"
-    else:
-        background = "rgba(230, 160, 0, 35)"
-        border = "rgba(230, 160, 0, 120)"
+    background, border = {
+        "info": ("rgba(45, 125, 210, 32)", "rgba(45, 125, 210, 115)"),
+        "warning": ("rgba(230, 160, 0, 35)", "rgba(230, 160, 0, 120)"),
+        "error": ("rgba(210, 45, 45, 42)", "rgba(210, 45, 45, 145)"),
+    }[kind]
     panel.setStyleSheet(
         f"background-color: {background};"
         f"border: 1px solid {border};"

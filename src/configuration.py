@@ -16,6 +16,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "config_version": CONFIG_VERSION,
     "automatic_cleanup_enabled": True,
     "notify_after_automatic_run": True,
+    "warn_on_invalid_automatic_policies": True,
     "debug_logging": False,
 }
 DEFAULT_CONFIG: dict[str, Any] = {**DEFAULT_SETTINGS, "policies": []}
@@ -129,6 +130,7 @@ def save_settings(
     automatic_cleanup_enabled: bool = True,
     notify_after_automatic_run: bool,
     debug_logging: bool,
+    warn_on_invalid_automatic_policies: bool = True,
 ) -> None:
     """Update add-on-wide settings without changing collection policies."""
     raw = load_raw_settings()
@@ -140,5 +142,6 @@ def save_settings(
     updated["config_version"] = CONFIG_VERSION
     updated["automatic_cleanup_enabled"] = automatic_cleanup_enabled
     updated["notify_after_automatic_run"] = notify_after_automatic_run
+    updated["warn_on_invalid_automatic_policies"] = warn_on_invalid_automatic_policies
     updated["debug_logging"] = debug_logging
     mw.addonManager.writeConfig(ADDON_MODULE, updated)

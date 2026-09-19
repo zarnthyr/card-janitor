@@ -93,8 +93,8 @@ The note-action fixtures use a two-card note type. **Dev — Suspend Note**,
 their in-scope triggering card already satisfies the action, while a sibling
 in **Card Janitor Test::Outside Scope** needs updating. Browse should show that
 sibling, cleanup should update it, and Undo should restore its previous state
-or deck. Note unsuspension deliberately excludes suspended triggering cards
-from scope while still updating its suspended sibling.
+or deck. The unsuspension fixture uses an active in-scope trigger and a suspended
+out-of-scope sibling.
 These policies restrict scope to **Card Janitor Test Siblings**. Confirm the
 editor loads that selection and the manager shows it in the Scope column.
 Changing the selection to **Basic** should show no matches for these fixtures.
@@ -103,6 +103,14 @@ checks. Counts remain one each. **Dev — Unsuspend Note** should match through
 `any` suspended despite its suspended sibling being outside scope. Changing
 that condition to `none` should show no matches. The other two fixtures check
 `none` studied across both cards of the note.
+
+Before a release that changes the policy model or editor, also spot-check the
+new controls in the packaged add-on: exact card-type scope, suspended-card
+matching with and without a Suspension state condition, one FSRS or SM-2 metric
+appropriate to the profile's scheduler, and setting then clearing a card flag.
+Confirm an incompatible FSRS/SM-2 combination is rejected, and that a missing
+deck, note type, card type, or move destination remains visible for repair but
+cannot be applied.
 
 ## Cleanup preview smoke test
 

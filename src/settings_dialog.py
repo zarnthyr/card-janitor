@@ -47,6 +47,17 @@ class SettingsDialog(QDialog):
         )
         self.notify.setChecked(config.notify_after_automatic_run)
         automatic_layout.addWidget(self.notify)
+        self.warn_invalid = QCheckBox(
+            "Warn on profile open when automatic policies need attention",
+            automatic_group,
+        )
+        self.warn_invalid.setChecked(config.warn_on_invalid_automatic_policies)
+        self.warn_invalid.setToolTip(
+            "Check automatic policy references after opening sync, without scanning cards"
+        )
+        automatic_layout.addWidget(self.warn_invalid)
+        qconnect(self.automatic_enabled.toggled, self._update_automatic_options)
+        self._update_automatic_options(self.automatic_enabled.isChecked())
         layout.addWidget(automatic_group)
 
         troubleshooting_group = QGroupBox("Troubleshooting", self)
@@ -67,16 +78,22 @@ class SettingsDialog(QDialog):
         save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         QWidget.setTabOrder(self.automatic_enabled, self.notify)
-        QWidget.setTabOrder(self.notify, self.debug_logging)
+        QWidget.setTabOrder(self.notify, self.warn_invalid)
+        QWidget.setTabOrder(self.warn_invalid, self.debug_logging)
         QWidget.setTabOrder(self.debug_logging, save_button)
         QWidget.setTabOrder(save_button, cancel_button)
         QTimer.singleShot(0, self.automatic_enabled.setFocus)
+
+    def _update_automatic_options(self, enabled: bool) -> None:
+        self.notify.setEnabled(enabled)
+        self.warn_invalid.setEnabled(enabled)
 
     def _save(self) -> None:
         try:
             save_settings(
                 automatic_cleanup_enabled=self.automatic_enabled.isChecked(),
                 notify_after_automatic_run=self.notify.isChecked(),
+                warn_on_invalid_automatic_policies=self.warn_invalid.isChecked(),
                 debug_logging=self.debug_logging.isChecked(),
             )
         except ConfigWriteError as exc:
@@ -90,6 +107,7 @@ class SettingsDialog(QDialog):
             "settings saved",
             automatic_cleanup_enabled=self.automatic_enabled.isChecked(),
             notify_after_automatic_run=self.notify.isChecked(),
+            warn_on_invalid_automatic_policies=self.warn_invalid.isChecked(),
             debug_logging=self.debug_logging.isChecked(),
         )
         self.accept()
