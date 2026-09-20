@@ -86,6 +86,10 @@ class CleanupError(RuntimeError):
     """Cleanup failed; earlier backend operations may have completed."""
 
 
+class _UndoMergeError(RuntimeError):
+    """A completed backend operation could not be merged into the cleanup entry."""
+
+
 def _conditions_are_unrestricted(condition: object) -> bool:
     if isinstance(condition, AllCardsCondition):
         return True
@@ -378,25 +382,23 @@ def execute_plan(col: Collection, plan: ExecutionPlan, undo_name: str) -> Execut
     for note_id in plan.delete_note_ids:
         affected_card_ids.update(int(card_id) for card_id in col.card_ids_of_note(note_id))
     try:
-        _apply_plan(col, plan)
-    except Exception as exc:
-        try:
-            col.merge_undo_entries(undo_target)
-        except Exception:
-            exception("failed to group undo entries after cleanup failure")
-            recovery = "Use Anki's Undo to revert any earlier changes individually."
-        else:
-            recovery = f"Use Anki's Undo entry {undo_name!r} to revert any completed changes."
-        message = f"Cleanup failed: {exc}\n\nEarlier changes may have been applied. {recovery}"
-        raise CleanupError(message) from exc
-    try:
-        changes = col.merge_undo_entries(undo_target)
-    except Exception as exc:
+        changes = _apply_plan(col, plan, undo_target)
+    except _UndoMergeError as exc:
         message = (
-            f"Cleanup changes were applied, but Anki could not group them into one Undo entry: "
-            f"{exc}\n\nUse Anki's Undo to revert the completed changes; more than one Undo may be "
-            "required."
+            "Cleanup stopped after applying changes because Anki could not preserve them as "
+            f"one Undo entry: {exc}\n\nSome changes may be recoverable through Anki Undo, "
+            "but complete recovery cannot be guaranteed."
         )
+        raise CleanupError(message) from exc
+    except Exception as exc:
+        if _undo_entry_is_current(col, undo_target, undo_name):
+            recovery = f"Use Anki's Undo entry {undo_name!r} to revert any completed changes."
+        else:
+            recovery = (
+                "Card Janitor could not verify a complete cleanup Undo entry. Some changes may "
+                "be recoverable through Anki Undo, but complete recovery cannot be guaranteed."
+            )
+        message = f"Cleanup failed: {exc}\n\nEarlier changes may have been applied. {recovery}"
         raise CleanupError(message) from exc
     return ExecutionResult(
         changes=changes,
@@ -405,11 +407,30 @@ def execute_plan(col: Collection, plan: ExecutionPlan, undo_name: str) -> Execut
     )
 
 
-def _apply_plan(col: Collection, plan: ExecutionPlan) -> None:
+def _undo_entry_is_current(col: Collection, undo_target: int, undo_name: str) -> bool:
+    try:
+        status = col.undo_status()
+    except Exception:
+        exception("failed to inspect undo state after cleanup failure")
+        return False
+    return status.last_step == undo_target and status.undo == undo_name
+
+
+def _merge_completed_operation(col: Collection, undo_target: int) -> OpChanges:
+    try:
+        return col.merge_undo_entries(undo_target)
+    except Exception as exc:
+        raise _UndoMergeError(str(exc)) from exc
+
+
+def _apply_plan(col: Collection, plan: ExecutionPlan, undo_target: int) -> OpChanges:
+    changes = OpChanges()
     for tag, note_ids in plan.tags:
         col.tags.bulk_add(note_ids, tag)
+        changes = _merge_completed_operation(col, undo_target)
     for tag, note_ids in plan.remove_tags:
         col.tags.bulk_remove(note_ids, tag)
+        changes = _merge_completed_operation(col, undo_target)
     replacement_notes = []
     for tags, note_ids in plan.replace_tags:
         for note_id in note_ids:
@@ -418,18 +439,26 @@ def _apply_plan(col: Collection, plan: ExecutionPlan) -> None:
             replacement_notes.append(note)
     if replacement_notes:
         col.update_notes(replacement_notes)
+        changes = _merge_completed_operation(col, undo_target)
     for deck_id, card_ids in plan.moves:
         col.set_deck(card_ids, deck_id)
+        changes = _merge_completed_operation(col, undo_target)
     for flag, card_ids in plan.flags:
         col.set_user_flag_for_cards(flag, card_ids)
+        changes = _merge_completed_operation(col, undo_target)
     if plan.suspend_card_ids:
         col.sched.suspend_cards(plan.suspend_card_ids)
+        changes = _merge_completed_operation(col, undo_target)
     if plan.unsuspend_card_ids:
         col.sched.unsuspend_cards(plan.unsuspend_card_ids)
+        changes = _merge_completed_operation(col, undo_target)
     if plan.delete_card_ids:
         col.remove_cards_and_orphaned_notes(plan.delete_card_ids)
+        changes = _merge_completed_operation(col, undo_target)
     if plan.delete_note_ids:
         col.remove_notes(plan.delete_note_ids)
+        changes = _merge_completed_operation(col, undo_target)
+    return changes
 
 
 def _flag_number(flag: str) -> int:

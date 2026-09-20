@@ -4,6 +4,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from card_janitor.models import parse_config
 from jsonschema import Draft202012Validator
 
@@ -144,9 +145,13 @@ def test_collection_schema_requires_matching_fields_together_and_blocks_global_d
     )
 
 
-def test_manual_development_profile_config_is_valid() -> None:
+@pytest.mark.parametrize(
+    "fixture_name",
+    ["dev-profile-config.json", "undo-stress-config.json"],
+)
+def test_manual_development_profile_config_is_valid(fixture_name: str) -> None:
     schema = json.loads((ROOT / "src/collection-config.schema.json").read_text(encoding="utf-8"))
-    config = json.loads((ROOT / "tests/manual/dev-profile-config.json").read_text(encoding="utf-8"))
+    config = json.loads((ROOT / "tests/manual" / fixture_name).read_text(encoding="utf-8"))
 
     Draft202012Validator(schema).validate(config)
     parsed = parse_config(
