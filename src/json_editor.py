@@ -24,14 +24,13 @@ from markdown.extensions import md_in_html
 
 from .configuration import (
     ADDON_MODULE,
-    DEFAULT_CONFIG,
     ConfigWriteError,
     load_raw_collection_config,
+    parse_collection_config,
     save_raw_collection_config,
 )
 from .line_numbers import LineNumberArea
 from .log import error
-from .models import parse_config
 from .presentation import warning_panel
 
 if TYPE_CHECKING:
@@ -80,7 +79,7 @@ class CollectionConfigEditor(ConfigEditor):
         except (TypeError, ValueError) as exc:
             self._show_error("Invalid JSON", (str(exc),))
             return
-        parsed = parse_config({**DEFAULT_CONFIG, **config} if isinstance(config, dict) else config)
+        parsed = parse_collection_config(config)
         if parsed.issues:
             self._show_error(
                 "Card Janitor configuration has errors",

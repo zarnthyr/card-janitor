@@ -4,11 +4,20 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any
 
 from aqt import mw
 
-from .models import CONFIG_VERSION, ParsedConfig, Policy, PolicyRecord, parse_config, policy_to_dict
+from .models import (
+    CONFIG_VERSION,
+    ConfigIssue,
+    ParsedConfig,
+    Policy,
+    PolicyRecord,
+    parse_config,
+    policy_to_dict,
+)
 
 ADDON_MODULE = "card_janitor"
 COLLECTION_POLICIES_KEY = "card_janitor_policies"
@@ -55,6 +64,18 @@ def load_raw_collection_config() -> object:
     return {"policies": deepcopy(load_raw_policies())}
 
 
+def parse_collection_config(value: object) -> ParsedConfig:
+    """Validate the collection-scoped configuration accepted by the policy editor."""
+    if not isinstance(value, dict):
+        return parse_config(value)
+    unknown_issues = tuple(
+        ConfigIssue(str(key), "unknown collection setting")
+        for key in sorted(set(value) - {"policies"}, key=str)
+    )
+    parsed = parse_config({**DEFAULT_CONFIG, "policies": value.get("policies")})
+    return replace(parsed, issues=(*unknown_issues, *parsed.issues))
+
+
 def load_config() -> ParsedConfig:
     return parse_config(load_raw_config())
 
@@ -70,6 +91,10 @@ def save_raw_collection_config(config: object, *, expected_policies: object) -> 
     """Save collection-scoped Card Janitor data without changing settings."""
     if not isinstance(config, dict):
         message = "The configuration is not a JSON object"
+        raise ConfigWriteError(message)
+    unknown = sorted(set(config) - {"policies"}, key=str)
+    if unknown:
+        message = f"Unknown collection setting: {unknown[0]}"
         raise ConfigWriteError(message)
     policies = config.get("policies")
     if not isinstance(policies, list):
