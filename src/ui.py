@@ -625,10 +625,16 @@ class CardJanitorDialog(QDialog):
             self.run_button.setEnabled(False)
             return
         has_errors = any(report.errors for report in reports)
-        match_counts = Counter(card.card_id for report in reports for card in report.actionable)
-        candidate_ids = set(match_counts)
-        overlap_count = sum(count > 1 for count in match_counts.values())
+        match_counts = Counter(
+            card.card_id for report in reports for card, _actions in report.card_actions
+        )
+        candidate_ids = {card.card_id for report in reports for card in report.actionable}
         plan = build_execution_plan(reports, mw.col)
+        visible_ids = set(plan.planned_card_ids) | set(plan.conflicted_card_ids)
+        overlapping_ids = set(plan.conflicted_card_ids) | {
+            card_id for card_id, count in match_counts.items() if count > 1
+        }
+        overlap_count = len(overlapping_ids & visible_ids)
         text = f"{card_count_text(plan.card_count).capitalize()} would be cleaned up."
         messages = [text]
         if overlap_count:
@@ -890,6 +896,8 @@ class CardJanitorDialog(QDialog):
                 reason=str(exc),
             )
             showWarning(str(exc), parent=self)
+            self.raise_()
+            self.activateWindow()
             return
         debug(
             "policy saved",
@@ -897,6 +905,8 @@ class CardJanitorDialog(QDialog):
             operation="updated" if record is not None else "added",
         )
         self._refresh(selected_key=policy.id)
+        self.raise_()
+        self.activateWindow()
 
 
 def _show_on_demand_dialog(parsed: ParsedConfig, reports: tuple[PolicyReport, ...]) -> None:

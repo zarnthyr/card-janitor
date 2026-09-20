@@ -65,9 +65,7 @@ def test_collection_schema_accepts_new_scope_conditions_and_flag_actions() -> No
     policy = {
         "id": "maintenance",
         "name": "Maintenance",
-        "triggers": [],
         "scope": {
-            "all_decks": True,
             "note_types": [
                 {"name": "Basic"},
                 {"name": "Reverse", "card_types": ["Card 2"]},
@@ -93,32 +91,57 @@ def test_collection_schema_accepts_new_scope_conditions_and_flag_actions() -> No
     assert not validator.is_valid({"policies": [policy]})
 
 
-def test_collection_schema_accepts_only_standalone_all_cards_condition() -> None:
+def test_collection_schema_uses_omission_for_unrestricted_components() -> None:
     schema = json.loads((ROOT / "src/collection-config.schema.json").read_text(encoding="utf-8"))
     policy = {
         "id": "everything",
         "name": "Everything",
-        "triggers": [],
         "scope": {"decks": [{"deck": "Mining", "include_subdecks": True}]},
-        "match": "all",
-        "conditions": [{"type": "all_cards"}],
         "actions": [{"type": "suspend"}],
     }
     validator = Draft202012Validator(schema)
 
     assert validator.is_valid({"policies": [policy]})
-    policy["scope"] = {"all_decks": True}
+    del policy["scope"]
     assert validator.is_valid({"policies": [policy]})
-    policy["scope"]["note_types"] = [{"name": "Basic"}]
+    policy["scope"] = {"note_types": [{"name": "Basic"}]}
     assert validator.is_valid({"policies": [policy]})
     policy["scope"]["note_types"] = []
     assert not validator.is_valid({"policies": [policy]})
-    del policy["scope"]["note_types"]
-    policy["scope"]["decks"] = [{"deck": "Mining", "include_subdecks": True}]
+    policy["scope"] = {}
     assert not validator.is_valid({"policies": [policy]})
-    policy["scope"] = {"all_decks": True}
-    policy["conditions"].append({"type": "interval", "days": 1, "operator": "gte"})
+    policy["scope"] = {"decks": []}
     assert not validator.is_valid({"policies": [policy]})
+
+
+def test_collection_schema_requires_matching_fields_together_and_blocks_global_delete() -> None:
+    schema = json.loads((ROOT / "src/collection-config.schema.json").read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema)
+    base = {"id": "policy", "name": "Policy", "actions": [{"type": "suspend"}]}
+
+    assert validator.is_valid({"policies": [base]})
+    assert not validator.is_valid({"policies": [{**base, "triggers": []}]})
+    assert not validator.is_valid({"policies": [{**base, "match": "all"}]})
+    assert not validator.is_valid(
+        {"policies": [{**base, "conditions": [{"type": "interval", "days": 1, "operator": "gte"}]}]}
+    )
+    assert not validator.is_valid({"policies": [{**base, "match": "all", "conditions": []}]})
+    assert not validator.is_valid(
+        {"policies": [{**base, "match": "all", "conditions": [{"type": "all_cards"}]}]}
+    )
+    delete = {**base, "actions": [{"type": "delete_note"}]}
+    assert not validator.is_valid({"policies": [delete]})
+    assert validator.is_valid(
+        {
+            "policies": [
+                {
+                    **delete,
+                    "match": "all",
+                    "conditions": [{"type": "interval", "days": 1, "operator": "gte"}],
+                }
+            ]
+        }
+    )
 
 
 def test_manual_development_profile_config_is_valid() -> None:

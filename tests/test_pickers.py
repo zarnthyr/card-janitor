@@ -31,6 +31,7 @@ from card_janitor.condition_row import CardStatePicker, ConditionRow
 from card_janitor.configuration import DEFAULT_CONFIG
 from card_janitor.deck_picker import DeckPicker
 from card_janitor.engine import CardFacts, PolicyReport, ResolvedAction, evaluate_facts
+from card_janitor.execution import StalePolicyDefinitionsError
 from card_janitor.line_numbers import LineNumberArea
 from card_janitor.models import (
     AgeCondition,
@@ -339,6 +340,49 @@ def test_manual_cleanup_records_result(
     assert result["failure"] == ("Manual cleanup failed" if failed else "")
 
 
+def test_manual_stale_policy_failure_is_recorded_and_shown(
+    edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    message = (
+        "Cleanup cancelled because one or more selected policies changed. "
+        "Refresh Card Janitor and try again."
+    )
+
+    class Operation:
+        def __init__(self, *, parent: object, op: object) -> None:
+            self.parent = parent
+            self.op = op
+
+        def success(self, callback: object) -> "Operation":
+            self.applied = callback
+            return self
+
+        def failure(self, callback: object) -> "Operation":
+            self.failed = callback
+            return self
+
+        def run_in_background(self) -> None:
+            try:
+                self.op(edit_fixture.collection)
+            except StalePolicyDefinitionsError as exc:
+                self.failed(exc)
+
+    monkeypatch.setattr(ui, "CollectionOp", Operation)
+    monkeypatch.setattr(
+        ui,
+        "execute_approved_reports",
+        lambda *_args: (_ for _ in ()).throw(StalePolicyDefinitionsError(message)),
+    )
+    warnings = []
+    monkeypatch.setattr(ui, "showWarning", lambda value, **_kwargs: warnings.append(value))
+    report = SimpleNamespace(policy=edit_fixture.policy, actionable=(), errors=())
+
+    ui.execute_on_demand_reports(SimpleNamespace(close=lambda: None), (report,))
+
+    assert warnings == [message]
+    assert edit_fixture.parent.pm.profile[LAST_CLEANUP_KEY]["failure"] == message
+
+
 @pytest.mark.parametrize("value", [None, {}, {"time": []}, {"time": "not a date"}])
 def test_last_cleanup_ignores_invalid_local_state(value: object) -> None:
     assert last_cleanup({LAST_CLEANUP_KEY: value}) is None
@@ -622,7 +666,6 @@ def test_extracted_policy_editor_round_trip(
         raw = {
             "id": "editor",
             "name": "Editor",
-            "triggers": [],
             "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
             "match": "all",
             "conditions": [{"type": "tags", "operator": "contains_any", "tags": ["leech"]}],
@@ -654,10 +697,6 @@ def test_conflict_summary_opens_modeless_details_and_browses_skipped_cards(
         {
             "id": name,
             "name": name,
-            "triggers": [],
-            "scope": {"all_decks": True},
-            "match": "all",
-            "conditions": [{"type": "all_cards"}],
             "actions": [{"type": "move", "deck": name}],
         }
         for name in ("A", "B")
@@ -725,7 +764,6 @@ def edit_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Si
     raw = {
         "id": "original",
         "name": "Leeches",
-        "triggers": [],
         "scope": {"decks": [{"deck": "Mining", "include_subdecks": True}]},
         "match": "all",
         "conditions": [{"type": "tags", "tags": ["leech"], "operator": "contains_any"}],
@@ -747,7 +785,7 @@ def test_policy_trigger_picker_round_trip_and_fixed_height(
     assert editor.triggers._none.isChecked()
     assert editor.triggers.text() == "None"
     assert editor.automatic_warning.isHidden()
-    assert editor._form_payload()["triggers"] == []
+    assert "triggers" not in editor._form_payload()
     initial_height = editor.triggers.sizeHint().height()
     for checkbox in editor.triggers._checks.values():
         checkbox.click()
@@ -765,7 +803,7 @@ def test_policy_trigger_picker_round_trip_and_fixed_height(
     assert editor._form_payload() == raw
     for checkbox in editor.triggers._checks.values():
         checkbox.click()
-    assert editor._form_payload()["triggers"] == []
+    assert "triggers" not in editor._form_payload()
     assert editor.automatic_warning.isHidden()
     assert editor.triggers.text() == "None"
     assert editor.triggers._none.isChecked()
@@ -804,7 +842,7 @@ def test_policy_text_fields_have_horizontal_padding(edit_fixture: SimpleNamespac
 @pytest.mark.parametrize(
     ("triggers", "summary", "help_fragments", "absent_fragments"),
     [
-        ([], "None", ["started manually"], ["once per", "sync attempt"]),
+        (None, "None", ["started manually"], ["once per", "sync attempt"]),
         (
             [{"type": "on_open"}, {"type": "on_sync"}],
             "On open\nOn sync",
@@ -833,14 +871,16 @@ def test_policy_text_fields_have_horizontal_padding(edit_fixture: SimpleNamespac
 )
 def test_dashboard_trigger_tooltip_describes_only_selected_setting(
     edit_fixture: SimpleNamespace,
-    triggers: list[dict],
+    triggers: list[dict] | None,
     summary: str,
     help_fragments: list[str],
     absent_fragments: list[str],
 ) -> None:
-    parsed = parse_config(
-        {**DEFAULT_CONFIG, "policies": [{**edit_fixture.raw, "triggers": triggers}]}
-    )
+    policy = {
+        **edit_fixture.raw,
+        **({"triggers": triggers} if triggers is not None else {}),
+    }
+    parsed = parse_config({**DEFAULT_CONFIG, "policies": [policy]})
     dashboard = ui.CardJanitorDialog(parsed, ())
     column = dashboard.COLUMN_TRIGGERS
     assert dashboard.table.horizontalHeaderItem(column).text() == "Trigger"
@@ -1279,6 +1319,8 @@ def test_new_policy_starts_empty_and_requires_explicit_choices(
     edit_fixture: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    warnings = []
+    monkeypatch.setattr(policy_editor, "showWarning", lambda text, **_kwargs: warnings.append(text))
     editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
     assert editor._conditions == []
     assert editor._actions == []
@@ -1287,6 +1329,12 @@ def test_new_policy_starts_empty_and_requires_explicit_choices(
     assert editor._form_payload()["conditions"] == []
     assert editor._form_payload()["actions"] == []
     assert not editor._has_unsaved_changes()
+    editor._accept()
+    assert warnings == []
+    assert "Enter a policy name" in editor.general_error_warning.text()
+    assert "Choose at least one deck" in editor.scope_error_warning.text()
+    assert "Add at least one condition" in editor.conditions_error_warning.text()
+    assert "Add at least one action" in editor.actions_error_warning.text()
     editor.decks._clicked(editor.decks._items["Mining"], 0)
     editor.name.setText("Test")
     assert editor._policy_from_form() is None
@@ -1305,6 +1353,76 @@ def test_new_policy_starts_empty_and_requires_explicit_choices(
     assert editor.actions_scroll.isHidden()
     monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
     editor.reject()
+
+
+def test_successful_policy_save_restores_manager_focus(
+    edit_fixture: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = []
+    editor = SimpleNamespace(
+        result_policy=edit_fixture.policy,
+        deleteLater=lambda: events.append("deleted"),
+    )
+    dashboard = SimpleNamespace(
+        _policy_editor=editor,
+        _set_editor_controls_enabled=lambda **_kwargs: events.append("enabled"),
+        _refresh=lambda **_kwargs: events.append("refreshed"),
+        raise_=lambda: events.append("raised"),
+        activateWindow=lambda: events.append("activated"),
+    )
+    monkeypatch.setattr(ui, "save_policy", lambda *_args, **_kwargs: events.append("saved"))
+
+    ui.CardJanitorDialog._finish_editor(
+        dashboard,
+        editor,
+        PolicyRecord(0, edit_fixture.raw, edit_fixture.policy, ()),
+        QDialog.DialogCode.Accepted,
+    )
+
+    assert events[-3:] == ["refreshed", "raised", "activated"]
+
+
+def test_unrestricted_manual_policy_round_trips_as_omitted_components(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    raw = {
+        "id": "minimal",
+        "name": "Minimal",
+        "actions": [{"type": "suspend"}],
+    }
+    policy = parse_policy(raw)
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, raw, policy, ()), set(), edit_fixture.parent
+    )
+
+    assert editor.triggers.selected() == ()
+    assert editor.decks.all_decks
+    assert editor.note_types.selected() is None
+    assert editor.match.currentData() == "all_cards"
+    assert editor._form_payload() == raw
+    assert editor._policy_from_form() == policy
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_editor_blocks_collection_wide_deletion_in_top_error_area(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.name.setText("Delete everything")
+    editor.decks._clicked(editor.decks._root, 0)
+    editor.match.setCurrentIndex(editor.match.findData("all_cards"))
+    editor._add_action("delete_note")
+
+    assert editor._policy_from_form() is None
+    assert "Collection-wide deletion is not allowed" in editor.policy_error_warning.text()
+    assert editor.scope_error_warning.isHidden()
+    assert editor.conditions_error_warning.isHidden()
+    assert editor.actions_error_warning.isHidden()
+
+    editor.add_condition_button.click()
+    assert editor._policy_from_form() is not None
+    editor.done(QDialog.DialogCode.Rejected)
 
 
 def test_add_condition_switches_all_cards_to_and(edit_fixture: SimpleNamespace) -> None:
@@ -1487,12 +1605,27 @@ def test_impossible_scheduler_mix_warns_immediately(
     editor.reject()
 
 
-def test_editor_refuses_to_save_scheduler_incompatible_policy(
+def test_fsrs_availability_warns_immediately_without_scope(
     edit_fixture: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    warnings = []
-    monkeypatch.setattr(policy_editor, "showWarning", lambda text, **_kwargs: warnings.append(text))
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor._add_condition(None)
+
+    editor._conditions[0].kind.setCurrentIndex(
+        editor._conditions[0].kind.findData("fsrs_stability")
+    )
+    QApplication.processEvents()
+
+    assert "FSRS conditions require FSRS to be enabled" in editor.conditions_error_warning.text()
+    assert not editor.conditions_error_warning.isHidden()
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    editor.reject()
+
+
+def test_editor_refuses_to_save_scheduler_incompatible_policy(
+    edit_fixture: SimpleNamespace,
+) -> None:
     raw = {
         **edit_fixture.raw,
         "conditions": [{"type": "fsrs_stability", "days": 30, "operator": "gte"}],
@@ -1506,7 +1639,6 @@ def test_editor_refuses_to_save_scheduler_incompatible_policy(
     assert editor.result() != QDialog.DialogCode.Accepted
     assert editor.policy_error_warning.isHidden()
     assert "FSRS conditions require FSRS to be enabled" in editor.conditions_error_warning.text()
-    assert warnings == ["Cannot save this policy:\n\nFSRS conditions require FSRS to be enabled"]
     editor.close()
 
 
@@ -1514,8 +1646,6 @@ def test_new_policy_save_validates_scheduler_compatibility(
     edit_fixture: SimpleNamespace,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    warnings = []
-    monkeypatch.setattr(policy_editor, "showWarning", lambda text, **_kwargs: warnings.append(text))
     editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
     editor.name.setText("FSRS policy")
     editor.decks._clicked(editor.decks._items["Mining"], 0)
@@ -1529,7 +1659,29 @@ def test_new_policy_save_validates_scheduler_compatibility(
 
     assert editor.result_policy is None
     assert "FSRS conditions require FSRS to be enabled" in editor.conditions_error_warning.text()
-    assert warnings == ["Cannot save this policy:\n\nFSRS conditions require FSRS to be enabled"]
+    monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
+    editor.close()
+
+
+def test_save_reports_scheduler_error_alongside_incomplete_draft_errors(
+    edit_fixture: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    warnings = []
+    monkeypatch.setattr(policy_editor, "showWarning", lambda text, **_kwargs: warnings.append(text))
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor._add_condition(None)
+    editor._conditions[0].kind.setCurrentIndex(
+        editor._conditions[0].kind.findData("fsrs_stability")
+    )
+
+    editor._accept()
+
+    assert warnings == []
+    assert "Enter a policy name" in editor.general_error_warning.text()
+    assert "Choose at least one deck" in editor.scope_error_warning.text()
+    assert "Add at least one action" in editor.actions_error_warning.text()
+    assert "FSRS conditions require FSRS to be enabled" in editor.conditions_error_warning.text()
     monkeypatch.setattr(policy_editor, "askUser", lambda *_args, **_kwargs: True)
     editor.close()
 
@@ -1736,7 +1888,7 @@ def test_invalid_trigger_type_can_be_repaired_in_form(edit_fixture: SimpleNamesp
     editor = policy_editor.PolicyEditorDialog(
         PolicyRecord(0, raw, None, ()), set(), edit_fixture.parent
     )
-    assert editor._form_payload()["triggers"] == []
+    assert "triggers" not in editor._form_payload()
     assert editor._policy_from_form() is not None
     editor.reject()
 
@@ -1752,8 +1904,9 @@ def test_policy_json_round_trip_unsaved_form_and_managed_id(
     raw = json.loads(editor.json_text.toPlainText())
     assert raw["name"] == "Changed name"
     raw["id"] = "copied-policy-id"
-    raw["scope"] = {"all_decks": True, "note_types": [{"name": "Basic"}]}
-    raw["conditions"] = [{"type": "all_cards"}]
+    raw["scope"] = {"note_types": [{"name": "Basic"}]}
+    raw.pop("match", None)
+    raw.pop("conditions", None)
     raw["actions"] = [{"type": "replace_tags", "tags": []}]
     editor.json_text.setPlainText(json.dumps(raw))
     editor.save_button.click()

@@ -99,26 +99,37 @@ def _resolve_note_type_card_types(
     return resolved, errors
 
 
-def _fsrs_enabled(col: Collection, deck_ids: set[int]) -> bool:
-    if not deck_ids:
+def _fsrs_enabled(col: Collection) -> bool:
+    """Return the collection-wide scheduler setting via Anki's deck-config API."""
+    decks = col.decks.all_names_and_ids(include_filtered=False)
+    if not decks:
         return False
-    return bool(col.decks.get_deck_configs_for_update(next(iter(deck_ids))).fsrs)
+    return bool(col.decks.get_deck_configs_for_update(int(decks[0].id)).fsrs)
 
 
-def validate_policy_references(col: Collection, policy: Policy) -> tuple[str, ...]:
-    """Check external references and scheduler compatibility without scanning cards."""
-    deck_ids, errors = _resolve_deck_ids(col, policy)
-    _, action_errors = _resolve_actions(col, policy)
-    _, note_type_errors = _resolve_note_type_card_types(col, policy)
-    errors.extend(action_errors)
-    errors.extend(note_type_errors)
-    needs_fsrs = conditions_need_fsrs(policy.conditions)
-    needs_sm2 = conditions_need_sm2(policy.conditions)
-    fsrs = _fsrs_enabled(col, deck_ids) if needs_fsrs or needs_sm2 else False
+def scheduler_condition_errors(col: Collection, conditions: object) -> tuple[str, ...]:
+    """Return collection-wide FSRS/SM-2 compatibility errors for conditions."""
+    needs_fsrs = conditions_need_fsrs(conditions)
+    needs_sm2 = conditions_need_sm2(conditions)
+    if not (needs_fsrs or needs_sm2):
+        return ()
+    fsrs = _fsrs_enabled(col)
+    errors = []
     if needs_fsrs and not fsrs:
         errors.append("FSRS conditions require FSRS to be enabled")
     if needs_sm2 and fsrs:
         errors.append("SM-2 ease conditions require FSRS to be disabled")
+    return tuple(errors)
+
+
+def validate_policy_references(col: Collection, policy: Policy) -> tuple[str, ...]:
+    """Check external references and scheduler compatibility without scanning cards."""
+    _deck_ids, errors = _resolve_deck_ids(col, policy)
+    _, action_errors = _resolve_actions(col, policy)
+    _, note_type_errors = _resolve_note_type_card_types(col, policy)
+    errors.extend(action_errors)
+    errors.extend(note_type_errors)
+    errors.extend(scheduler_condition_errors(col, policy.conditions))
     return tuple(errors)
 
 
@@ -264,13 +275,7 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
     errors.extend(action_errors)
     note_type_card_types, note_type_errors = _resolve_note_type_card_types(col, policy)
     errors.extend(note_type_errors)
-    needs_fsrs = conditions_need_fsrs(policy.conditions)
-    needs_sm2 = conditions_need_sm2(policy.conditions)
-    fsrs = _fsrs_enabled(col, deck_ids) if needs_fsrs or needs_sm2 else False
-    if needs_fsrs and not fsrs:
-        errors.append("FSRS conditions require FSRS to be enabled")
-    if needs_sm2 and fsrs:
-        errors.append("SM-2 ease conditions require FSRS to be disabled")
+    errors.extend(scheduler_condition_errors(col, policy.conditions))
     if errors:
         report = PolicyReport(
             policy=policy,

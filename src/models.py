@@ -11,6 +11,7 @@ MAX_DAYS = 100000
 MAX_COUNT = 1000000
 MAX_EASE_PERCENT = 1000
 FLAG_NAMES = ("none", "red", "orange", "green", "blue", "pink", "turquoise", "purple")
+_MISSING = object()
 
 
 @dataclass(frozen=True)
@@ -410,9 +411,6 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
     condition_type = value.get("type")
     if not isinstance(condition_type, str):
         raise ValueError(f"{path}.type: must be a string")
-    if condition_type == "all_cards":
-        _reject_unknown_keys(value, {"type"}, path)
-        return AllCardsCondition()
     if condition_type == "age":
         _reject_unknown_keys(value, {"type", "days", "source", "operator"}, path)
         days = _bounded_int(value, "days", path, maximum=MAX_DAYS)
@@ -542,6 +540,12 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
 
 
 def _parse_conditions(value: object, match: object, path: str) -> ConditionExpression:
+    if value is _MISSING and match is _MISSING:
+        return AllCardsCondition()
+    if value is _MISSING:
+        raise ValueError(f"{path}.conditions: required when match is present")
+    if match is _MISSING:
+        raise ValueError(f"{path}.match: required when conditions are present")
     if not isinstance(match, str) or match not in {"all", "any"}:
         raise ValueError(f"{path}.match: must be 'all' or 'any'")
     if not isinstance(value, list) or not value:
@@ -550,11 +554,6 @@ def _parse_conditions(value: object, match: object, path: str) -> ConditionExpre
         _parse_simple_condition(condition, f"{path}.conditions[{index}]")
         for index, condition in enumerate(value)
     )
-    if (
-        any(isinstance(condition, AllCardsCondition) for condition in conditions)
-        and len(conditions) != 1
-    ):
-        raise ValueError(f"{path}.conditions: all_cards must be the only condition")
     return AllConditions(conditions) if match == "all" else AnyConditions(conditions)
 
 
@@ -640,26 +639,23 @@ def _parse_note_types(values: object, path: str) -> tuple[NoteTypeSelector, ...]
 
 
 def _parse_scope(value: object, path: str) -> Scope:
+    if value is _MISSING:
+        return Scope(all_decks=True)
     if not isinstance(value, dict):
         raise ValueError(f"{path}: must be an object")
-    _reject_unknown_keys(value, {"decks", "all_decks", "note_types"}, path)
+    _reject_unknown_keys(value, {"decks", "note_types"}, path)
+    if not value:
+        raise ValueError(f"{path}: must contain at least one restriction")
     note_types = (
         _parse_note_types(value["note_types"], f"{path}.note_types")
         if "note_types" in value
         else None
     )
-    if "all_decks" in value:
-        if value["all_decks"] is not True or "decks" in value:
-            raise ValueError(f"{path}: use either all_decks: true or a non-empty decks array")
-        return Scope(
-            all_decks=True,
-            note_types=note_types,
-        )
     decks = value.get("decks")
-    if not isinstance(decks, list) or not decks:
+    if "decks" in value and (not isinstance(decks, list) or not decks):
         raise ValueError(f"{path}.decks: must be a non-empty array")
     normalized: list[DeckSelector] = []
-    for index, deck in enumerate(decks):
+    for index, deck in enumerate(decks or ()):
         if isinstance(deck, dict):
             selector_path = f"{path}.decks[{index}]"
             _reject_unknown_keys(deck, {"deck", "include_subdecks"}, selector_path)
@@ -677,14 +673,17 @@ def _parse_scope(value: object, path: str) -> Scope:
         raise ValueError(f"{path}.decks: must not contain duplicates")
     return Scope(
         decks=tuple(normalized),
+        all_decks="decks" not in value,
         note_types=note_types,
     )
 
 
 def _parse_triggers(value: object, path: str) -> tuple[Trigger, ...]:
+    if value is _MISSING:
+        return ()
     triggers_value = value
-    if not isinstance(triggers_value, list):
-        raise ValueError(f"{path}: must be an array")
+    if not isinstance(triggers_value, list) or not triggers_value:
+        raise ValueError(f"{path}: must be a non-empty array")
     triggers = []
     for index, trigger in enumerate(triggers_value):
         trigger_path = f"{path}[{index}]"
@@ -711,9 +710,11 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     )
     policy_id = _required_string(value, "id", path)
     name = _required_string(value, "name", path)
-    triggers = _parse_triggers(value.get("triggers"), f"{path}.triggers")
-    scope = _parse_scope(value.get("scope"), f"{path}.scope")
-    conditions = _parse_conditions(value.get("conditions"), value.get("match"), path)
+    triggers = _parse_triggers(value.get("triggers", _MISSING), f"{path}.triggers")
+    scope = _parse_scope(value.get("scope", _MISSING), f"{path}.scope")
+    conditions = _parse_conditions(
+        value.get("conditions", _MISSING), value.get("match", _MISSING), path
+    )
     if _contains_fsrs_condition(conditions) and _contains_sm2_condition(conditions):
         raise ValueError(f"{path}.conditions: FSRS and SM-2 conditions cannot be used together")
     actions_value = value.get("actions")
@@ -729,6 +730,16 @@ def parse_policy(value: object, index: int = 0) -> Policy:
     ]
     if delete_actions and len(actions) != 1:
         raise ValueError(f"{path}.actions: deletion must be the only action")
+    if (
+        delete_actions
+        and scope.all_decks
+        and scope.note_types is None
+        and isinstance(conditions, AllCardsCondition)
+    ):
+        raise ValueError(
+            f"{path}: Collection-wide deletion is not allowed. "
+            "Restrict the scope or add at least one condition."
+        )
     move_decks = {action.deck.casefold() for action in actions if isinstance(action, MoveAction)}
     if len(move_decks) > 1:
         raise ValueError(f"{path}.actions: a policy cannot have multiple move destinations")
@@ -872,7 +883,8 @@ def condition_to_dict(  # noqa: PLR0911, PLR0912
     condition: ConditionExpression,
 ) -> dict[str, Any]:
     if isinstance(condition, AllCardsCondition):
-        return {"type": "all_cards"}
+        message = "All cards is represented by omitted matching fields"
+        raise AssertionError(message)
     if isinstance(condition, AgeCondition):
         return {
             "type": "age",
@@ -993,40 +1005,34 @@ def policy_to_dict(policy: Policy) -> dict[str, Any]:
         for action in policy.actions
         if not isinstance(action, (TagAction, RemoveTagAction))
     )
-    return {
+    serialized: dict[str, Any] = {
         "id": policy.id,
         "name": policy.name,
-        "triggers": [{"type": trigger.type} for trigger in policy.triggers],
-        "scope": {
-            **(
-                {"all_decks": True}
-                if policy.scope.all_decks
-                else {
-                    "decks": [
-                        {"deck": selector.deck, "include_subdecks": selector.include_subdecks}
-                        for selector in policy.scope.selectors
-                    ]
-                }
-            ),
-            **(
-                {
-                    "note_types": [
-                        {
-                            "name": selector.name,
-                            **(
-                                {"card_types": list(selector.card_types)}
-                                if selector.card_types is not None
-                                else {}
-                            ),
-                        }
-                        for selector in policy.scope.note_types
-                    ]
-                }
-                if policy.scope.note_types is not None
-                else {}
-            ),
-        },
-        "match": match,
-        "conditions": [condition_to_dict(condition) for condition in conditions],
-        "actions": serialized_actions,
     }
+    if policy.triggers:
+        serialized["triggers"] = [{"type": trigger.type} for trigger in policy.triggers]
+    scope: dict[str, Any] = {}
+    if not policy.scope.all_decks:
+        scope["decks"] = [
+            {"deck": selector.deck, "include_subdecks": selector.include_subdecks}
+            for selector in policy.scope.selectors
+        ]
+    if policy.scope.note_types is not None:
+        scope["note_types"] = [
+            {
+                "name": selector.name,
+                **(
+                    {"card_types": list(selector.card_types)}
+                    if selector.card_types is not None
+                    else {}
+                ),
+            }
+            for selector in policy.scope.note_types
+        ]
+    if scope:
+        serialized["scope"] = scope
+    if not isinstance(policy.conditions, AllCardsCondition):
+        serialized["match"] = match
+        serialized["conditions"] = [condition_to_dict(condition) for condition in conditions]
+    serialized["actions"] = serialized_actions
+    return serialized

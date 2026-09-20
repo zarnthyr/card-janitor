@@ -6,7 +6,9 @@ from types import SimpleNamespace
 import pytest
 from aqt.main import AnkiQt
 from card_janitor import addon, automatic
-from card_janitor.models import Trigger
+from card_janitor.configuration import COLLECTION_POLICIES_KEY
+from card_janitor.execution import StalePolicyDefinitionsError
+from card_janitor.models import Trigger, parse_policy, policy_to_dict
 
 
 def test_registration_uses_hooks_without_modifying_anki_window_methods(
@@ -354,6 +356,58 @@ def test_automatic_mutation_phase_checks_context_and_marks_only_success(
         10 if outcome == "success" else None
     )
     assert automatic._run_state.token is None
+
+
+def test_automatic_execution_rejects_policy_changed_after_evaluation(
+    runner: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy = parse_policy(
+        {
+            "id": "p",
+            "name": "Before",
+            "triggers": [{"type": "daily"}],
+            "actions": [{"type": "suspend"}],
+        }
+    )
+    stored = [policy_to_dict(policy)]
+    collection = SimpleNamespace(
+        sched=SimpleNamespace(today=10),
+        get_config=lambda key, default: stored if key == COLLECTION_POLICIES_KEY else default,
+    )
+    runner.window.col = collection
+    runner.parsed.config.policies = (policy,)
+    report = SimpleNamespace(
+        policy=policy,
+        errors=(),
+        actionable=(SimpleNamespace(card_id=1),),
+    )
+    monkeypatch.setattr(automatic, "evaluate_policies", lambda *_args: (report,))
+    monkeypatch.setattr(
+        automatic,
+        "build_execution_plan",
+        lambda *_args: SimpleNamespace(is_empty=False),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        automatic, "showWarning", lambda message, **_kwargs: warnings.append(message)
+    )
+
+    automatic.run_automatic_policies()
+    query = runner.operations[0]
+    query.success(query.op(collection))
+    stored[0] = {**stored[0], "name": "After"}
+
+    mutation = runner.mutations[0]
+    with pytest.raises(StalePolicyDefinitionsError, match="selected policies changed") as exc_info:
+        mutation.op(collection)
+    mutation.failed(exc_info.value)
+
+    assert automatic.LAST_AUTOMATIC_DAYS_PROFILE_KEY not in runner.window.pm.profile
+    assert (
+        "selected policies changed"
+        in runner.window.pm.profile["card_janitor_last_cleanup"]["failure"]
+    )
+    assert warnings == [str(exc_info.value)]
 
 
 def test_automatic_run_coalesces_and_marks_only_completed_day(runner: SimpleNamespace) -> None:

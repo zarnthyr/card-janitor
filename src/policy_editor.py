@@ -42,7 +42,7 @@ from .cleanup_preview import CleanupPreviewDialog, build_preview_rows
 from .condition_row import ConditionRow
 from .deck_picker import DeckPicker
 from .editor_utils import _split_tags, pad_text_field, show_text_from_start
-from .evaluator import evaluate_policy, validate_policy_references
+from .evaluator import evaluate_policy, scheduler_condition_errors, validate_policy_references
 from .line_numbers import LineNumberArea
 from .log import error
 from .models import (
@@ -209,7 +209,9 @@ class PolicyEditorDialog(QDialog):
             deck_names,
             deck_values,
             self,
-            all_decks=policy.scope.all_decks if policy else raw_scope.get("all_decks") is True,
+            all_decks=(
+                policy.scope.all_decks if policy else record is not None and "scope" not in raw
+            ),
         )
         qconnect(self.decks.changed, self._schedule_button_state)
         scope_form = QFormLayout()
@@ -291,8 +293,10 @@ class PolicyEditorDialog(QDialog):
                 for condition in (_best_effort_condition(item) for item in condition_values)
                 if condition is not None
             )
-        if isinstance(source_conditions, AllCardsCondition) or any(
-            isinstance(condition, AllCardsCondition) for condition in conditions
+        if (
+            isinstance(source_conditions, AllCardsCondition)
+            or any(isinstance(condition, AllCardsCondition) for condition in conditions)
+            or (record is not None and "match" not in raw and "conditions" not in raw)
         ):
             self.match.setCurrentIndex(self.match.findData("all_cards"))
         conditions = tuple(
@@ -643,6 +647,17 @@ class PolicyEditorDialog(QDialog):
             {"fsrs_stability", "fsrs_difficulty", "fsrs_retrievability"} & kinds
         )
 
+    def _scheduler_condition_errors(self) -> tuple[str, ...]:
+        if self.match.currentData() == "all_cards":
+            return ()
+        conditions = tuple(row.condition() for row in self._conditions)
+        expression: ConditionExpression = (
+            AnyConditions(conditions)
+            if self.match.currentData() == "any"
+            else AllConditions(conditions)
+        )
+        return scheduler_condition_errors(mw.col, expression)
+
     def _add_action(
         self,
         kind: str,
@@ -862,8 +877,11 @@ class PolicyEditorDialog(QDialog):
             if panel is None:
                 continue
             section_errors = self._section_errors[section]
-            if section == "conditions" and self._has_incompatible_schedulers():
-                section_errors = tuple(dict.fromkeys((*section_errors, scheduler_mix)))
+            if section == "conditions":
+                immediate_errors = self._scheduler_condition_errors()
+                if self._has_incompatible_schedulers():
+                    immediate_errors = (*immediate_errors, scheduler_mix)
+                section_errors = tuple(dict.fromkeys((*section_errors, *immediate_errors)))
             if section_errors:
                 panel.setText(
                     "⚠ "
@@ -897,6 +915,8 @@ class PolicyEditorDialog(QDialog):
     @staticmethod
     def _error_section(message: str) -> str:
         lowered = message.casefold()
+        if "collection-wide deletion is not allowed" in lowered:
+            return "top"
         if ".name" in lowered or ".triggers" in lowered or "policy name" in lowered:
             return "general"
         if (
@@ -958,18 +978,17 @@ class PolicyEditorDialog(QDialog):
             errors.append("Choose at least one deck")
         if self.note_types.selected() == ():
             errors.append("Choose at least one note type")
-        simple_conditions = (
-            (AllCardsCondition(),)
-            if self.match.currentData() == "all_cards"
-            else tuple(row.condition() for row in self._conditions)
-        )
-        if not simple_conditions:
+        all_cards = self.match.currentData() == "all_cards"
+        simple_conditions = () if all_cards else tuple(row.condition() for row in self._conditions)
+        if not all_cards and not simple_conditions:
             errors.append("Add at least one condition or choose 'All cards'")
         if any(isinstance(item, TagCondition) and not item.tags for item in simple_conditions):
             errors.append("Enter one or more tags for every tag condition")
         condition: ConditionExpression = (
-            AllConditions(simple_conditions)
-            if self.match.currentData() in {"all", "all_cards"}
+            AllCardsCondition()
+            if all_cards
+            else AllConditions(simple_conditions)
+            if self.match.currentData() == "all"
             else AnyConditions(simple_conditions)
         )
         actions: list[Action] = []
@@ -1013,6 +1032,16 @@ class PolicyEditorDialog(QDialog):
             }
             if added & removed:
                 errors.append("The same tag cannot be added and removed")
+            if (
+                {"delete_card", "delete_note"} & set(kinds)
+                and self.decks.all_decks
+                and self.note_types.selected() is None
+                and all_cards
+            ):
+                errors.append(
+                    "Collection-wide deletion is not allowed. "
+                    "Restrict the scope or add at least one condition."
+                )
         policy_id = self._policy_id
         normalized_id = policy_id.casefold()
         if not (preview or browse) and normalized_id in self._existing_ids:
@@ -1055,14 +1084,44 @@ class PolicyEditorDialog(QDialog):
             self._hide_policy_errors()
         return parsed
 
-    def _form_payload(self) -> dict:
-        conditions = (
-            (AllCardsCondition(),)
-            if self.match.currentData() == "all_cards"
-            else tuple(row.condition() for row in self._conditions)
+    def _draft_policy_for_reference_validation(self) -> Policy:
+        """Build enough draft state to report independent collection errors on Save."""
+        all_cards = self.match.currentData() == "all_cards"
+        conditions = tuple(row.condition() for row in self._conditions)
+        expression: ConditionExpression = (
+            AllCardsCondition()
+            if all_cards
+            else AnyConditions(conditions)
+            if self.match.currentData() == "any"
+            else AllConditions(conditions)
         )
-        expression = (
-            AnyConditions(conditions)
+        decks = self.decks.selectors()
+        all_decks = self.decks.all_decks or not decks
+        note_types = self.note_types.selected()
+        actions = tuple(action for row in self._actions for action in row.actions())
+        return Policy(
+            id=self._policy_id,
+            name=self.name.text().strip() or "Unnamed policy",
+            triggers=self.triggers.selected(),
+            scope=Scope(
+                decks=() if all_decks else decks,
+                all_decks=all_decks,
+                note_types=None if note_types == () else note_types,
+            ),
+            conditions=expression,
+            actions=tuple(
+                action
+                for action in actions
+                if not isinstance(action, MoveAction) or action.deck.strip()
+            ),
+        )
+
+    def _form_payload(self) -> dict:
+        conditions = tuple(row.condition() for row in self._conditions)
+        expression: ConditionExpression = (
+            AllCardsCondition()
+            if self.match.currentData() == "all_cards"
+            else AnyConditions(conditions)
             if self.match.currentData() == "any"
             else AllConditions(conditions)
         )
@@ -1096,7 +1155,7 @@ class PolicyEditorDialog(QDialog):
                 if preview or browse:
                     if not isinstance(raw.get("name"), str) or not raw["name"].strip():
                         raw["name"] = "Unnamed policy"
-                    raw["triggers"] = []
+                    raw.pop("triggers", None)
                 if browse:
                     # Matching does not depend on the draft's actions. A valid
                     # placeholder lets the schema validate everything else.
@@ -1267,26 +1326,17 @@ class PolicyEditorDialog(QDialog):
             self._apply_json()
             return
         errors: list[str] = []
-        policy = self._policy_from_form(error_sink=errors)
-        if policy is None:
-            if errors:
-                self._show_save_errors(tuple(errors))
+        policy = self._policy_from_form(show_errors=False, error_sink=errors)
+        reference_policy = policy or self._draft_policy_for_reference_validation()
+        errors.extend(validate_policy_references(mw.col, reference_policy))
+        errors = list(dict.fromkeys(errors))
+        if errors:
+            self._set_policy_errors(tuple(errors))
             return
-        reference_errors = validate_policy_references(mw.col, policy)
-        if reference_errors:
-            self._set_policy_errors(reference_errors)
-            self._show_save_errors(reference_errors)
+        if policy is None:
             return
         self.result_policy = policy
         self.accept()
-
-    def _show_save_errors(self, errors: tuple[str, ...]) -> None:
-        body = errors[0] if len(errors) == 1 else "\n".join(f"• {item}" for item in errors)
-        showWarning(
-            f"Cannot save this policy:\n\n{body}",
-            parent=self,
-            title="Card Janitor",
-        )
 
     def _close_preview(self) -> None:
         if self._preview_dialog is not None:
@@ -1465,8 +1515,6 @@ def _best_effort_condition(  # noqa: PLR0911, PLR0912
     days = raw.get("days")
     if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= MAX_DAYS:
         days = 365
-    if kind == "all_cards":
-        return AllCardsCondition()
     if kind == "age":
         source = _raw_string(raw, "source")
         return AgeCondition(

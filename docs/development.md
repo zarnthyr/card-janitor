@@ -9,8 +9,8 @@ make inspect
 
 The project targets Python 3.11+ and uses the Anki 26.8.1 development packages pinned in `uv.lock`. Runtime dependencies are limited to APIs bundled with Anki.
 
-For manual testing, install `card-janitor.ankiaddon` in Anki and begin with an
-manual-only policy (**Trigger → None**, `"triggers": []`). Open **Card Janitor…** to add or edit
+For manual testing, install `card-janitor.ankiaddon` in Anki and begin with a
+manual-only policy (**Trigger → None**, omitted `triggers`). Open **Card Janitor…** to add or edit
 policies, review card counts, inspect qualifying cards in the Browser, apply
 a policy, and test undo before trying automatic triggers. The manager is a
 modeless tool window, so it remains available while working in the Browser.

@@ -3,7 +3,6 @@
     {
       "id": "5b19450f-4741-5ae2-8b8c-f5f62b87895e",
       "name": "Dev — Old Reviews",
-      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -36,7 +35,6 @@
     {
       "id": "a6e138ed-1f9a-5c6b-afe2-824f64baaa49",
       "name": "Dev — Long Intervals",
-      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -63,7 +61,6 @@
     {
       "id": "063e610d-e7bb-5e32-bcca-b00522b4cc8c",
       "name": "Dev — Never Studied",
-      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -97,7 +94,6 @@
     {
       "id": "8ac28569-390c-5f52-b32f-428ef2dcba61",
       "name": "Dev — Learning States",
-      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -128,7 +124,6 @@
     {
       "id": "1067e16f-853c-5ad0-8d98-4bb2b1ac1204",
       "name": "Dev — Repair Suspended Leech",
-      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -168,7 +163,6 @@
     {
       "id": "90a23866-98bd-510f-885f-9ec5925d7566",
       "name": "Dev — Replace All Tags",
-      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -204,7 +198,6 @@
     {
       "id": "4130e98d-fb93-59ee-a659-4f6aef968db9",
       "name": "Dev — Delete Note",
-      "triggers": [],
       "scope": {
         "decks": [
           {
@@ -213,12 +206,6 @@
           }
         ]
       },
-      "match": "all",
-      "conditions": [
-        {
-          "type": "all_cards"
-        }
-      ],
       "actions": [
         {
           "type": "delete_note"
@@ -228,7 +215,6 @@
     {
       "id": "cfbf3bae-08fe-5846-9265-cdfdc40d78e2",
       "name": "Dev — Suspend Note",
-      "triggers": [],
       "scope": {
         "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
         "note_types": [{"name": "Card Janitor Test Siblings"}]
@@ -244,7 +230,6 @@
     {
       "id": "bf15ede9-aeaf-5170-be11-25be33b841d6",
       "name": "Dev — Unsuspend Note",
-      "triggers": [],
       "scope": {
         "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
         "note_types": [{"name": "Card Janitor Test Siblings"}]
@@ -259,7 +244,6 @@
     {
       "id": "db81d9ff-1341-5707-b054-c05574af8aca",
       "name": "Dev — Move Note",
-      "triggers": [],
       "scope": {
         "decks": [{"deck": "Card Janitor Test::Note Actions", "include_subdecks": false}],
         "note_types": [{"name": "Card Janitor Test Siblings"}]

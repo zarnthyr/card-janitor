@@ -5,15 +5,21 @@ to edit the current collection's policy data directly.
 
 **Review copied or shared policies before saving.** They may enable automatic
 deletion without confirmation. Check their scope, conditions, actions, and triggers;
-changing deck names alone is not enough. Set copied policies to
-`"triggers": []` and inspect affected cards with **Browse** before adding
-automatic triggers.
+changing deck names alone is not enough. Remove `triggers` from copied policies
+and inspect affected cards with **Browse** before adding automatic triggers.
 
 Policies are stored in the current Anki collection and sync with it.
+Each policy requires `id`, `name`, and a non-empty `actions` array. Optional
+composition fields describe only active configuration: omit `triggers` for
+manual-only execution, omit `scope` for unrestricted scope, and omit both
+`match` and `conditions` for All cards. Active selectors, conditions, actions,
+and triggers keep their configuration fields explicit.
 
-If any policy is invalid, Card Janitor will not clean up until the problem is
-fixed. Invalid policies remain visible in Card Janitor and can be repaired with
-**Edit** or **Edit as JSON**.
+Invalid policies remain visible in Card Janitor and can be repaired with
+**Edit** or **Edit as JSON**. A structural error in the stored collection policy
+list prevents it from being loaded safely. A collection-context error, such as
+a missing deck or scheduler mismatch, blocks that policy when it is selected or
+due; an unrelated unchecked or inactive policy does not block the run.
 
 The ordinary policy editor checks deck, note-type, card-type and move-deck
 references when saving. It also rejects FSRS conditions while FSRS is disabled,
@@ -22,28 +28,30 @@ represent an invalid policy; the manager keeps it visible and shows the specific
 reason without allowing cleanup.
 Opening an affected policy shows its saved errors in the editor; Save checks the
 edited policy again and refuses to save while a problem remains.
-The editor does not produce new validation messages while a policy is being
-assembled or repaired. Save is the explicit full validation point. Existing
-saved errors and Save errors are shown in the relevant General, Scope,
+Most draft validation is deferred until Save, the explicit full validation
+point. Existing saved errors and Save errors are shown in the relevant General, Scope,
 Conditions, or Actions section, with one combined panel directly below that
 section's help text. Multiple messages begin with **Fix the following:** and a
 short list. Only errors that do not belong to one section appear at the top.
+Save reports these persistent inline errors without also opening a redundant
+warning dialog. It gathers collection-context errors that can be determined
+from the draft even when unrelated required fields are still incomplete.
 Browse and Preview remain available while editing. Clicking either validates
 only the inputs that operation needs and shows a transient explanation if it
 cannot proceed, without scanning cards first.
-The one immediate validation exception is combining FSRS and SM-2 conditions,
-because that combination cannot work under any scheduler configuration. It is
-an intrinsic policy error: the form shows and clears it immediately, individual
-JSON refuses to apply it with the specific reason, and bulk JSON retains it as
-an invalid policy for repair. Whether FSRS is currently enabled is instead a
-collection-specific check and follows the quieter validation behavior.
-In the individual JSON editor, malformed or schema-invalid JSON remains in the
-JSON view with its full error shown in the visible top panel. Structurally valid
+The form immediately shows scheduler errors when FSRS or SM-2 conditions are
+selected: FSRS conditions need collection-wide FSRS enabled, SM-2 conditions
+need it disabled, and the two condition families cannot be combined. This
+feedback does not depend on choosing a scope. It is GUI-only collection
+validation: structurally valid JSON can still be imported or stored when its
+scheduler requirements do not match the current collection, then repaired in
+the editor.
+In both JSON editors, malformed or schema-invalid JSON remains in the JSON view
+with its full error shown in a visible top panel. Structurally valid individual
 JSON still applies to the form, even when collection-specific references or
 scheduler requirements are invalid; after applying it, those errors appear in
-the appropriate form section. Bulk
-JSON remains able to store structurally valid policies with collection-specific
-errors so they can be repaired in the manager.
+the appropriate form section. Bulk JSON remains able to store structurally valid
+policies with collection-specific errors so they can be repaired in the manager.
 
 Deck names are resolved when a policy is evaluated. A missing or filtered
 destination deck is an error.
@@ -59,10 +67,15 @@ Card Janitor can permanently delete cards. Back up your collection before use,
 begin in on-demand cleanup, and inspect matching cards with **Browse** before
 cleaning up. Automatic triggers apply policies without confirmation.
 
-Each cleanup that changes cards is grouped into one entry in Anki's collection
-undo history.
+Card Janitor participates in Anki's normal collection Undo system. A successful
+cleanup that changes cards is grouped into one Card Janitor entry. If an
+unexpected later operation fails, earlier operations may remain applied and
+Card Janitor reports that Anki Undo should be used; an unusual Undo-grouping
+failure can require more than one Undo.
 Undo restores collection changes but does not reset Daily's completion record.
 To retry an undone cleanup on the same day, apply it manually.
+Undo availability follows Anki's normal history and is not guaranteed after
+arbitrary later collection operations.
 Policy configuration changes do not create collection undo entries. Removing a
 policy therefore requires confirmation but cannot be undone with Anki's Undo
 command.
@@ -74,7 +87,6 @@ command.
         {
           "id": "2f87a1d4-956b-4f3c-a80e-d53792a4761b",
           "name": "Retire Mature Cards",
-          "triggers": [],
           "scope": {
             "decks": [{"deck": "Mining", "include_subdecks": true}]
           },
@@ -91,8 +103,8 @@ command.
       ]
     }
 
-In JSON, `"triggers": []` means manual-only (**Trigger → None** in the editor).
-Keep triggers empty while testing. Card Janitor evaluates every configured policy
+In JSON, an omitted `triggers` field means manual-only (**Trigger → None** in the
+editor). Keep triggers omitted while testing. Card Janitor evaluates every configured policy
 and shows its scope, conditions, actions, and the number of cards it would
 clean up.
 Every policy is included by default in the dashboard. The checkboxes affect
@@ -116,9 +128,8 @@ Anki's Browser. It does not require a policy name or actions.
 **Preview…** beside **Save** opens **Cleanup Preview** with the merged changes from the editor's current
 policy alone. Other policies are not included. A name is optional for preview;
 scope, conditions and actions must still be usable. If Browse or Preview cannot
-proceed, it shows the relevant errors and places them in their form sections.
-Neither operation saves or
-applies the policy.
+proceed, it shows a transient message without adding new persistent form errors.
+Neither operation saves or applies the policy.
 The title identifies the policy, or **Unnamed policy** if no name is entered.
 The single-policy preview shows planned changes without the combined-policy
 View selector. Only Card and Changes are shown by default; Reason appears only for
@@ -144,9 +155,9 @@ unsaved changes.
 
 ## Automatic triggers
 
-Every policy requires a top-level `triggers` array. Empty means manual only;
-all policies remain manually runnable regardless of their triggers. Each entry
-is an object with a `type`:
+The optional top-level `triggers` array configures automatic execution and must
+be non-empty when present. Omit it for a manual-only policy; all policies remain
+manually runnable regardless of their triggers. Each entry is an object with a `type`:
 
 - `daily` — once per Anki day, checked on profile open and day change.
 - `on_open` — each profile open, including switching profiles.
@@ -184,10 +195,11 @@ opening/manual sync are uploaded on a later sync, including closing sync.
 
 ## Scope
 
-Use `"all_decks": true` to cover every current and future deck, or `decks` for
-individual selections. These alternatives cannot be combined. For example:
+Omit `scope` to cover every current and future deck and every note/card type.
+When `scope` is present, it must contain at least one real restriction. Use
+`decks` for individual deck selections. For example:
 
-    "scope": {"all_decks": true}
+    "scope": {"decks": [{"deck": "Mining", "include_subdecks": true}]}
 
 `decks` must contain one or more selectors, each with `deck` and
 `include_subdecks`. A recursive selector includes that deck and all current and
@@ -197,9 +209,9 @@ Suspended and non-suspended cards are both eligible. Use a Suspension state
 condition when a policy should include only one of those states.
 Buried cards remain eligible because burial is temporary.
 
-Optionally add `note_types` to restrict scope to one or more note-type names:
+Use `note_types` alone to restrict note/card types while leaving decks unrestricted:
 
-    "scope": {"all_decks": true, "note_types": [{"name": "Basic"}, {"name": "Cloze"}]}
+    "scope": {"note_types": [{"name": "Basic"}, {"name": "Cloze"}]}
 
 Cards must satisfy both the deck selection and the note-type selection. Omit
 `note_types` for **All note types**, including types created later. An explicit
@@ -242,10 +254,9 @@ note properties, such as tags, under **Notes**. Group headings are not selectabl
 
 ### All cards
 
-    {"type": "all_cards"}
-
-Matches every card allowed by the policy's scope. `all_cards` must be the
-policy's only condition.
+Omit both `match` and `conditions` to match every card allowed by the policy's
+scope. Empty condition arrays, either matching field without the other, and the
+obsolete `{"type": "all_cards"}` pseudo-condition are invalid.
 In the editor, choose **All cards** in the **Match** selector; condition rows
 are hidden while this option is selected. Choose AND or OR to use conditions.
 
@@ -265,7 +276,7 @@ in the card ID.
 > first evaluation. Anki does not expose a reliable per-card local-import timestamp.
 
 Use creation-age conditions only for cards whose provenance you understand. Keep the
-policy manual-only (`"triggers": []`) and inspect its matching cards before
+policy manual-only (omit `triggers`) and inspect its matching cards before
 adding automatic triggers. Card Janitor does not attempt to rewrite card IDs. If you use another
 add-on to normalize creation dates, back up the collection first and verify that the
 tool safely updates all related references.
@@ -404,8 +415,8 @@ not at the instant Anki adds the leech tag.
     ]
 
 Use `match: "any"` for OR and `match: "all"` for AND. `conditions` must contain
-at least one condition. `all_cards` must appear alone; the other condition types
-can be combined. Nested AND/OR groups are not supported.
+at least one condition, and `match` and `conditions` must occur together. Nested
+AND/OR groups are not supported.
 
 For example, the conditions for a stale-new-card policy are:
 
@@ -435,15 +446,18 @@ to greater than, at least, exactly, at most, and less than.
 - `{"type": "clear_flag"}` clears the qualifying card's flag.
 
 All tag actions affect notes, so sibling cards share their result. Replacing tags is
-destructive and is highlighted in the policy editor. Overlapping policies are skipped
-as conflicts when they add and remove the same tag, replace a note's tags in
-incompatible ways, or both suspend and unsuspend a card.
-Different requested flags (including setting and clearing) also conflict.
+destructive and is highlighted in the policy editor. Overlapping policies are
+skipped when their intentions conflict, including contradictory tag changes,
+incompatible replacements, suspend versus unsuspend, different flags or moves,
+and note deletion combined with other actions.
 
 `delete_card` and `delete_note` must each be the policy's only action. Either can
 use automatic triggers, but automatic deletion happens without confirmation.
+Collection-wide deletion of All cards across All decks is invalid. A delete
+policy must include at least one deck, note/card-type, or matching-condition
+restriction.
 On-demand deletion is shown in the dashboard before actions are applied. The shipped
-configuration contains no policies, and the example uses `"triggers": []`
+configuration contains no policies, and the example omits `triggers`
 with reversible tag, suspend, and move actions.
 
 For **Notes** actions, scope and conditions identify the triggering cards. The
@@ -451,10 +465,14 @@ action then applies to every card of their notes, including siblings outside
 the selected decks. Filtered cards cannot trigger a policy, but can be affected
 as siblings of a matching note.
 
-Policy counts and **Browse** include sibling cards that require an action,
-including those deleted with a note. An already satisfied triggering card does
-not prevent a note action from updating its siblings. If a sibling has a
-conflicting policy, the note-wide operation is skipped for the whole note.
+Manager policy counts and manager **Browse** include sibling cards that require
+a note action, including those deleted with a note. An individual editor's
+**Browse** instead shows only the in-scope cards matching its current scope and
+conditions, because it deliberately ignores the draft action. Individual
+**Preview…** includes the action-expanded siblings and labels them **Included by
+note action**. An already satisfied triggering card does not prevent a note
+action from updating its siblings. If a sibling has a conflicting policy, the
+note-wide operation is skipped for the whole note.
 If new cards would be affected between preview and applying actions, the whole note
 is skipped rather than expanding the approved operation.
 
@@ -480,7 +498,10 @@ reported as a policy error.
 
 ## Overlapping policies
 
-Compatible actions are merged and deduplicated during manual and automatic cleanup. Cards with conflicting move destinations, or a deletion combined with another policy's action, are skipped and reported.
+Compatible actions are merged and deduplicated during manual and automatic
+cleanup. Cards are skipped when policies express incompatible intentions, such
+as different moves, suspend versus unsuspend, different flags, contradictory or
+incompatible tag changes, or note deletion combined with another action.
 
 Click **Preview…** beside **Clean Up** on the dashboard to open **Cleanup Preview**
 at **Planned changes**. Switch between **All affected**,
@@ -488,16 +509,25 @@ at **Planned changes**. Switch between **All affected**,
 the card, targeting policies, actual merged changes, status, and reason. Satisfied
 actions are omitted from planned changes; skipped cards show no changes and
 explain the competing actions. Policy names can include satisfied intentions
-that still matter for conflict detection. Note deletion is labelled explicitly;
+that still matter for conflict detection. Every conflict is also classified as
+an overlap. Note deletion is labelled explicitly;
 expanded siblings are marked **Included by note action**.
 
 Select rows and use **Browse** to inspect those cards, or clear the
 selection and use **Browse** for all cards in the current view. The preview is
 read-only and reflects the current evaluation, not a guarantee that a later
-cleanup applies an unchanged snapshot. Refresh recalculates it; changing checked
-policies updates it. An editor preview closes if its unsaved settings change.
+cleanup applies unchanged card state. Card state is evaluated again before
+mutation; if a selected saved policy definition changed, cleanup is cancelled
+instead of applying the stale definition. Refresh recalculates the preview;
+changing checked policies updates it. An editor preview closes if its unsaved
+settings change.
 The main **Browse** button still includes all
 candidate cards from checked policies, including conflicts; cleanup totals
 exclude conflicting cards. Already-satisfied actions can still conflict with
 another policy's intended changes. A conflict affecting a note-wide action
 skips all affected cards of that note together.
+
+Policies are matched as a batch against the pre-cleanup collection state. An
+action from one policy does not make another policy newly match during that same
+cleanup. Policies intentionally depending on another policy's output can match
+on a subsequent cleanup.

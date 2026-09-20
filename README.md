@@ -51,21 +51,23 @@ Then install `card-janitor.ankiaddon` from Anki's add-ons screen or by double cl
 Each policy has four parts:
 
 * Triggers — when to apply the policy automatically; None keeps it manual-only
-* Scope — deck selections, optionally restricted to selected note types and card types
+* Scope — which decks, note types, and card types the policy can operate on
 * Conditions — card properties, note tags, or sibling suspension/review history, combined with AND/OR
 * Actions — change tags or flags, suspend or unsuspend, move, or delete the qualifying cards
 
 ### Scope
 
-Scope limits a policy to one or more decks. It can optionally include their
-subdecks and restrict matches to selected note types or card types.
+Scope determines which decks, note types, and card types a policy can operate
+on. **All decks** leaves the deck dimension unrestricted, while note-type or
+card-type selections can restrict a policy independently of decks.
 Suspended and non-suspended cards are both eligible; use a Suspension state
 condition to restrict either state. Filtered-deck cards are excluded.
 The compact deck selector opens a collapsible tree. Each deck can include all
 current and future descendants, only itself, or nothing. Partial checks indicate
 an exact selection or a mixed branch.
 The note-type selector defaults to **All note types**, including types created
-later. Selecting specific types restricts the cards matched within those decks.
+later. Selecting specific types restricts the cards matched within the deck
+portion of the scope.
 Each selected note type includes all its current and future card types by
 default; expand it to choose an exact set of card types instead.
 The manager's Scope column shows note-type restrictions when present; its
@@ -84,7 +86,7 @@ Choose **All decks** at the tree root to include every current and future deck.
 
 | Condition | What it matches | Important detail |
 | --- | --- | --- |
-| All cards | Every card allowed by the selected scope | Must be the policy's only condition |
+| All cards | Every card allowed by the selected scope | Explicit editor choice; represented in JSON by omitting `match` and `conditions` |
 | Age since first review | Whole days since the card's first genuine answer | Cards without review history do not match |
 | Age since last review | Whole days since the card's latest genuine answer | Cards without review history do not match |
 | Age since creation | Whole days since the card's original creation timestamp | Imported cards may retain much older creation dates |
@@ -112,11 +114,12 @@ and filtered siblings. Use **Sibling review history → none studied** when
 deleting notes that must be completely unstudied, rather than checking only
 the matching card's review history.
 
-The editor refuses to save policies whose FSRS or SM-2 conditions are
-incompatible with the collection's current scheduler. Policies entered through
-JSON, or made invalid by a later scheduler change, remain visible with their
-reason shown in the manager and are not applied until the problem is fixed.
-Opening an affected policy also shows its saved errors in the relevant section.
+The editor immediately identifies FSRS or SM-2 conditions that are incompatible
+with the collection's current scheduler, and Save checks them with the rest of
+the policy. Policies entered through JSON, or made invalid by a later scheduler
+change, remain visible with their reason shown in the manager and are not
+applied until the problem is fixed. Opening an affected policy also shows its
+saved errors in the relevant section.
 
 ### Actions
 
@@ -130,16 +133,24 @@ Matching cards can be:
 
 Choose **Cards** to act on matching cards, or **Notes** to suspend, unsuspend,
 move, or delete all cards belonging to matching notes. Notes actions can affect
-siblings outside the selected scope; counts and **Browse** include the cards
-that require an action.
+siblings outside the selected scope. Manager counts and manager **Browse**, as
+well as an individual policy's **Preview…**, include out-of-scope siblings that
+require the note action. The individual editor's **Browse** shows only the
+in-scope cards that triggered the policy because it browses scope and conditions
+without applying the draft action.
 
 Compatible actions from overlapping policies are combined. Cards are skipped
-and reported when policies specify conflicting move destinations or combine
-deletion with another action.
+and reported when policies express incompatible intentions, including moves,
+suspension, flags, tag changes or replacements, and deletion combined with
+other actions.
 Open **Preview…** and choose **Conflicts** to inspect involved policies and conflict
 reasons. Cleanup totals exclude conflicts; **Browse** includes them so you can
 inspect all candidates. Preview's **Browse** opens selected cards, or all cards
 in its current view when nothing is selected.
+
+Policies are evaluated as one batch against the collection state at the start
+of cleanup. A change made by one policy cannot make another policy newly match
+in the same run; it can match on a later cleanup.
 
 ### Example policies
 
@@ -195,10 +206,11 @@ matching the current scope and conditions without requiring a name or actions;
 other policies. Both work in the form and JSON views without saving. Preview
 does not require a policy name. New policies start with empty condition and action
 lists; choose conditions or **All cards**, and add at least one action. Browse,
-Preview, and Save are explicit validation points; Browse and Preview show a
-concise message if their required inputs are not usable. The editor otherwise
-waits before presenting new validation errors while a policy is being built or
-repaired, except for combinations such as FSRS with SM-2 that can never work.
+Preview, and Save are explicit validation points. Browse and Preview show a
+transient message if their required inputs are not usable; they do not add new
+persistent form errors. Save shows all form and collection validation errors
+inline. Scheduler-incompatible FSRS/SM-2 selections are also identified as soon
+as they are chosen because scheduler mode is collection-wide.
 Internal IDs are generated UUIDs and managed automatically. Individual JSON
 imports receive the draft's fresh ID; bulk JSON preserves IDs and rejects
 duplicates. Closing a changed policy editor asks before discarding edits.
@@ -218,6 +230,12 @@ time. Click a policy name to edit it if the policy still exists.
 This result is stored locally per profile and does not sync; Undo
 does not change the recorded outcome.
 
+Cleanup participates in Anki's normal Undo system. Successful changes are
+grouped into a Card Janitor entry; if an unexpected later operation fails,
+earlier changes may already have been applied and should be reverted with
+Anki's Undo. Undo availability follows Anki's normal history and is not a
+persistent Card Janitor rollback guarantee.
+
 Policy definitions are stored in the current collection and sync with it, so
 each profile has its own policies. Automatic cleanup, notification and debug settings are shared
 across profiles on the same Anki installation. Automatic cleanup is tracked
@@ -225,7 +243,9 @@ separately for each profile.
 
 Automatic deletion is supported but is never configured by default. It requires
 an explicit `delete_card` or `delete_note` action with automatic triggers and
-applies those actions without confirmation.
+applies those actions without confirmation. Collection-wide deletion of All
+cards across All decks is rejected; deletion must have a scope or condition
+restriction.
 
 See [policies.md](./docs/policies.md) for the complete policy schema and examples.
 

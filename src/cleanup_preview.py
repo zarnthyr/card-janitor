@@ -55,7 +55,7 @@ def build_preview_rows(  # noqa: PLR0912
     for report in reports:
         for card, _actions in report.card_actions:
             sources.setdefault(card.card_id, set()).add(report.policy.name)
-    counts = Counter(card.card_id for report in reports for card in report.actionable)
+    counts = Counter(card.card_id for report in reports for card, _actions in report.card_actions)
     qualifying = {card.card_id for report in reports for card in report.qualifying}
     conflicts = {detail.card_id: detail for detail in plan.conflict_details}
     card_changes: dict[int, list[str]] = {}
@@ -111,7 +111,7 @@ def build_preview_rows(  # noqa: PLR0912
                 conflict.policies if conflict else tuple(sorted(sources.get(card_id, ()))),
                 () if conflict else tuple(changes),
                 conflict.reasons if conflict else (),
-                counts[card_id] > 1,
+                counts[card_id] > 1 or conflict is not None,
                 card_id not in qualifying,
             )
         )
