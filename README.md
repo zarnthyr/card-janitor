@@ -231,10 +231,12 @@ This result is stored locally per profile and does not sync; Undo
 does not change the recorded outcome.
 
 Cleanup participates in Anki's normal Undo system. Successful changes are
-grouped into a Card Janitor entry; if an unexpected later operation fails,
-earlier changes may already have been applied and should be reverted with
-Anki's Undo. Undo availability follows Anki's normal history and is not a
-persistent Card Janitor rollback guarantee.
+grouped into a Card Janitor entry as cleanup proceeds. If an unexpected later
+operation fails, earlier changes may already have been applied. Card Janitor
+identifies the named Undo entry when it can verify complete recovery; otherwise
+it warns that Anki Undo may provide only partial recovery. Undo availability
+follows Anki's normal history and is not a persistent Card Janitor rollback
+guarantee.
 
 Policy definitions are stored in the current collection and sync with it, so
 each profile has its own policies. Automatic cleanup, notification and debug settings are shared

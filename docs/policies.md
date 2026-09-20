@@ -68,10 +68,11 @@ begin in on-demand cleanup, and inspect matching cards with **Browse** before
 cleaning up. Automatic triggers apply policies without confirmation.
 
 Card Janitor participates in Anki's normal collection Undo system. A successful
-cleanup that changes cards is grouped into one Card Janitor entry. If an
-unexpected later operation fails, earlier operations may remain applied and
-Card Janitor reports that Anki Undo should be used; an unusual Undo-grouping
-failure can require more than one Undo.
+cleanup that changes cards is grouped into one Card Janitor entry as its
+backend operations complete. If an unexpected later operation fails, earlier
+operations may remain applied. Card Janitor identifies the named Undo entry
+when it can verify complete recovery; otherwise it warns that some changes may
+be recoverable through Anki Undo but complete recovery cannot be guaranteed.
 Undo restores collection changes but does not reset Daily's completion record.
 To retry an undone cleanup on the same day, apply it manually.
 Undo availability follows Anki's normal history and is not guaranteed after
@@ -109,13 +110,14 @@ and shows its scope, conditions, actions, and the number of cards it would
 clean up.
 Every policy is included by default in the dashboard. The checkboxes affect
 only the current cleanup. Add automatic triggers to also apply a policy without
-approval. Collection changes are grouped into one Anki Undo entry.
+approval. Collection changes are incrementally grouped into one Anki Undo entry.
 
 Opening cleanup waits for Anki's opening collection sync attempt to finish when
 automatic sync is enabled; otherwise it runs immediately. A failed or cancelled
 sync leaves cleanup using the local collection. Cleanup changes reach other
 devices on the next sync. Interrupted cleanup may apply some actions before
-failing; use the named Anki Undo entry to revert completed changes.
+failing. Use the named Anki Undo entry when Card Janitor verifies it; otherwise
+follow the more cautious recovery guidance in the failure message.
 
 The window remains open while you inspect cards. **Browse** opens the union
 from all checked policies. Select a row and use **Edit** to change that policy;

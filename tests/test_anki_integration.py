@@ -78,6 +78,71 @@ def test_partial_cleanup_failure_is_grouped_and_recoverable(
         collection.close()
 
 
+def test_cleanup_over_undo_history_limit_remains_one_undo_entry(tmp_path: Path) -> None:
+    collection = Collection(str(tmp_path / "large-undo.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        tags = tuple(f"cleanup-{index:03}" for index in range(101))
+        policy = Policy(
+            id="many-tags",
+            name="Many tags",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=tuple(TagAction(tag) for tag in tags),
+        )
+        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+
+        result = execute_plan(collection, plan, "Large cleanup")
+
+        assert result.affected_cards == 1
+        assert set(tags).issubset(collection.get_note(note.id).tags)
+        assert collection.undo_status().undo == "Large cleanup"
+        collection.undo()
+        assert not set(tags).intersection(collection.get_note(note.id).tags)
+    finally:
+        collection.close()
+
+
+def test_large_partial_cleanup_failure_remains_one_undo_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection = Collection(str(tmp_path / "large-failure.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        tags = tuple(f"cleanup-{index:03}" for index in range(101))
+        policy = Policy(
+            id="many-tags-failure",
+            name="Many tags failure",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(*tuple(TagAction(tag) for tag in tags), SuspendAction()),
+        )
+        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+
+        def fail(*_args: object) -> None:
+            message = "injected suspension failure"
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(collection.sched, "suspend_cards", fail)
+        with pytest.raises(CleanupError, match="Undo entry 'Large failed cleanup'"):
+            execute_plan(collection, plan, "Large failed cleanup")
+
+        assert set(tags).issubset(collection.get_note(note.id).tags)
+        assert collection.undo_status().undo == "Large failed cleanup"
+        collection.undo()
+        assert not set(tags).intersection(collection.get_note(note.id).tags)
+    finally:
+        collection.close()
+
+
 def test_completed_cleanup_reports_merge_undo_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -102,11 +167,49 @@ def test_completed_cleanup_reports_merge_undo_failure(
             raise RuntimeError(message)
 
         monkeypatch.setattr(collection, "merge_undo_entries", fail_merge)
-        with pytest.raises(CleanupError, match="changes were applied") as exc_info:
+        with pytest.raises(CleanupError, match="after applying changes") as exc_info:
             execute_plan(collection, plan, "Merge failure")
 
         assert collection.get_note(note.id).has_tag("retired")
-        assert "more than one Undo may be required" in str(exc_info.value)
+        assert "complete recovery cannot be guaranteed" in str(exc_info.value)
+    finally:
+        collection.close()
+
+
+def test_cleanup_failure_does_not_promise_recovery_when_undo_state_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection = Collection(str(tmp_path / "unavailable-undo.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        policy = Policy(
+            id="unavailable-undo",
+            name="Unavailable Undo",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"), SuspendAction()),
+        )
+        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+
+        def fail(*_args: object) -> None:
+            message = "injected suspension failure"
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(collection.sched, "suspend_cards", fail)
+        monkeypatch.setattr(
+            collection,
+            "undo_status",
+            lambda: SimpleNamespace(last_step=0, undo=None),
+        )
+        with pytest.raises(CleanupError, match="could not verify") as exc_info:
+            execute_plan(collection, plan, "Unavailable Undo")
+
+        assert collection.get_note(note.id).has_tag("retired")
+        assert "complete recovery cannot be guaranteed" in str(exc_info.value)
     finally:
         collection.close()
 

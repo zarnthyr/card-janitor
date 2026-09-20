@@ -67,6 +67,29 @@ Run the integration test as follows:
    card and note, are restored
 6. Click **Refresh** and confirm the original counts return
 
+### Undo history stress test
+
+Use this focused test after changes to cleanup execution or Undo grouping. It
+exercises 101 undo-producing backend operations, substantially exceeding
+Anki's 30-entry Undo-history limit.
+
+1. Run `make dev-seed` with the expendable `dev` profile open.
+2. Copy `tests/manual/undo-stress-config.json` into **Card Janitor… > Edit as
+   JSON…** and save it. This temporarily replaces the normal development
+   policies.
+3. Confirm **Dev — Undo Stress** reports one matching card in **Card Janitor
+   Test::Delete**.
+4. Click **Clean Up** and confirm it completes without an Undo-grouping error.
+5. Confirm Anki's Undo command shows one **Card Janitor: Clean Up** entry.
+6. Use Undo once and confirm all `cj_test_undo_000` through
+   `cj_test_undo_100` tags are removed from the note.
+7. Reload `tests/manual/dev-profile-config.json` to restore the normal manual
+   integration policies.
+
+The stress policy must be tested by itself. Do not combine it with the normal
+delete policy for the same fixture card, because tagging and deleting that card
+would intentionally conflict during planning.
+
 ### Automatic trigger smoke test
 
 The supplied dev policies remain manual-only. In an expendable profile, give a
@@ -165,11 +188,13 @@ tag can also be rebuilt from the workflow's manual trigger.
 1. Update the version in `pyproject.toml`
 2. Confirm the README and policy documentation describe the supported behavior
 3. Run `make clean all inspect`
-4. Install that packaged artifact in the expendable `dev` profile and complete
-   the manual integration test
-5. Commit the version and documentation changes
-6. Push `main` and confirm CI passes
-7. Create and push a signed version tag matching `pyproject.toml`
+4. Commit the release candidate on a release branch, push it, and open a pull
+   request to `main`
+5. Confirm pull-request CI passes, then install its packaged artifact in the
+   expendable `dev` profile and complete the manual integration test
+6. Merge the pull request into `main`
+7. Create and push a signed version tag from the merged commit, matching
+   `pyproject.toml`
 
 Replace `X.Y.Z` with the version chosen for the release:
 
