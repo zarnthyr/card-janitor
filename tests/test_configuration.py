@@ -160,6 +160,21 @@ def test_save_raw_collection_config_changes_only_collection_policies(
     assert writes == []
 
 
+def test_save_raw_collection_config_rejects_unknown_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collection = FakeCollection()
+    monkeypatch.setattr(configuration, "mw", fake_main_window(collection, {}, []))
+
+    with pytest.raises(configuration.ConfigWriteError, match="notify_after_automatic_run"):
+        configuration.save_raw_collection_config(
+            {"policies": [], "notify_after_automatic_run": False},
+            expected_policies=[],
+        )
+
+    assert not collection.writes
+
+
 @pytest.mark.parametrize("operation", ["save", "remove", "json"])
 def test_stale_configuration_writes_are_rejected(
     monkeypatch: pytest.MonkeyPatch,

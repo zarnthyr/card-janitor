@@ -102,3 +102,49 @@ def test_bulk_json_validation_uses_inline_error(text: str, expected_title: str) 
     assert errors[0][0] == expected_title
     assert errors[0][1]
     assert not hasattr(editor, "conf")
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "config_version",
+        "automatic_cleanup_enabled",
+        "notify_after_automatic_run",
+        "warn_on_invalid_automatic_policies",
+        "debug_logging",
+    ],
+)
+def test_bulk_json_editor_rejects_installation_setting_keys(key: str) -> None:
+    errors = []
+    editor = SimpleNamespace(
+        _original_policies=[],
+        form=SimpleNamespace(
+            editor=SimpleNamespace(toPlainText=lambda: f'{{"policies": [], "{key}": true}}')
+        ),
+        _show_error=lambda title, details: errors.append((title, details)),
+    )
+
+    json_editor.CollectionConfigEditor.accept(editor)
+
+    assert errors == [
+        ("Card Janitor configuration has errors", (f"{key}: unknown collection setting",))
+    ]
+    assert not hasattr(editor, "conf")
+
+
+def test_bulk_json_editor_rejects_unknown_top_level_keys() -> None:
+    errors = []
+    editor = SimpleNamespace(
+        _original_policies=[],
+        form=SimpleNamespace(
+            editor=SimpleNamespace(toPlainText=lambda: '{"policies": [], "unexpected": true}')
+        ),
+        _show_error=lambda title, details: errors.append((title, details)),
+    )
+
+    json_editor.CollectionConfigEditor.accept(editor)
+
+    assert errors == [
+        ("Card Janitor configuration has errors", ("unexpected: unknown collection setting",))
+    ]
+    assert not hasattr(editor, "conf")
