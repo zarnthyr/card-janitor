@@ -11,6 +11,9 @@ from anki.collection import OpChanges
 from .engine import action_is_satisfied
 from .log import exception
 from .models import (
+    AllCardsCondition,
+    AllConditions,
+    AnyConditions,
     ClearFlagAction,
     DeleteCardAction,
     DeleteNoteAction,
@@ -83,9 +86,39 @@ class CleanupError(RuntimeError):
     """Cleanup failed; earlier backend operations may have completed."""
 
 
+def _conditions_are_unrestricted(condition: object) -> bool:
+    if isinstance(condition, AllCardsCondition):
+        return True
+    if isinstance(condition, AllConditions):
+        return all(_conditions_are_unrestricted(child) for child in condition.conditions)
+    if isinstance(condition, AnyConditions):
+        return any(_conditions_are_unrestricted(child) for child in condition.conditions)
+    return False
+
+
+def _ensure_execution_policies_are_safe(reports: tuple[PolicyReport, ...]) -> None:
+    for report in reports:
+        policy = report.policy
+        if (
+            any(
+                isinstance(action, (DeleteCardAction, DeleteNoteAction))
+                for action in policy.actions
+            )
+            and policy.scope.all_decks
+            and policy.scope.note_types is None
+            and _conditions_are_unrestricted(policy.conditions)
+        ):
+            message = (
+                f"Cleanup refused: policy {policy.name!r} would delete cards or notes "
+                "without a scope or condition restriction."
+            )
+            raise CleanupError(message)
+
+
 def build_execution_plan(  # noqa: PLR0912
     reports: tuple[PolicyReport, ...], col: Collection | None = None
 ) -> ExecutionPlan:
+    _ensure_execution_policies_are_safe(reports)
     card_actions: dict[int, set[ResolvedAction]] = {}
     desired_card_actions: dict[int, set[ResolvedAction]] = {}
     card_notes: dict[int, int] = {}
@@ -356,7 +389,15 @@ def execute_plan(col: Collection, plan: ExecutionPlan, undo_name: str) -> Execut
             recovery = f"Use Anki's Undo entry {undo_name!r} to revert any completed changes."
         message = f"Cleanup failed: {exc}\n\nEarlier changes may have been applied. {recovery}"
         raise CleanupError(message) from exc
-    changes = col.merge_undo_entries(undo_target)
+    try:
+        changes = col.merge_undo_entries(undo_target)
+    except Exception as exc:
+        message = (
+            f"Cleanup changes were applied, but Anki could not group them into one Undo entry: "
+            f"{exc}\n\nUse Anki's Undo to revert the completed changes; more than one Undo may be "
+            "required."
+        )
+        raise CleanupError(message) from exc
     return ExecutionResult(
         changes=changes,
         affected_cards=len(affected_card_ids),

@@ -48,6 +48,7 @@ def test_json_editor_saves_original_snapshot_and_closes(monkeypatch: pytest.Monk
         _original_policies=original,
         form=SimpleNamespace(editor=SimpleNamespace(toPlainText=lambda: '{"policies": []}')),
         onClose=lambda: closed.append("closed"),
+        _hide_error=lambda: None,
     )
     monkeypatch.setattr(
         json_editor,
@@ -64,7 +65,7 @@ def test_json_editor_saves_original_snapshot_and_closes(monkeypatch: pytest.Monk
 
 
 def test_json_editor_stale_save_keeps_editor_open(monkeypatch: pytest.MonkeyPatch) -> None:
-    warnings = []
+    errors = []
 
     def stale(_config: object, **_kwargs: object) -> None:
         message = "Policies changed"
@@ -73,9 +74,31 @@ def test_json_editor_stale_save_keeps_editor_open(monkeypatch: pytest.MonkeyPatc
     editor = SimpleNamespace(
         _original_policies=[],
         form=SimpleNamespace(editor=SimpleNamespace(toPlainText=lambda: '{"policies": []}')),
+        _show_error=lambda title, details: errors.append((title, details)),
     )
     monkeypatch.setattr(json_editor, "save_raw_collection_config", stale)
-    monkeypatch.setattr(json_editor, "showWarning", lambda text, **_kwargs: warnings.append(text))
     json_editor.CollectionConfigEditor.accept(editor)
-    assert warnings == ["Policies changed"]
+    assert errors == [("Could not save policies", ("Policies changed",))]
+    assert not hasattr(editor, "conf")
+
+
+@pytest.mark.parametrize(
+    ("text", "expected_title"),
+    [
+        ("{", "Invalid JSON"),
+        ('{"policies": [{"id": "invalid"}]}', "Card Janitor configuration has errors"),
+    ],
+)
+def test_bulk_json_validation_uses_inline_error(text: str, expected_title: str) -> None:
+    errors = []
+    editor = SimpleNamespace(
+        _original_policies=[],
+        form=SimpleNamespace(editor=SimpleNamespace(toPlainText=lambda: text)),
+        _show_error=lambda title, details: errors.append((title, details)),
+    )
+
+    json_editor.CollectionConfigEditor.accept(editor)
+
+    assert errors[0][0] == expected_title
+    assert errors[0][1]
     assert not hasattr(editor, "conf")

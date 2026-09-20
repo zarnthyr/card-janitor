@@ -3,12 +3,15 @@
 
 from dataclasses import replace
 
-from card_janitor.actions import build_execution_plan
+import pytest
+from card_janitor.actions import CleanupError, build_execution_plan
 from card_janitor.cleanup_preview import build_preview_rows
 from card_janitor.engine import CardFacts, PolicyReport, ResolvedAction
 from card_janitor.models import (
+    AllCardsCondition,
     ClearFlagAction,
     DeckSelector,
+    DeleteCardAction,
     DeleteNoteAction,
     IntervalCondition,
     MoveAction,
@@ -224,6 +227,27 @@ def test_suspend_conflicts_with_satisfied_unsuspend_policy() -> None:
     assert plan.conflict_details[0].reasons == (
         ("Suspend and unsuspend conflict\nPolicy: Suspend cards\nPolicy: Unsuspend cards"),
     )
+    rows = build_preview_rows(plan, (suspend, unsuspend), {})
+    assert len(rows) == 1
+    assert rows[0].overlapping
+
+
+@pytest.mark.parametrize("action", [DeleteCardAction(), DeleteNoteAction()])
+def test_execution_plan_rejects_directly_constructed_unrestricted_delete(action: object) -> None:
+    resolved = ResolvedAction(action)
+    value = report((resolved,))
+    value = replace(
+        value,
+        policy=replace(
+            value.policy,
+            scope=Scope(all_decks=True),
+            conditions=AllCardsCondition(),
+            actions=(action,),
+        ),
+    )
+
+    with pytest.raises(CleanupError, match="without a scope or condition restriction"):
+        build_execution_plan((value,))
 
 
 def test_note_wide_conflict_details_propagate_reasons_and_policy_names() -> None:

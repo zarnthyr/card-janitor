@@ -2,6 +2,7 @@
 # License: GNU AGPL v3 or later
 
 import inspect
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,10 +11,13 @@ from anki.collection import Collection
 from aqt.operations import QueryOp
 from card_janitor import automatic, evaluator, ui
 from card_janitor.actions import CleanupError, build_execution_plan, execute_plan
+from card_janitor.cleanup_preview import build_preview_rows
+from card_janitor.configuration import COLLECTION_POLICIES_KEY
 from card_janitor.evaluator import evaluate_policy
-from card_janitor.execution import execute_approved_reports
+from card_janitor.execution import StalePolicyDefinitionsError, execute_approved_reports
 from card_janitor.models import (
     AgeCondition,
+    AllCardsCondition,
     AllConditions,
     DeckSelector,
     DeleteCardAction,
@@ -27,7 +31,15 @@ from card_janitor.models import (
     TagCondition,
     UnsuspendAction,
     parse_policy,
+    policy_to_dict,
 )
+
+
+def save_policies(collection: Collection, *policies: Policy) -> None:
+    collection.set_config(
+        COLLECTION_POLICIES_KEY,
+        [policy_to_dict(policy) for policy in policies],
+    )
 
 
 def test_partial_cleanup_failure_is_grouped_and_recoverable(
@@ -43,7 +55,6 @@ def test_partial_cleanup_failure_is_grouped_and_recoverable(
             {
                 "id": "failure",
                 "name": "Failure",
-                "triggers": [],
                 "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
                 "match": "all",
                 "conditions": [{"type": "tags", "operator": "contains_none", "tags": ["retired"]}],
@@ -63,6 +74,39 @@ def test_partial_cleanup_failure_is_grouped_and_recoverable(
         assert collection.undo_status().undo == "Failed cleanup"
         collection.undo()
         assert not collection.get_note(note.id).has_tag("retired")
+    finally:
+        collection.close()
+
+
+def test_completed_cleanup_reports_merge_undo_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collection = Collection(str(tmp_path / "merge-failure.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        policy = Policy(
+            id="tag",
+            name="Tag",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+
+        def fail_merge(_undo_target: int) -> None:
+            message = "injected merge failure"
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(collection, "merge_undo_entries", fail_merge)
+        with pytest.raises(CleanupError, match="changes were applied") as exc_info:
+            execute_plan(collection, plan, "Merge failure")
+
+        assert collection.get_note(note.id).has_tag("retired")
+        assert "more than one Undo may be required" in str(exc_info.value)
     finally:
         collection.close()
 
@@ -212,17 +256,14 @@ def test_note_type_scope_filters_triggers_and_preserves_note_siblings(tmp_path: 
         first, sibling = collection.card_ids_of_note(note.id)
         collection.set_deck([sibling], outside)
 
-        def evaluate(scope: dict, action: dict) -> object:
+        def evaluate(scope: dict | None, action: dict) -> object:
             return evaluate_policy(
                 collection,
                 parse_policy(
                     {
                         "id": "types",
                         "name": "Types",
-                        "triggers": [],
-                        "scope": scope,
-                        "match": "all",
-                        "conditions": [{"type": "all_cards"}],
+                        **({"scope": scope} if scope is not None else {}),
                         "actions": [action],
                     }
                 ),
@@ -238,16 +279,15 @@ def test_note_type_scope_filters_triggers_and_preserves_note_siblings(tmp_path: 
         assert (
             len(
                 evaluate(
-                    {"all_decks": True, "note_types": [{"name": basic["name"]}]},
+                    {"note_types": [{"name": basic["name"]}]},
                     {"type": "suspend"},
                 ).actionable
             )
             == 1
         )
-        assert len(evaluate({"all_decks": True}, {"type": "suspend"}).actionable) == 3
+        assert len(evaluate(None, {"type": "suspend"}).actionable) == 3
         card_type_only = evaluate(
             {
-                "all_decks": True,
                 "note_types": [{"name": reverse["name"], "card_types": ["Card 2"]}],
             },
             {"type": "suspend"},
@@ -255,7 +295,6 @@ def test_note_type_scope_filters_triggers_and_preserves_note_siblings(tmp_path: 
         assert [card.card_type_idx for card in card_type_only.qualifying] == [1]
         missing_card_type = evaluate(
             {
-                "all_decks": True,
                 "note_types": [{"name": reverse["name"], "card_types": ["Missing"]}],
             },
             {"type": "suspend"},
@@ -263,7 +302,7 @@ def test_note_type_scope_filters_triggers_and_preserves_note_siblings(tmp_path: 
         missing_card_type_name = f"{reverse['name']}::Missing"
         assert missing_card_type.errors == (f"card type {missing_card_type_name!r} not found",)
         missing = evaluate(
-            {"all_decks": True, "note_types": [{"name": "Missing"}]},
+            {"note_types": [{"name": "Missing"}]},
             {"type": "suspend"},
         )
         assert missing.errors == ("note type 'Missing' not found",)
@@ -307,7 +346,6 @@ def test_sibling_conditions_include_suspended_and_studied_cards_outside_scope(
                     {
                         "id": "siblings",
                         "name": "Siblings",
-                        "triggers": [],
                         "scope": {"decks": [{"deck": "Source", "include_subdecks": False}]},
                         "match": "all",
                         "conditions": [condition],
@@ -363,8 +401,16 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
             conditions=AgeCondition(0, "first_review", "gte"),
             actions=(TagAction("retired"), SuspendAction()),
         )
+        save_policies(collection, policy)
         report = evaluate_policy(collection, policy, now_ms=first_review + 86_400_000)
         assert [card.card_id for card in report.actionable] == [card_id]
+        unrelated = replace(
+            policy,
+            id="unrelated",
+            name="Unrelated",
+            actions=(TagAction("other"),),
+        )
+        save_policies(collection, policy, unrelated)
 
         result = execute_approved_reports(
             collection,
@@ -380,6 +426,39 @@ def test_evaluate_and_apply_against_anki_collection(tmp_path: Path) -> None:
         collection.undo()
 
         assert collection.get_card(card_id).queue != -1
+        assert not collection.get_note(note.id).has_tag("retired")
+    finally:
+        collection.close()
+
+
+def test_manual_execution_rejects_policy_changed_after_evaluation(tmp_path: Path) -> None:
+    collection = Collection(str(tmp_path / "stale-manual.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+        policy = Policy(
+            id="manual",
+            name="Manual",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+        save_policies(collection, policy)
+        report = evaluate_policy(collection, policy)
+
+        save_policies(collection, replace(policy, name="Changed"))
+        with pytest.raises(StalePolicyDefinitionsError, match="selected policies changed"):
+            execute_approved_reports(
+                collection,
+                (report,),
+                {policy.id: {card_id}},
+                "Stale manual cleanup",
+            )
+
         assert not collection.get_note(note.id).has_tag("retired")
     finally:
         collection.close()
@@ -410,8 +489,6 @@ def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path:
             {
                 "id": "history",
                 "name": "History",
-                "triggers": [],
-                "scope": {"all_decks": True},
                 "match": "all",
                 "conditions": [
                     {"type": "answer_count", "count": 2, "operator": "eq"},
@@ -450,8 +527,6 @@ def test_scheduler_specific_conditions_fail_closed_and_fsrs_sql_handles_missing_
                 {
                     "id": "scheduler",
                     "name": "Scheduler",
-                    "triggers": [],
-                    "scope": {"all_decks": True},
                     "match": "all",
                     "conditions": [condition],
                     "actions": [{"type": "suspend"}],
@@ -577,15 +652,13 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
             {
                 "id": "note-action",
                 "name": "Note action",
-                "triggers": [],
                 "scope": {
                     "decks": [{"deck": "Source", "include_subdecks": False}],
                 },
-                "match": "all",
-                "conditions": [{"type": "all_cards"}],
                 "actions": [action],
             }
         )
+        save_policies(collection, policy)
         report = evaluate_policy(collection, policy)
         assert [card.card_id for card in report.qualifying] == [first]
         assert [card.card_id for card in report.actionable] == [sibling]
@@ -628,6 +701,67 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
         restored = collection.get_card(sibling)
         assert restored.did == outside
         assert restored.queue == (-1 if kind == "unsuspend_note" else 0)
+    finally:
+        collection.close()
+
+
+def test_policy_actions_only_affect_other_policy_matching_on_next_cleanup(tmp_path: Path) -> None:
+    collection = Collection(str(tmp_path / "batch-matching.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+        add_tag = parse_policy(
+            {
+                "id": "add-foo",
+                "name": "Add foo",
+                "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
+                "match": "all",
+                "conditions": [{"type": "tags", "operator": "contains_none", "tags": ["foo"]}],
+                "actions": [{"type": "add_tags", "tags": ["foo"]}],
+            }
+        )
+        suspend = parse_policy(
+            {
+                "id": "suspend-foo",
+                "name": "Suspend foo",
+                "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
+                "match": "all",
+                "conditions": [{"type": "tags", "operator": "contains_any", "tags": ["foo"]}],
+                "actions": [{"type": "suspend"}],
+            }
+        )
+        policies = (add_tag, suspend)
+        save_policies(collection, *policies)
+
+        first_reports = evaluator.evaluate_policies(collection, policies)
+        assert [len(report.actionable) for report in first_reports] == [1, 0]
+        execute_approved_reports(
+            collection,
+            first_reports,
+            {
+                report.policy.id: {card.card_id for card in report.actionable}
+                for report in first_reports
+            },
+            "First batch",
+        )
+        assert collection.get_note(note.id).has_tag("foo")
+        assert collection.get_card(card_id).queue != -1
+
+        second_reports = evaluator.evaluate_policies(collection, policies)
+        assert [len(report.actionable) for report in second_reports] == [0, 1]
+        execute_approved_reports(
+            collection,
+            second_reports,
+            {
+                report.policy.id: {card.card_id for card in report.actionable}
+                for report in second_reports
+            },
+            "Second batch",
+        )
+        assert collection.get_card(card_id).queue == -1
     finally:
         collection.close()
 
@@ -691,12 +825,9 @@ def test_note_actions_skip_whole_note_on_sibling_conflict(tmp_path: Path) -> Non
                 {
                     "id": policy_id,
                     "name": policy_id,
-                    "triggers": [],
                     "scope": {
                         "decks": [{"deck": deck, "include_subdecks": False}],
                     },
-                    "match": "all",
-                    "conditions": [{"type": "all_cards"}],
                     "actions": [action],
                 }
             )
@@ -707,8 +838,22 @@ def test_note_actions_skip_whole_note_on_sibling_conflict(tmp_path: Path) -> Non
             evaluate_policy(collection, note_policy),
             evaluate_policy(collection, sibling_policy),
         )
+        assert [card.card_id for card in reports[0].qualifying] == [first]
+        assert {card.card_id for card, _actions in reports[0].card_actions} == {first, sibling}
         plan = build_execution_plan(reports, collection)
         assert plan.is_empty
         assert set(plan.conflicted_card_ids) == {first, sibling}
+        rows = build_preview_rows(
+            plan,
+            reports,
+            {source: "Source", outside: "Outside"},
+        )
+        assert {row.card_id for row in rows} == {first, sibling}
+        assert all(row.overlapping for row in rows)
+        result = execute_plan(collection, plan, "Conflicted note cleanup")
+        assert result.affected_cards == 0
+        assert result.conflicts == 2
+        assert collection.get_card(first).queue != -1
+        assert collection.get_card(sibling).queue != -1
     finally:
         collection.close()

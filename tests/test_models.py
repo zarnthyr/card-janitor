@@ -76,7 +76,6 @@ def policy_config(**overrides: object) -> dict:
     policy = {
         "id": "mining",
         "name": "Mining",
-        "triggers": [],
         "scope": {"decks": [{"deck": "Mining", "include_subdecks": True}]},
         "match": "all",
         "conditions": [
@@ -152,20 +151,22 @@ def test_legacy_scope_format_is_rejected() -> None:
     assert not parsed.config.policies
 
 
-def test_all_decks_scope_round_trip_and_excludes_individual_selectors() -> None:
-    parsed = parse_config(policy_config(scope={"all_decks": True}))
+def test_omitted_scope_round_trips_as_unrestricted() -> None:
+    raw = policy_config()
+    del raw["policies"][0]["scope"]
+    parsed = parse_config(raw)
     assert not parsed.issues
     policy = parsed.config.policies[0]
     assert policy.scope.all_decks
     assert not policy.scope.decks
-    assert policy_to_dict(policy)["scope"] == {"all_decks": True}
-    for scope in ({"all_decks": False}, {"all_decks": True, "decks": []}, {}):
+    assert "scope" not in policy_to_dict(policy)
+    for scope in ({"all_decks": True}, {"decks": []}, {"note_types": []}, {}):
         assert parse_config(policy_config(scope=scope)).issues
 
 
 def test_note_type_scope_round_trip_and_validation() -> None:
     for deck_scope in (
-        {"all_decks": True},
+        {},
         {"decks": [{"deck": "Mining", "include_subdecks": True}]},
     ):
         scope = {
@@ -195,7 +196,7 @@ def test_note_type_scope_round_trip_and_validation() -> None:
         None,
         "Basic",
     ):
-        assert parse_config(policy_config(scope={"all_decks": True, "note_types": names})).issues
+        assert parse_config(policy_config(scope={"note_types": names})).issues
 
 
 def test_sibling_conditions_round_trip_and_validate_operators() -> None:
@@ -207,7 +208,6 @@ def test_sibling_conditions_round_trip_and_validate_operators() -> None:
             condition = {"type": kind, "operator": operator}
             parsed = parse_config(
                 policy_config(
-                    scope={"all_decks": True},
                     conditions=[condition],
                 )
             )
@@ -223,18 +223,10 @@ def test_sibling_conditions_round_trip_and_validate_operators() -> None:
 
 def test_scope_summary_only_adds_restricted_note_types() -> None:
     def scope(names: list[dict] | None) -> object:
-        return (
-            parse_config(
-                policy_config(
-                    scope={
-                        "all_decks": True,
-                        **({"note_types": names} if names is not None else {}),
-                    }
-                )
-            )
-            .config.policies[0]
-            .scope
-        )
+        raw = policy_config(**({"scope": {"note_types": names}} if names is not None else {}))
+        if names is None:
+            del raw["policies"][0]["scope"]
+        return parse_config(raw).config.policies[0].scope
 
     assert describe_scope(scope(None)) == "All decks"
     assert describe_scope(scope([{"name": "Basic"}])) == "All decks\nNote type: Basic"
@@ -246,22 +238,20 @@ def test_scope_summary_only_adds_restricted_note_types() -> None:
     )
 
 
-def test_all_cards_condition_parses_round_trips_and_must_be_used_alone() -> None:
-    parsed = parse_config(policy_config(conditions=[{"type": "all_cards"}]))
+def test_omitted_matching_round_trips_as_all_cards_and_pseudo_condition_is_rejected() -> None:
+    raw = policy_config()
+    del raw["policies"][0]["match"]
+    del raw["policies"][0]["conditions"]
+    parsed = parse_config(raw)
 
     assert not parsed.issues
-    assert parsed.config.policies[0].conditions == AllConditions((AllCardsCondition(),))
-    assert policy_to_dict(parsed.config.policies[0])["conditions"] == [{"type": "all_cards"}]
+    assert parsed.config.policies[0].conditions == AllCardsCondition()
+    serialized = policy_to_dict(parsed.config.policies[0])
+    assert "match" not in serialized
+    assert "conditions" not in serialized
 
-    combined = parse_config(
-        policy_config(
-            conditions=[
-                {"type": "all_cards"},
-                {"type": "interval", "days": 1, "operator": "gte"},
-            ]
-        )
-    )
-    assert "must be the only condition" in str(combined.issues[0])
+    obsolete = parse_config(policy_config(conditions=[{"type": "all_cards"}]))
+    assert "unknown condition type" in str(obsolete.issues[0])
 
 
 def test_rejects_nested_compound_policy() -> None:
@@ -333,6 +323,17 @@ def test_numeric_bounds_match_editor(days: int) -> None:
     assert parsed.issues
 
 
+@pytest.mark.parametrize("actions", [None, []])
+def test_actions_are_required_and_non_empty(actions: object) -> None:
+    raw = policy_config()
+    if actions is None:
+        del raw["policies"][0]["actions"]
+    else:
+        raw["policies"][0]["actions"] = actions
+    parsed = parse_config(raw)
+    assert "actions: must be a non-empty array" in str(parsed.issues[0])
+
+
 def test_automatic_delete_requires_explicit_configuration_but_is_supported() -> None:
     parsed = parse_config(
         policy_config(triggers=[{"type": "daily"}], actions=[{"type": "delete_card"}])
@@ -340,6 +341,43 @@ def test_automatic_delete_requires_explicit_configuration_but_is_supported() -> 
     assert not parsed.issues
     assert parsed.config.policies[0].triggers[0].type == "daily"
     assert isinstance(parsed.config.policies[0].actions[0], DeleteCardAction)
+
+
+@pytest.mark.parametrize("kind", ["delete_card", "delete_note"])
+def test_collection_wide_unrestricted_delete_is_rejected(kind: str) -> None:
+    raw = policy_config(actions=[{"type": kind}])
+    policy = raw["policies"][0]
+    del policy["scope"]
+    del policy["match"]
+    del policy["conditions"]
+
+    parsed = parse_config(raw)
+
+    assert str(parsed.issues[0]).endswith(
+        "Collection-wide deletion is not allowed. Restrict the scope or add at least one condition."
+    )
+
+
+@pytest.mark.parametrize(
+    "restriction",
+    [
+        {"scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]}},
+        {"scope": {"note_types": [{"name": "Basic"}]}},
+        {
+            "match": "all",
+            "conditions": [{"type": "interval", "days": 30, "operator": "gte"}],
+        },
+    ],
+)
+def test_restricted_delete_is_valid(restriction: dict) -> None:
+    raw = policy_config(actions=[{"type": "delete_note"}])
+    policy = raw["policies"][0]
+    policy.pop("scope")
+    policy.pop("match")
+    policy.pop("conditions")
+    policy.update(restriction)
+
+    assert not parse_config(raw).issues
 
 
 def test_delete_must_be_only_action() -> None:
@@ -519,17 +557,18 @@ def test_policy_triggers_are_validated() -> None:
     assert not parsed.config.policies
 
 
-def test_policy_triggers_are_required() -> None:
+def test_omitted_policy_triggers_mean_manual_only() -> None:
     raw = policy_config()
-    del raw["policies"][0]["triggers"]
     parsed = parse_config(raw)
-    assert str(parsed.issues[0]) == "policies[0].triggers: must be an array"
-    assert not parsed.config.policies
+    assert not parsed.issues
+    assert not parsed.config.policies[0].triggers
+    assert "triggers" not in policy_to_dict(parsed.config.policies[0])
 
 
 @pytest.mark.parametrize(
     "triggers",
     [
+        [],
         None,
         {},
         "daily",
@@ -550,7 +589,7 @@ def test_invalid_trigger_shapes_are_rejected(triggers: object) -> None:
 
 @pytest.mark.parametrize(
     "kinds",
-    [[], ["daily"], ["on_open", "on_sync"], ["daily", "on_open", "on_sync"]],
+    [["daily"], ["on_open", "on_sync"], ["daily", "on_open", "on_sync"]],
 )
 def test_triggers_round_trip(kinds: list[str]) -> None:
     raw = policy_config(triggers=[{"type": kind} for kind in kinds])
@@ -566,6 +605,8 @@ def test_match_and_conditions_are_required() -> None:
         parsed = parse_config(raw)
         assert missing in str(parsed.issues[0])
         assert not parsed.config.policies
+
+    assert parse_config(policy_config(conditions=[])).issues
 
 
 def test_unknown_configuration_and_policy_fields_are_rejected() -> None:

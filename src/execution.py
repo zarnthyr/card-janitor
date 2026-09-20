@@ -7,13 +7,51 @@ from dataclasses import replace
 from typing import TYPE_CHECKING
 
 from .actions import ExecutionResult, build_execution_plan, execute_plan
+from .configuration import COLLECTION_POLICIES_KEY
 from .evaluator import evaluate_policies
-from .models import action_expands_to_siblings
+from .models import Policy, action_expands_to_siblings, parse_policy, policy_to_dict
 
 if TYPE_CHECKING:
     from anki.collection import Collection
 
     from .engine import PolicyReport
+
+
+class StalePolicyDefinitionsError(RuntimeError):
+    """The policies approved for cleanup no longer match their saved definitions."""
+
+
+_STALE_POLICIES_MESSAGE = (
+    "Cleanup cancelled because one or more selected policies changed. "
+    "Refresh Card Janitor and try again."
+)
+
+
+def _ensure_policy_definitions_current(col: Collection, policies: tuple[Policy, ...]) -> None:
+    expected = {policy.id.casefold(): policy for policy in policies}
+    if len(expected) != len(policies):
+        raise StalePolicyDefinitionsError(_STALE_POLICIES_MESSAGE)
+    raw_policies = col.get_config(COLLECTION_POLICIES_KEY, [])
+    current: dict[str, Policy] = {}
+    if isinstance(raw_policies, list):
+        for index, raw in enumerate(raw_policies):
+            if not isinstance(raw, dict) or not isinstance(raw.get("id"), str):
+                continue
+            normalized_id = raw["id"].strip().casefold()
+            if normalized_id not in expected:
+                continue
+            try:
+                policy = parse_policy(raw, index)
+            except (TypeError, ValueError):
+                break
+            if normalized_id in current:
+                break
+            current[normalized_id] = policy
+    if set(current) != set(expected) or any(
+        policy_to_dict(current[policy_id]) != policy_to_dict(policy)
+        for policy_id, policy in expected.items()
+    ):
+        raise StalePolicyDefinitionsError(_STALE_POLICIES_MESSAGE)
 
 
 def execute_approved_reports(
@@ -22,7 +60,9 @@ def execute_approved_reports(
     approved_card_ids: dict[str, set[int]],
     undo_name: str,
 ) -> ExecutionResult:
-    fresh_reports = evaluate_policies(col, tuple(report.policy for report in reports))
+    policies = tuple(report.policy for report in reports)
+    _ensure_policy_definitions_current(col, policies)
+    fresh_reports = evaluate_policies(col, policies)
     runtime_errors = [item for report in fresh_reports for item in report.errors]
     if runtime_errors:
         raise RuntimeError("; ".join(runtime_errors))
