@@ -7,6 +7,7 @@ from aqt.qt import (
     QCheckBox,
     QComboBox,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMenu,
@@ -38,7 +39,9 @@ from .models import (
     MAX_DAYS,
     MAX_EASE_PERCENT,
     AgeCondition,
+    AllConditions,
     AnswerCountCondition,
+    AnyConditions,
     CardFlagCondition,
     CardStateCondition,
     ConditionExpression,
@@ -361,6 +364,12 @@ class ConditionRow(QWidget):
         if selected_tags is not None:
             self.tags.setText(" ".join(selected_tags))
             show_text_from_start(self.tags)
+        self.rendered_size_hint_height()
+
+    def rendered_size_hint_height(self) -> int:
+        """Return the polished natural one-line row height."""
+        self.ensurePolished()
+        return max(1, self.sizeHint().height())
 
     def _update_controls(self, _index: int = 0) -> None:
         kind = self.kind.currentData()
@@ -502,3 +511,77 @@ class ConditionRow(QWidget):
             self.tags,
             self.remove_button,
         )
+
+
+class ConditionGroup(QWidget):
+    def __init__(self, match: str = "any", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.rows: list[ConditionRow] = []
+        self.setObjectName("conditionGroup")
+        self.setStyleSheet(
+            "QWidget#conditionGroup { border: 1px solid palette(mid); border-radius: 5px;}"
+        )
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(10, 8, 10, 10)
+        layout.setSpacing(6)
+        header = QHBoxLayout()
+        self.match_label = QLabel("Match", self)
+        header.addWidget(self.match_label)
+        self.match = QComboBox(self)
+        self.match.addItem("All conditions (AND)", "all")
+        self.match.addItem("Any condition (OR)", "any")
+        self.match.setCurrentIndex(self.match.findData(match))
+        self.match.setToolTip("Require every condition in this group or allow any condition")
+        header.addWidget(self.match)
+        header.addStretch()
+        self.add_condition_button = QPushButton("Add Condition", self)
+        self.add_condition_button.setToolTip("Add another condition to this group")
+        header.addWidget(self.add_condition_button)
+        self.remove_button = QPushButton("Remove Group", self)
+        self.remove_button.setToolTip("Remove this group and all of its conditions")
+        header.addWidget(self.remove_button)
+        layout.addLayout(header)
+        self.rows_layout = QVBoxLayout()
+        self.rows_layout.setContentsMargins(8, 4, 0, 0)
+        self.rows_layout.setSpacing(6)
+        layout.addLayout(self.rows_layout)
+
+    def expression(self) -> AllConditions | AnyConditions:
+        conditions = tuple(row.condition() for row in self.rows)
+        return (
+            AllConditions(conditions)
+            if self.match.currentData() == "all"
+            else AnyConditions(conditions)
+        )
+
+    def bounded_size_hint_height(self, row_limit: int) -> int:
+        """Return this group's rendered height with at most ``row_limit`` rows."""
+        height = self.rendered_size_hint_height()
+        hidden_rows = self.rows[row_limit:]
+        if hidden_rows:
+            height -= sum(row.rendered_size_hint_height() for row in hidden_rows)
+            height -= self.rows_layout.spacing() * len(hidden_rows)
+        return max(1, height)
+
+    def rendered_size_hint_height(self) -> int:
+        """Return a current height hint after nested row-layout changes."""
+        self.ensurePolished()
+        for row in self.rows:
+            row.rendered_size_hint_height()
+        self.rows_layout.invalidate()
+        self.rows_layout.activate()
+        layout = self.layout()
+        layout.invalidate()
+        layout.activate()
+        self.updateGeometry()
+        return max(1, self.sizeHint().height())
+
+    def focus_widgets(self) -> tuple[QWidget, ...]:
+        widgets: list[QWidget] = [
+            self.match,
+            self.add_condition_button,
+            self.remove_button,
+        ]
+        for row in self.rows:
+            widgets.extend(row.focus_widgets())
+        return tuple(widgets)

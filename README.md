@@ -104,8 +104,10 @@ Available conditions include:
 - suspension state
 - sibling suspension and review history
 
-A policy can require **all** of its conditions (AND) or **any** of them (OR).
-It can also operate on all cards within its scope without conditions.
+A policy can operate on all cards within its scope without conditions. When
+conditions are used, a policy can require **all** of them (AND) or **any** of
+them (OR). For more complex rules, conditions can be grouped one level deep to
+combine AND and OR, such as `A AND (B OR C)`.
 
 > [!WARNING]
 > **Age since creation** uses the timestamp stored in Anki's card ID. Imported

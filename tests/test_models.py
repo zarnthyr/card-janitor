@@ -9,6 +9,7 @@ from card_janitor.models import (
     AllCardsCondition,
     AllConditions,
     AnswerCountCondition,
+    AnyConditions,
     CardFlagCondition,
     CardStateCondition,
     ClearFlagAction,
@@ -20,6 +21,7 @@ from card_janitor.models import (
     FsrsDifficultyCondition,
     FsrsRetrievabilityCondition,
     FsrsStabilityCondition,
+    IntervalCondition,
     LapseCountCondition,
     MoveAction,
     NoteTypeSelector,
@@ -254,7 +256,7 @@ def test_omitted_matching_round_trips_as_all_cards_and_pseudo_condition_is_rejec
     assert "unknown condition type" in str(obsolete.issues[0])
 
 
-def test_rejects_nested_compound_policy() -> None:
+def test_condition_group_parses_and_round_trips() -> None:
     raw = policy_config(
         conditions=[
             {
@@ -267,7 +269,48 @@ def test_rejects_nested_compound_policy() -> None:
         ],
     )
     parsed = parse_config(raw)
-    assert "type: must be a string" in str(parsed.issues[0])
+    assert not parsed.issues
+    assert parsed.config.policies[0].conditions == AllConditions(
+        (
+            AnyConditions(
+                (
+                    CardStateCondition(("new",)),
+                    IntervalCondition(180, "gte"),
+                )
+            ),
+        )
+    )
+    assert (
+        policy_to_dict(parsed.config.policies[0])["conditions"] == raw["policies"][0]["conditions"]
+    )
+
+
+@pytest.mark.parametrize(
+    "group",
+    [
+        {
+            "match": "any",
+            "conditions": [{"type": "card_state", "states": ["new"]}],
+        },
+        {
+            "match": "any",
+            "conditions": [
+                {
+                    "match": "all",
+                    "conditions": [
+                        {"type": "card_state", "states": ["new"]},
+                        {"type": "interval", "days": 30, "operator": "gte"},
+                    ],
+                },
+                {"type": "interval", "days": 180, "operator": "gte"},
+            ],
+        },
+    ],
+)
+def test_condition_groups_require_two_simple_children(group: dict) -> None:
+    raw = policy_config(conditions=[group])
+    parsed = parse_config(raw)
+    assert parsed.issues
     assert parsed.policy_records[0].policy is None
     assert parsed.policy_records[0].raw is raw["policies"][0]
 
@@ -789,4 +832,23 @@ def test_fsrs_and_sm2_conditions_cannot_be_combined() -> None:
             ]
         )
     )
+    assert "FSRS and SM-2 conditions cannot be used together" in str(parsed.issues[0])
+
+
+def test_fsrs_and_sm2_conditions_cannot_be_split_across_group() -> None:
+    parsed = parse_config(
+        policy_config(
+            conditions=[
+                {"type": "fsrs_stability", "days": 30, "operator": "gte"},
+                {
+                    "match": "any",
+                    "conditions": [
+                        {"type": "sm2_ease", "percent": 250, "operator": "gte"},
+                        {"type": "interval", "days": 30, "operator": "gte"},
+                    ],
+                },
+            ]
+        )
+    )
+
     assert "FSRS and SM-2 conditions cannot be used together" in str(parsed.issues[0])

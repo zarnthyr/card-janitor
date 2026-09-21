@@ -145,6 +145,32 @@ def test_collection_schema_requires_matching_fields_together_and_blocks_global_d
     )
 
 
+def test_collection_schema_accepts_one_condition_group_level() -> None:
+    schema = json.loads((ROOT / "src/collection-config.schema.json").read_text(encoding="utf-8"))
+    validator = Draft202012Validator(schema)
+    leaf = {"type": "interval", "days": 30, "operator": "gte"}
+    group = {
+        "match": "any",
+        "conditions": [leaf, {"type": "suspension", "operator": "is_suspended"}],
+    }
+    policy = {
+        "id": "grouped",
+        "name": "Grouped",
+        "match": "all",
+        "conditions": [leaf, group],
+        "actions": [{"type": "suspend"}],
+    }
+
+    assert validator.is_valid({"policies": [policy]})
+    group["conditions"] = [leaf]
+    assert not validator.is_valid({"policies": [policy]})
+    group["conditions"] = [
+        leaf,
+        {"match": "all", "conditions": [leaf, leaf]},
+    ]
+    assert not validator.is_valid({"policies": [policy]})
+
+
 @pytest.mark.parametrize(
     "fixture_name",
     ["dev-profile-config.json", "undo-stress-config.json"],

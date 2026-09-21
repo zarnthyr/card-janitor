@@ -142,6 +142,7 @@ def _load_facts_where(
     load_history: bool = True,
     load_fsrs: bool = False,
     eligible_only: bool = False,
+    now_seconds: int | None = None,
 ) -> list[CardFacts]:
     if not values or note_type_card_types == {}:
         return []
@@ -174,7 +175,15 @@ def _load_facts_where(
         if load_fsrs
         else "null"
     )
-    fsrs_args = [int(col.sched.today), int(col.sched.day_cutoff), int(time())] if load_fsrs else []
+    fsrs_args = (
+        [
+            int(col.sched.today),
+            int(col.sched.day_cutoff),
+            int(time()) if now_seconds is None else now_seconds,
+        ]
+        if load_fsrs
+        else []
+    )
     rows = col.db.all(
         f"""
 select
@@ -256,6 +265,7 @@ def _load_deck_facts(
     *,
     load_history: bool = True,
     load_fsrs: bool = False,
+    now_seconds: int | None = None,
 ) -> list[CardFacts]:
     return _load_facts_where(
         col,
@@ -265,11 +275,13 @@ def _load_deck_facts(
         load_history=load_history,
         load_fsrs=load_fsrs,
         eligible_only=True,
+        now_seconds=now_seconds,
     )
 
 
 def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = None) -> PolicyReport:
     started = perf_counter()
+    now_ms = int(time() * 1000) if now_ms is None else now_ms
     deck_ids, errors = _resolve_deck_ids(col, policy)
     resolved_actions, action_errors = _resolve_actions(col, policy)
     errors.extend(action_errors)
@@ -302,6 +314,7 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
         note_type_card_types,
         load_history=load_history,
         load_fsrs=load_fsrs,
+        now_seconds=now_ms // 1000,
     )
     siblings = None
     note_facts = None
@@ -370,4 +383,5 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
 
 
 def evaluate_policies(col: Collection, policies: tuple[Policy, ...]) -> tuple[PolicyReport, ...]:
-    return tuple(evaluate_policy(col, policy) for policy in policies)
+    now_ms = int(time() * 1000)
+    return tuple(evaluate_policy(col, policy, now_ms=now_ms) for policy in policies)

@@ -49,7 +49,7 @@ Copy `tests/manual/dev-profile-config.json` into:
 Card Janitor… → Edit as JSON…
 ```
 
-Save it and open Card Janitor. The ten policies should report:
+Save it and open Card Janitor. The twelve policies should report:
 
 | Policy | Cards |
 | --- | ---: |
@@ -57,6 +57,8 @@ Save it and open Card Janitor. The ten policies should report:
 | Dev — Long Intervals | 3 |
 | Dev — Never Studied | 2 |
 | Dev — Learning States | 2 |
+| Dev — Grouped Mature Reviews | 3 |
+| Dev — Grouped New or Learning | 4 |
 | Dev — Repair Suspended Leech | 1 |
 | Dev — Replace All Tags | 1 |
 | Dev — Delete Note | 1 |
@@ -64,10 +66,12 @@ Save it and open Card Janitor. The ten policies should report:
 | Dev — Unsuspend Note | 1 |
 | Dev — Move Note | 1 |
 
-The first four policies have seven unique matching cards, with two cards
-matching more than one policy. The tag repair, replacement, and delete policies
-target three separate cards. The three note-action policies affect three
-outside-scope siblings, for a total of thirteen cards to clean up.
+The first six policies have seven unique matching cards. The two grouped
+policies deliberately overlap all seven of those cards with the four flat
+policies: one demonstrates `review AND (old OR long interval)`, and the other
+demonstrates `new OR (learning AND studied)`. The tag repair, replacement, and
+delete policies target three separate cards. The three note-action policies
+affect three outside-scope siblings, for a total of thirteen cards to clean up.
 
 Two unmatched cards verify that conditions exclude an in-scope card and that
 deck scope excludes an out-of-scope card. The move action uses the separate
@@ -76,7 +80,8 @@ source hierarchy completely.
 
 Run the integration test as follows:
 
-1. Confirm the policy counts and a total of thirteen cards to clean up.
+1. Confirm the policy counts, seven overlapping cards, and a total of thirteen
+   cards to clean up.
 2. Click **Browse** and confirm that it shows the same thirteen cards.
 3. Click **Clean Up** and confirm all actions complete.
 4. Confirm that the isolated delete card and its note were removed.
