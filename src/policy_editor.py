@@ -32,6 +32,7 @@ from aqt.qt import (
     QVBoxLayout,
     QWidget,
     qconnect,
+    sip,
 )
 from aqt.utils import askUser, showWarning, tooltip
 
@@ -39,7 +40,7 @@ from .action_row import ActionRow
 from .actions import build_execution_plan
 from .browsing import open_cards_in_browser
 from .cleanup_preview import CleanupPreviewDialog, build_preview_rows
-from .condition_row import ConditionRow
+from .condition_row import ConditionGroup, ConditionRow
 from .deck_picker import DeckPicker
 from .editor_utils import _split_tags, pad_text_field, show_text_from_start
 from .evaluator import evaluate_policy, scheduler_condition_errors, validate_policy_references
@@ -50,6 +51,7 @@ from .models import (
     MAX_COUNT,
     MAX_DAYS,
     MAX_EASE_PERCENT,
+    MIN_GROUP_CONDITIONS,
     Action,
     AgeCondition,
     AllCardsCondition,
@@ -121,11 +123,23 @@ class PolicyEditorDialog(QDialog):
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
         qconnect(self._fit_timer.timeout, self._fit_form_height)
+        self._conditions_extent_timer = QTimer(self)
+        self._conditions_extent_timer.setSingleShot(True)
+        qconnect(self._conditions_extent_timer.timeout, self._settle_conditions_extent)
+        self._pending_condition_reveal: QWidget | None = None
+        self._condition_reveal_timer = QTimer(self)
+        self._condition_reveal_timer.setSingleShot(True)
+        qconnect(self._condition_reveal_timer.timeout, self._reveal_pending_condition)
+        self._pending_action_reveal: QWidget | None = None
+        self._action_reveal_timer = QTimer(self)
+        self._action_reveal_timer.setSingleShot(True)
+        qconnect(self._action_reveal_timer.timeout, self._reveal_pending_action)
         self._operation_running = False
         self._record = record
         self._existing_ids = existing_ids
         self.result_policy: Policy | None = None
         self._conditions: list[ConditionRow] = []
+        self._condition_items: list[ConditionRow | ConditionGroup] = []
         self._actions: list[ActionRow] = []
         self.setWindowTitle("Add Policy" if record is None else "Edit Policy")
         self.resize(650, 600)
@@ -248,6 +262,11 @@ class PolicyEditorDialog(QDialog):
         self.add_condition_button = QPushButton("Add Condition", self)
         self.add_condition_button.setToolTip("Add another condition to this policy")
         match_row.addWidget(self.add_condition_button)
+        self.add_condition_group_button = QPushButton("Add Group", self)
+        self.add_condition_group_button.setToolTip(
+            "Add a group that matches all or any of its conditions"
+        )
+        match_row.addWidget(self.add_condition_group_button)
         self.creation_age_warning = warning_panel(
             "Imported cards retain their original creation dates and "
             "<b>may qualify immediately</b>",
@@ -303,9 +322,13 @@ class PolicyEditorDialog(QDialog):
             condition for condition in conditions if not isinstance(condition, AllCardsCondition)
         )
         for condition in conditions:
-            self._add_condition(condition)
+            if isinstance(condition, (AllConditions, AnyConditions)):
+                self._add_condition_group(condition)
+            else:
+                self._add_condition(condition)
         self._update_conditions_extent()
         qconnect(self.add_condition_button.clicked, self._add_default_condition)
+        qconnect(self.add_condition_group_button.clicked, self._add_default_condition_group)
         qconnect(self.match.currentIndexChanged, self._match_changed)
         self._update_condition_warning()
         layout.addWidget(conditions_group, alignment=Qt.AlignmentFlag.AlignTop)
@@ -410,6 +433,7 @@ class PolicyEditorDialog(QDialog):
         self.preview_button.setToolTip("Preview changes from this policy alone")
         qconnect(self.preview_button.clicked, self._preview)
         qconnect(self.finished, lambda _result: self._close_preview())
+        qconnect(self.finished, self._cancel_pending_layout_work)
         self.json_button = buttons.addButton(
             "Edit as JSON…", QDialogButtonBox.ButtonRole.ActionRole
         )
@@ -455,6 +479,17 @@ class PolicyEditorDialog(QDialog):
         if self._size_ready and not self._json_mode:
             self._fit_timer.start(0)
 
+    def _settle_conditions_extent(self) -> None:
+        self._update_conditions_extent(schedule_settle=False)
+
+    def _cancel_pending_layout_work(self, _result: int) -> None:
+        self._fit_timer.stop()
+        self._conditions_extent_timer.stop()
+        self._condition_reveal_timer.stop()
+        self._action_reveal_timer.stop()
+        self._pending_condition_reveal = None
+        self._pending_action_reveal = None
+
     def _schedule_button_state(self, _value: object = None) -> None:
         if hasattr(self, "browse_button"):
             self._update_action_buttons()
@@ -489,9 +524,10 @@ class PolicyEditorDialog(QDialog):
             self.note_types,
             self.match,
             self.add_condition_button,
+            self.add_condition_group_button,
         ]
-        for row in self._conditions:
-            widgets.extend(row.focus_widgets())
+        for item in self._condition_items:
+            widgets.extend(item.focus_widgets())
         widgets.append(self.add_action_button)
         for row in self._actions:
             widgets.extend(row.focus_widgets())
@@ -537,10 +573,7 @@ class PolicyEditorDialog(QDialog):
         if retained != self._displayed_errors:
             self._set_policy_errors(retained, title=self._displayed_error_title)
 
-    def _add_condition(self, condition: ConditionExpression | None) -> None:
-        row = ConditionRow(condition, self)
-        self._conditions.append(row)
-        self.conditions_layout.addWidget(row, alignment=Qt.AlignmentFlag.AlignTop)
+    def _connect_condition_row(self, row: ConditionRow) -> None:
         qconnect(row.remove_button.clicked, lambda: self._remove_condition(row))
         qconnect(row.kind.currentIndexChanged, self._update_condition_warning)
         qconnect(row.operator.currentIndexChanged, self._update_condition_warning)
@@ -552,26 +585,71 @@ class PolicyEditorDialog(QDialog):
             row.tags.editingFinished,
         ):
             qconnect(signal, self._schedule_button_state)
-        self._renumber_conditions()
+
+    def _add_condition(
+        self,
+        condition: ConditionExpression | None,
+        *,
+        group: ConditionGroup | None = None,
+        focus: bool = True,
+    ) -> ConditionRow:
+        row = ConditionRow(condition, self)
+        if group is None:
+            self._condition_items.append(row)
+            self.conditions_layout.addWidget(row, alignment=Qt.AlignmentFlag.AlignTop)
+        else:
+            group.rows.append(row)
+            group.rows_layout.addWidget(row, alignment=Qt.AlignmentFlag.AlignTop)
+        self._connect_condition_row(row)
+        self._sync_condition_rows()
         self._update_condition_warning()
         self._update_conditions_extent()
         if hasattr(self, "save_button"):
             self._update_tab_order()
-            row.kind.setFocus()
+            if focus:
+                row.kind.setFocus()
+                self._reveal_scroll_item(self.conditions_scroll, row)
             self._schedule_button_state()
+        return row
+
+    def _add_condition_group(
+        self, expression: AllConditions | AnyConditions | None = None
+    ) -> ConditionGroup:
+        group = ConditionGroup(
+            "all" if isinstance(expression, AllConditions) else "any",
+            self.conditions_container,
+        )
+        self._condition_items.append(group)
+        self.conditions_layout.addWidget(group, alignment=Qt.AlignmentFlag.AlignTop)
+        qconnect(group.remove_button.clicked, lambda: self._remove_condition_group(group))
+        qconnect(group.add_condition_button.clicked, lambda: self._add_condition(None, group=group))
+        qconnect(group.match.currentIndexChanged, self._schedule_button_state)
+        conditions = expression.conditions if expression is not None else (None, None)
+        for condition in conditions:
+            self._add_condition(condition, group=group, focus=False)
+        self._sync_condition_rows()
+        self._update_condition_warning()
+        self._update_conditions_extent()
+        if hasattr(self, "save_button"):
+            self._update_tab_order()
+            group.match.setFocus()
+            self._reveal_scroll_item(self.conditions_scroll, group)
+            self._schedule_button_state()
+        return group
 
     def _add_default_condition(self, _checked: object = None) -> None:
         if self.match.currentData() == "all_cards":
             self.match.setCurrentIndex(self.match.findData("all"))
         self._add_condition(None)
 
+    def _add_default_condition_group(self, _checked: object = None) -> None:
+        if self.match.currentData() == "all_cards":
+            self.match.setCurrentIndex(self.match.findData("all"))
+        self._add_condition_group()
+
     def _match_changed(self, _value: object = None) -> None:
-        if self.match.currentData() == "all_cards" and self._conditions:
-            for row in self._conditions:
-                self.conditions_layout.removeWidget(row)
-                row.deleteLater()
-            self._conditions.clear()
-            self._renumber_conditions()
+        if self.match.currentData() == "all_cards" and self._condition_items:
+            self._clear_conditions()
         self._update_condition_warning()
         self._update_conditions_extent()
         self._update_tab_order()
@@ -579,10 +657,26 @@ class PolicyEditorDialog(QDialog):
 
     def _remove_condition(self, row: ConditionRow) -> None:
         index = self._conditions.index(row)
-        self._conditions.remove(row)
-        self.conditions_layout.removeWidget(row)
+        group = next(
+            (
+                item
+                for item in self._condition_items
+                if isinstance(item, ConditionGroup) and row in item.rows
+            ),
+            None,
+        )
+        if group is None:
+            self._condition_items.remove(row)
+            self.conditions_layout.removeWidget(row)
+        else:
+            group.rows.remove(row)
+            group.rows_layout.removeWidget(row)
         row.deleteLater()
-        self._renumber_conditions()
+        if group is not None and len(group.rows) == 1:
+            self._dissolve_condition_group(group)
+        elif group is not None and not group.rows:
+            self._remove_condition_group(group)
+        self._sync_condition_rows()
         self._update_condition_warning()
         self._update_conditions_extent()
         self._update_tab_order()
@@ -592,39 +686,119 @@ class PolicyEditorDialog(QDialog):
         else:
             self.add_condition_button.setFocus()
 
-    def _renumber_conditions(self) -> None:
+    def _remove_condition_group(self, group: ConditionGroup) -> None:
+        if group not in self._condition_items:
+            return
+        self._condition_items.remove(group)
+        self.conditions_layout.removeWidget(group)
+        group.deleteLater()
+        self._sync_condition_rows()
+        self._update_condition_warning()
+        self._update_conditions_extent()
+        self._update_tab_order()
+        self._schedule_button_state()
+        self.add_condition_group_button.setFocus()
+
+    def _dissolve_condition_group(self, group: ConditionGroup) -> None:
+        if group not in self._condition_items or len(group.rows) != 1:
+            return
+        row = group.rows.pop()
+        group.rows_layout.removeWidget(row)
+        row.setParent(self.conditions_container)
+        index = self._condition_items.index(group)
+        self._condition_items[index] = row
+        self.conditions_layout.removeWidget(group)
+        self.conditions_layout.insertWidget(index, row, alignment=Qt.AlignmentFlag.AlignTop)
+        group.deleteLater()
+
+    def _clear_conditions(self) -> None:
+        for item in self._condition_items:
+            self.conditions_layout.removeWidget(item)
+            item.deleteLater()
+        self._condition_items.clear()
+        self._conditions.clear()
+
+    def _sync_condition_rows(self) -> None:
+        self._conditions = [
+            row
+            for item in self._condition_items
+            for row in (item.rows if isinstance(item, ConditionGroup) else (item,))
+        ]
         for index, row in enumerate(self._conditions, start=1):
             row.number_label.setText(f"{index}.")
 
-    def _update_conditions_extent(self) -> None:
+    def _condition_expression(self) -> ConditionExpression:
+        if self.match.currentData() == "all_cards":
+            return AllCardsCondition()
+        conditions = tuple(
+            item.expression() if isinstance(item, ConditionGroup) else item.condition()
+            for item in self._condition_items
+        )
+        return (
+            AnyConditions(conditions)
+            if self.match.currentData() == "any"
+            else AllConditions(conditions)
+        )
+
+    def _update_conditions_extent(self, *, schedule_settle: bool = True) -> None:
         # Adding a condition is useful even when the policy currently matches
         # all cards: the click changes it to AND and creates the first row.
         self.add_condition_button.setVisible(True)
+        self.add_condition_group_button.setVisible(True)
         self.conditions_scroll.setVisible(
             bool(self._conditions) and self.match.currentData() != "all_cards"
         )
-        spacing = max(0, self.conditions_layout.spacing())
-        row_heights = [max(1, row.sizeHint().height()) for row in self._conditions]
-        height = sum(row_heights)
-        height += spacing * max(0, len(self._conditions) - 1)
+        item_heights = [item.rendered_size_hint_height() for item in self._condition_items]
+        self.conditions_layout.invalidate()
+        self.conditions_layout.activate()
+        height = max(0, self.conditions_layout.sizeHint().height())
         margins = self.conditions_layout.contentsMargins()
-        height += margins.top() + margins.bottom()
         self.conditions_container.setMinimumHeight(height)
-        two_rows_height = max(row_heights, default=40) * 2 + spacing
-        two_rows_height += margins.top() + margins.bottom()
-        visible_height = min(height, two_rows_height)
+        gap_count = max(0, len(item_heights) - 1)
+        spacing = max(0, self.conditions_layout.spacing())
+        if gap_count:
+            spacing = max(
+                spacing,
+                (height - margins.top() - margins.bottom() - sum(item_heights)) // gap_count,
+            )
+        ordinary_row_height = max(
+            (row.rendered_size_hint_height() for row in self._conditions),
+            default=40,
+        )
+        three_rows_height = ordinary_row_height * 3 + spacing * 2
+        small_group_height = max(
+            (
+                item.bounded_size_hint_height(2)
+                for item in self._condition_items
+                if isinstance(item, ConditionGroup)
+            ),
+            default=0,
+        )
+        viewport_limit = max(three_rows_height, small_group_height)
+        viewport_limit += margins.top() + margins.bottom()
+        visible_height = min(height, viewport_limit)
         self.conditions_scroll.setMinimumHeight(visible_height)
         self.conditions_scroll.setMaximumHeight(visible_height)
         self._fit_row_scroll_width(
             self.conditions_scroll,
             self.conditions_layout,
-            self._conditions,
+            self._condition_items,
         )
+        if (
+            schedule_settle
+            and self._condition_items
+            and (
+                self._size_ready
+                or any(isinstance(item, ConditionGroup) for item in self._condition_items)
+            )
+        ):
+            self._conditions_extent_timer.start(0)
         self._schedule_form_fit()
 
     def _update_condition_warning(self, _value: object = None) -> None:
         all_cards = self.match.currentData() == "all_cards"
         self.add_condition_button.setVisible(True)
+        self.add_condition_group_button.setVisible(True)
         self.conditions_scroll.setVisible(not all_cards and bool(self._conditions))
         show_creation_warning = not all_cards and any(
             row.kind.currentData() == "age_card_created" for row in self._conditions
@@ -650,13 +824,7 @@ class PolicyEditorDialog(QDialog):
     def _scheduler_condition_errors(self) -> tuple[str, ...]:
         if self.match.currentData() == "all_cards":
             return ()
-        conditions = tuple(row.condition() for row in self._conditions)
-        expression: ConditionExpression = (
-            AnyConditions(conditions)
-            if self.match.currentData() == "any"
-            else AllConditions(conditions)
-        )
-        return scheduler_condition_errors(mw.col, expression)
+        return scheduler_condition_errors(mw.col, self._condition_expression())
 
     def _add_action(
         self,
@@ -692,6 +860,7 @@ class PolicyEditorDialog(QDialog):
         if hasattr(self, "save_button"):
             self._update_tab_order()
             row.kind.setFocus()
+            self._reveal_scroll_item(self.actions_scroll, row)
             self._schedule_button_state()
 
     def _load_actions(self, actions: tuple[Action, ...]) -> None:
@@ -802,7 +971,7 @@ class PolicyEditorDialog(QDialog):
     def _fit_row_scroll_width(
         scroll: QScrollArea,
         rows_layout: QVBoxLayout,
-        rows: list[ConditionRow] | list[ActionRow],
+        rows: list[ConditionRow | ConditionGroup] | list[ActionRow],
     ) -> None:
         if not rows:
             scroll.setMinimumWidth(0)
@@ -814,6 +983,29 @@ class PolicyEditorDialog(QDialog):
         # Horizontal scrolling is deliberately unavailable. Reset offsets that
         # Qt may retain while rows are added, removed, or the window is resized.
         scroll.horizontalScrollBar().setValue(0)
+
+    def _reveal_scroll_item(self, scroll: QScrollArea, item: QWidget) -> None:
+        if scroll is self.conditions_scroll:
+            self._pending_condition_reveal = item
+            self._condition_reveal_timer.start(0)
+        else:
+            self._pending_action_reveal = item
+            self._action_reveal_timer.start(0)
+
+    def _reveal_pending_condition(self) -> None:
+        if self._conditions_extent_timer.isActive():
+            self._condition_reveal_timer.start(0)
+            return
+        item = self._pending_condition_reveal
+        self._pending_condition_reveal = None
+        if item is not None and not sip.isdeleted(item):
+            self.conditions_scroll.ensureWidgetVisible(item, 0, 8)
+
+    def _reveal_pending_action(self) -> None:
+        item = self._pending_action_reveal
+        self._pending_action_reveal = None
+        if item is not None and not sip.isdeleted(item):
+            self.actions_scroll.ensureWidgetVisible(item, 0, 8)
 
     def _update_action_warnings(self, _value: object = None) -> None:
         kinds = {row.action_kind() for row in self._actions}
@@ -980,17 +1172,11 @@ class PolicyEditorDialog(QDialog):
             errors.append("Choose at least one note type")
         all_cards = self.match.currentData() == "all_cards"
         simple_conditions = () if all_cards else tuple(row.condition() for row in self._conditions)
-        if not all_cards and not simple_conditions:
+        if not all_cards and not self._condition_items:
             errors.append("Add at least one condition or choose 'All cards'")
         if any(isinstance(item, TagCondition) and not item.tags for item in simple_conditions):
             errors.append("Enter one or more tags for every tag condition")
-        condition: ConditionExpression = (
-            AllCardsCondition()
-            if all_cards
-            else AllConditions(simple_conditions)
-            if self.match.currentData() == "all"
-            else AnyConditions(simple_conditions)
-        )
+        condition = self._condition_expression()
         actions: list[Action] = []
         if not browse:
             kinds = [row.action_kind() for row in self._actions]
@@ -1086,15 +1272,7 @@ class PolicyEditorDialog(QDialog):
 
     def _draft_policy_for_reference_validation(self) -> Policy:
         """Build enough draft state to report independent collection errors on Save."""
-        all_cards = self.match.currentData() == "all_cards"
-        conditions = tuple(row.condition() for row in self._conditions)
-        expression: ConditionExpression = (
-            AllCardsCondition()
-            if all_cards
-            else AnyConditions(conditions)
-            if self.match.currentData() == "any"
-            else AllConditions(conditions)
-        )
+        expression = self._condition_expression()
         decks = self.decks.selectors()
         all_decks = self.decks.all_decks or not decks
         note_types = self.note_types.selected()
@@ -1117,14 +1295,7 @@ class PolicyEditorDialog(QDialog):
         )
 
     def _form_payload(self) -> dict:
-        conditions = tuple(row.condition() for row in self._conditions)
-        expression: ConditionExpression = (
-            AllCardsCondition()
-            if self.match.currentData() == "all_cards"
-            else AnyConditions(conditions)
-            if self.match.currentData() == "any"
-            else AllConditions(conditions)
-        )
+        expression = self._condition_expression()
         return policy_to_dict(
             Policy(
                 id=self._policy_id,
@@ -1271,15 +1442,12 @@ class PolicyEditorDialog(QDialog):
         self.decks, self.note_types = decks, types
         qconnect(self.decks.changed, self._schedule_button_state)
         qconnect(self.note_types.changed, self._schedule_button_state)
-        for rows, row_layout in (
-            (self._conditions, self.conditions_layout),
-            (self._actions, self.actions_layout),
-        ):
-            for row in rows:
-                row_layout.removeWidget(row)
-                row.hide()
-                row.deleteLater()
-            rows.clear()
+        self._clear_conditions()
+        for row in self._actions:
+            self.actions_layout.removeWidget(row)
+            row.hide()
+            row.deleteLater()
+        self._actions.clear()
         expression = policy.conditions
         conditions = (
             expression.conditions
@@ -1298,7 +1466,10 @@ class PolicyEditorDialog(QDialog):
         )
         for condition in conditions:
             if not isinstance(condition, AllCardsCondition):
-                self._add_condition(condition)
+                if isinstance(condition, (AllConditions, AnyConditions)):
+                    self._add_condition_group(condition)
+                else:
+                    self._add_condition(condition)
         self._load_actions(policy.actions)
         self._update_conditions_extent()
         self._update_actions_extent()
@@ -1511,6 +1682,17 @@ def _best_effort_condition(  # noqa: PLR0911, PLR0912
 ) -> ConditionExpression | None:
     if not isinstance(raw, dict):
         return None
+    match = _raw_string(raw, "match")
+    nested = raw.get("conditions")
+    if match in {"all", "any"} and isinstance(nested, list):
+        children = tuple(
+            condition
+            for condition in (_best_effort_condition(item) for item in nested)
+            if condition is not None
+            and not isinstance(condition, (AllConditions, AnyConditions, AllCardsCondition))
+        )
+        if len(children) >= MIN_GROUP_CONDITIONS:
+            return AllConditions(children) if match == "all" else AnyConditions(children)
     kind = _raw_string(raw, "type")
     days = raw.get("days")
     if not isinstance(days, int) or isinstance(days, bool) or not 0 <= days <= MAX_DAYS:

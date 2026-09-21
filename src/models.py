@@ -10,6 +10,7 @@ CONFIG_VERSION = 1
 MAX_DAYS = 100000
 MAX_COUNT = 1000000
 MAX_EASE_PERCENT = 1000
+MIN_GROUP_CONDITIONS = 2
 FLAG_NAMES = ("none", "red", "orange", "green", "blue", "pink", "turquoise", "purple")
 _MISSING = object()
 
@@ -539,6 +540,25 @@ def _parse_simple_condition(  # noqa: PLR0911, PLR0912
     raise ValueError(f"{path}.type: unknown condition type {condition_type!r}")
 
 
+def _parse_condition(value: object, path: str, *, allow_group: bool) -> ConditionExpression:
+    if isinstance(value, dict) and ("match" in value or "conditions" in value):
+        if not allow_group:
+            raise ValueError(f"{path}: condition groups cannot contain other groups")
+        _reject_unknown_keys(value, {"match", "conditions"}, path)
+        match = value.get("match")
+        if not isinstance(match, str) or match not in {"all", "any"}:
+            raise ValueError(f"{path}.match: must be 'all' or 'any'")
+        conditions = value.get("conditions")
+        if not isinstance(conditions, list) or len(conditions) < MIN_GROUP_CONDITIONS:
+            raise ValueError(f"{path}.conditions: must contain at least two conditions")
+        parsed = tuple(
+            _parse_condition(condition, f"{path}.conditions[{index}]", allow_group=False)
+            for index, condition in enumerate(conditions)
+        )
+        return AllConditions(parsed) if match == "all" else AnyConditions(parsed)
+    return _parse_simple_condition(value, path)
+
+
 def _parse_conditions(value: object, match: object, path: str) -> ConditionExpression:
     if value is _MISSING and match is _MISSING:
         return AllCardsCondition()
@@ -551,7 +571,7 @@ def _parse_conditions(value: object, match: object, path: str) -> ConditionExpre
     if not isinstance(value, list) or not value:
         raise ValueError(f"{path}.conditions: must be a non-empty array")
     conditions = tuple(
-        _parse_simple_condition(condition, f"{path}.conditions[{index}]")
+        _parse_condition(condition, f"{path}.conditions[{index}]", allow_group=True)
         for index, condition in enumerate(value)
     )
     return AllConditions(conditions) if match == "all" else AnyConditions(conditions)
@@ -953,6 +973,11 @@ def condition_to_dict(  # noqa: PLR0911, PLR0912
         return {"type": "sibling_suspension", "operator": condition.operator}
     if isinstance(condition, SiblingReviewHistoryCondition):
         return {"type": "sibling_review_history", "operator": condition.operator}
+    if isinstance(condition, (AllConditions, AnyConditions)):
+        return {
+            "match": "all" if isinstance(condition, AllConditions) else "any",
+            "conditions": [condition_to_dict(child) for child in condition.conditions],
+        }
     raise AssertionError(f"unknown condition: {condition!r}")
 
 

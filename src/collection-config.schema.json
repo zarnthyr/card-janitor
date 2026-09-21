@@ -142,6 +142,25 @@
     },
     "condition": {
       "oneOf": [
+        {"$ref": "#/$defs/simple_condition"},
+        {"$ref": "#/$defs/condition_group"}
+      ]
+    },
+    "condition_group": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["match", "conditions"],
+      "properties": {
+        "match": {"enum": ["all", "any"]},
+        "conditions": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/simple_condition"}
+        }
+      }
+    },
+    "simple_condition": {
+      "oneOf": [
         {
           "type": "object",
           "additionalProperties": false,

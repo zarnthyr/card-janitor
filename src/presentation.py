@@ -251,13 +251,36 @@ def describe_conditions(  # noqa: PLR0911, PLR0912
         state = "suspended" if condition.operator == "is_suspended" else "not suspended"
         return f"Card is {state}"
     if isinstance(condition, (AllConditions, AnyConditions)):
-        operator = "\nAND " if isinstance(condition, AllConditions) else "\nOR "
-        description = operator.join(
-            describe_conditions(child, nested=True) for child in condition.conditions
-        )
-        return f"({description})" if nested else description
+        if nested:
+            return "\n".join(_describe_condition_group(condition))
+        operator = "AND" if isinstance(condition, AllConditions) else "OR"
+        lines: list[str] = []
+        for index, child in enumerate(condition.conditions):
+            prefix = "" if index == 0 else f"{operator} "
+            if isinstance(child, (AllConditions, AnyConditions)):
+                group_lines = _describe_condition_group(child)
+                group_lines[0] = prefix + group_lines[0]
+                lines.extend(group_lines)
+            else:
+                lines.append(prefix + describe_conditions(child))
+        return "\n".join(lines)
     message = f"unknown cleanup condition: {condition!r}"
     raise AssertionError(message)
+
+
+def _describe_condition_group(condition: AllConditions | AnyConditions) -> list[str]:
+    operator = "AND" if isinstance(condition, AllConditions) else "OR"
+    lines = ["("]
+    for index, child in enumerate(condition.conditions):
+        prefix = "" if index == 0 else f"{operator} "
+        description = describe_conditions(
+            child,
+            nested=isinstance(child, (AllConditions, AnyConditions)),
+        ).splitlines()
+        description[0] = prefix + description[0]
+        lines.extend(f"  {line}" for line in description)
+    lines.append(")")
+    return lines
 
 
 def _describe_note_type(selector: NoteTypeSelector) -> str:

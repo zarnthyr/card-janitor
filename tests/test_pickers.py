@@ -7,6 +7,7 @@ import sys
 import traceback
 from collections.abc import Iterator
 from dataclasses import replace
+from itertools import pairwise
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -18,8 +19,12 @@ from aqt.qt import (
     QApplication,
     QDialog,
     QEvent,
+    QHeaderView,
     QPlainTextEdit,
     QPoint,
+    QRect,
+    QStyle,
+    QStyleOptionViewItem,
     Qt,
     QTextBrowser,
     QUrl,
@@ -27,7 +32,7 @@ from aqt.qt import (
 )
 from card_janitor import cleanup_preview, policy_editor, settings_dialog, ui
 from card_janitor.action_row import ActionRow
-from card_janitor.condition_row import CardStatePicker, ConditionRow
+from card_janitor.condition_row import CardStatePicker, ConditionGroup, ConditionRow
 from card_janitor.configuration import DEFAULT_CONFIG
 from card_janitor.deck_picker import DeckPicker
 from card_janitor.engine import CardFacts, PolicyReport, ResolvedAction, evaluate_facts
@@ -185,6 +190,197 @@ def test_disabling_automatic_cleanup_keeps_manual_button_available(
     assert dashboard.run_button.isEnabled()
     assert not dashboard.automatic_disabled.isHidden()
     dashboard.close()
+
+
+def test_grouped_condition_wrapping_retains_block_indentation(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    raw = {
+        **edit_fixture.raw,
+        "match": "all",
+        "conditions": [
+            {"type": "card_state", "states": ["review"]},
+            {
+                "match": "any",
+                "conditions": [
+                    {
+                        "type": "age",
+                        "days": 365,
+                        "source": "first_review",
+                        "operator": "gte",
+                    },
+                    {"type": "card_state", "states": ["learning", "relearning"]},
+                ],
+            },
+        ],
+    }
+    parsed = parse_config({**DEFAULT_CONFIG, "policies": [raw]})
+    dashboard = ui.CardJanitorDialog(parsed, ())
+    column = dashboard.COLUMN_CONDITIONS
+    dashboard.table.horizontalHeader().setSectionResizeMode(
+        column,
+        QHeaderView.ResizeMode.Interactive,
+    )
+    dashboard.table.setColumnWidth(column, 140)
+    index = dashboard.table.model().index(0, column)
+    delegate = dashboard._condition_text_delegate
+    option = QStyleOptionViewItem()
+    option.initFrom(dashboard.table)
+    option.rect = QRect(0, 0, dashboard.table.columnWidth(column), 10_000)
+    text_option, text_rect = delegate._text_option_and_rect(option, index)
+    document = ui._condition_text_document(
+        dashboard.table.item(0, column).text(),
+        text_option,
+        text_rect.width(),
+    )
+    document.size()
+
+    blocks = {}
+    block = document.begin()
+    while block.isValid():
+        blocks[block.text()] = block
+        block = block.next()
+
+    group_indent = text_option.fontMetrics.horizontalAdvance("  ")
+    first = blocks["Age since first review ≥ 365 days"]
+    assert first.layout().lineCount() > 1
+    assert {
+        first.layout().lineAt(line_number).x() for line_number in range(first.layout().lineCount())
+    } == {group_indent}
+    later = blocks["OR Card state is Learning, Relearning"]
+    assert later.layout().lineCount() > 1
+    assert later.layout().lineAt(0).x() == group_indent
+    later_indent = group_indent + text_option.fontMetrics.horizontalAdvance("OR ")
+    assert {
+        later.layout().lineAt(line_number).x()
+        for line_number in range(1, later.layout().lineCount())
+    } == {later_indent}
+    assert blocks["AND ("].layout().lineAt(0).x() == 0
+    assert blocks[")"].layout().lineAt(0).x() == 0
+
+    dashboard.table.resizeRowsToContents()
+    hint = delegate.sizeHint(option, index)
+    native_padding = 2 * dashboard.table.style().pixelMetric(
+        QStyle.PixelMetric.PM_FocusFrameVMargin,
+        text_option,
+        dashboard.table,
+    )
+    assert hint.height() <= document.size().height() + native_padding + 1
+    assert dashboard.table.rowHeight(0) >= hint.height()
+    dashboard.close()
+
+
+@pytest.mark.parametrize(
+    ("text", "target", "base_indent", "operator"),
+    [
+        pytest.param(
+            "A sufficiently long first condition that wraps onto another line",
+            "A sufficiently long first condition that wraps onto another line",
+            "",
+            "",
+            id="single_condition",
+        ),
+        pytest.param(
+            "First condition\nAND A sufficiently long second condition that wraps",
+            "AND A sufficiently long second condition that wraps",
+            "",
+            "AND ",
+            id="flat_and",
+        ),
+        pytest.param(
+            "First condition\nOR A sufficiently long second condition that wraps",
+            "OR A sufficiently long second condition that wraps",
+            "",
+            "OR ",
+            id="flat_or",
+        ),
+        pytest.param(
+            "First condition\nAND Second condition\n"
+            "AND A sufficiently long third condition that wraps",
+            "AND A sufficiently long third condition that wraps",
+            "",
+            "AND ",
+            id="later_top_level_condition",
+        ),
+        pytest.param(
+            "AND (\n  A sufficiently long first grouped condition that wraps\n  OR Second\n)",
+            "A sufficiently long first grouped condition that wraps",
+            "  ",
+            "",
+            id="first_grouped_condition",
+        ),
+        pytest.param(
+            "AND (\n  First\n  OR A sufficiently long later grouped condition that wraps\n)",
+            "OR A sufficiently long later grouped condition that wraps",
+            "  ",
+            "OR ",
+            id="later_grouped_or_condition",
+        ),
+        pytest.param(
+            "OR (\n  First\n  AND A sufficiently long later grouped condition that wraps\n)",
+            "AND A sufficiently long later grouped condition that wraps",
+            "  ",
+            "AND ",
+            id="later_grouped_and_condition",
+        ),
+    ],
+)
+def test_condition_renderer_uses_expression_hanging_indents(
+    text: str,
+    target: str,
+    base_indent: str,
+    operator: str,
+) -> None:
+    widget = QWidget()
+    option = QStyleOptionViewItem()
+    option.initFrom(widget)
+    document = ui._condition_text_document(text, option, 120)
+    document.size()
+    block = document.begin()
+    while block.isValid() and block.text() != target:
+        block = block.next()
+    assert block.isValid()
+    layout = block.layout()
+
+    expected_first = option.fontMetrics.horizontalAdvance(base_indent)
+    expected_continuation = expected_first + option.fontMetrics.horizontalAdvance(operator)
+    assert layout.lineCount() > 1
+    assert layout.lineAt(0).x() == expected_first
+    assert {layout.lineAt(line_number).x() for line_number in range(1, layout.lineCount())} == {
+        expected_continuation
+    }
+
+
+def test_condition_renderer_preserves_unwrapped_group_structure() -> None:
+    widget = QWidget()
+    option = QStyleOptionViewItem()
+    option.initFrom(widget)
+    document = ui._condition_text_document(
+        "AND (\n  Interval ≥ 365 days\n  OR Review history exists\n)",
+        option,
+        500,
+    )
+    document.size()
+    blocks = []
+    block = document.begin()
+    while block.isValid():
+        blocks.append(block)
+        block = block.next()
+
+    group_indent = option.fontMetrics.horizontalAdvance("  ")
+    assert [block.text() for block in blocks] == [
+        "AND (",
+        "Interval ≥ 365 days",
+        "OR Review history exists",
+        ")",
+    ]
+    assert all(block.layout().lineCount() == 1 for block in blocks)
+    assert [block.layout().lineAt(0).x() for block in blocks] == [
+        0,
+        group_indent,
+        group_indent,
+        0,
+    ]
 
 
 def test_closing_linked_policy_editor_returns_to_cleanup_details(
@@ -1448,6 +1644,368 @@ def test_add_condition_switches_all_cards_to_and(edit_fixture: SimpleNamespace) 
 
     assert editor.match.currentData() == "all"
     assert len(editor._conditions) == 1
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_condition_group_editor_round_trips_nested_policy(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    raw = {
+        **edit_fixture.raw,
+        "conditions": [
+            edit_fixture.raw["conditions"][0],
+            {
+                "match": "any",
+                "conditions": [
+                    {"type": "interval", "days": 180, "operator": "gte"},
+                    {"type": "suspension", "operator": "is_suspended"},
+                ],
+            },
+        ],
+    }
+    policy = parse_policy(raw)
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, raw, policy, ()), set(), edit_fixture.parent
+    )
+
+    assert len(editor._condition_items) == 2
+    group = editor._condition_items[1]
+    assert isinstance(group, ConditionGroup)
+    assert group.match.currentData() == "any"
+    assert [row.number_label.text() for row in editor._conditions] == ["1.", "2.", "3."]
+    assert editor._form_payload() == raw
+    assert editor._policy_from_form() == policy
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_add_condition_group_and_collapse_single_remaining_child(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.match.setCurrentIndex(editor.match.findData("all_cards"))
+
+    editor.add_condition_group_button.click()
+
+    assert editor.match.currentData() == "all"
+    assert len(editor._condition_items) == 1
+    group = editor._condition_items[0]
+    assert isinstance(group, ConditionGroup)
+    assert len(group.rows) == 2
+    assert group.match_label.text() == "Match"
+    assert [group.match.itemText(index) for index in range(group.match.count())] == [
+        "All conditions (AND)",
+        "Any condition (OR)",
+    ]
+    assert group.focus_widgets()[:3] == (
+        group.match,
+        group.add_condition_button,
+        group.remove_button,
+    )
+    assert [row.number_label.text() for row in group.rows] == ["1.", "2."]
+
+    editor._remove_condition(group.rows[0])
+
+    assert editor._condition_items == [editor._conditions[0]]
+    assert not isinstance(editor._condition_items[0], ConditionGroup)
+    assert editor._conditions[0].number_label.text() == "1."
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_policy_editor_condition_group_height_caps_and_shrinks(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    QApplication.processEvents()
+    QApplication.processEvents()
+    compact_height = editor.height()
+
+    group = editor._add_condition_group()
+    QApplication.processEvents()
+    QApplication.processEvents()
+    small_group_height = editor.height()
+    viewport_limit = editor.conditions_scroll.maximumHeight()
+    margins = editor.conditions_layout.contentsMargins()
+
+    assert viewport_limit >= group.sizeHint().height() + margins.top() + margins.bottom()
+    assert editor.conditions_scroll.verticalScrollBar().maximum() == 0
+
+    added = [editor._add_condition(None, group=group, focus=False) for _ in range(6)]
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert editor.conditions_scroll.maximumHeight() == viewport_limit
+    assert editor.height() == small_group_height
+    assert editor.conditions_scroll.verticalScrollBar().maximum() > 0
+
+    for row in reversed(added):
+        editor._remove_condition(row)
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert editor.conditions_scroll.maximumHeight() == viewport_limit
+    assert editor.height() == small_group_height
+    assert editor.conditions_scroll.verticalScrollBar().maximum() == 0
+
+    editor._remove_condition_group(group)
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert editor.conditions_scroll.isHidden()
+    assert editor.height() == compact_height
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+@pytest.mark.parametrize(
+    "arrangement",
+    ["group_first", "group_last", "multiple_groups"],
+)
+def test_large_mixed_condition_layout_has_disjoint_geometry(
+    edit_fixture: SimpleNamespace,
+    arrangement: str,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    QApplication.processEvents()
+    groups = []
+    if arrangement == "group_first":
+        groups.append(editor._add_condition_group())
+        for _ in range(30):
+            editor._add_condition(None)
+    elif arrangement == "group_last":
+        for _ in range(30):
+            editor._add_condition(None)
+        groups.append(editor._add_condition_group())
+    else:
+        groups.append(editor._add_condition_group())
+        for _ in range(10):
+            editor._add_condition(None)
+        groups.append(editor._add_condition_group())
+        for _ in range(20):
+            editor._add_condition(None)
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert editor.conditions_scroll.verticalScrollBar().maximum() > 0
+    _assert_condition_geometry_is_disjoint(editor, groups)
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def _assert_condition_geometry_is_disjoint(
+    editor: policy_editor.PolicyEditorDialog,
+    groups: list[ConditionGroup],
+) -> None:
+    container = editor.conditions_container
+    layout_height = editor.conditions_layout.sizeHint().height()
+    assert container.minimumHeight() >= layout_height
+    assert container.height() >= layout_height
+    assert (
+        editor.conditions_scroll.verticalScrollBar().maximum()
+        == container.height() - editor.conditions_scroll.viewport().height()
+    )
+
+    item_rects = [item.geometry() for item in editor._condition_items]
+    for previous, current in pairwise(item_rects):
+        assert previous.bottom() < current.top()
+    assert item_rects[-1].bottom() < container.height()
+
+    for row in editor._conditions:
+        assert row.height() >= row.sizeHint().height()
+    for group in groups:
+        assert group.height() >= group.sizeHint().height()
+        assert group.match.height() >= group.match.sizeHint().height()
+        nested_rects = [group.layout().itemAt(0).geometry()]
+        nested_rects.extend(row.geometry() for row in group.rows)
+        for previous, current in pairwise(nested_rects):
+            assert previous.bottom() < current.top()
+        assert nested_rects[-1].bottom() < group.height()
+
+
+def test_condition_content_and_scroll_range_grow_after_viewport_caps(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    QApplication.processEvents()
+    group = editor._add_condition_group()
+    checkpoints = {0, 1, 2, 3, 10, 30}
+    measurements = []
+    for count in range(31):
+        if count:
+            editor._add_condition(None)
+        if count not in checkpoints:
+            continue
+        QApplication.processEvents()
+        QApplication.processEvents()
+        scroll = editor.conditions_scroll
+        container = editor.conditions_container
+        _assert_condition_geometry_is_disjoint(editor, [group])
+        measurements.append(
+            (
+                scroll.viewport().height(),
+                container.height(),
+                scroll.verticalScrollBar().maximum(),
+            )
+        )
+
+    viewport_heights, content_heights, scroll_ranges = zip(*measurements, strict=True)
+    assert len(set(viewport_heights)) == 1
+    assert all(previous < current for previous, current in pairwise(content_heights))
+    assert all(previous < current for previous, current in pairwise(scroll_ranges))
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_flat_condition_layout_retains_natural_row_heights(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    QApplication.processEvents()
+    checkpoints = {1, 2, 3, 10, 30}
+    measurements = []
+    for count in range(1, 31):
+        editor._add_condition(None)
+        if count not in checkpoints:
+            continue
+        QApplication.processEvents()
+        QApplication.processEvents()
+        scroll = editor.conditions_scroll
+        container = editor.conditions_container
+        _assert_condition_geometry_is_disjoint(editor, [])
+        measurements.append(
+            (
+                scroll.viewport().height(),
+                container.height(),
+                scroll.verticalScrollBar().maximum(),
+            )
+        )
+
+    viewport_heights, content_heights, scroll_ranges = zip(*measurements, strict=True)
+    assert viewport_heights[0] < viewport_heights[1] < viewport_heights[2]
+    assert len(set(viewport_heights[2:])) == 1
+    assert all(previous < current for previous, current in pairwise(content_heights))
+    assert scroll_ranges[:3] == (0, 0, 0)
+    assert scroll_ranges[2] < scroll_ranges[3] < scroll_ranges[4]
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_existing_flat_condition_layout_retains_natural_row_heights(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    raw = {
+        **edit_fixture.raw,
+        "conditions": [edit_fixture.raw["conditions"][0]] * 10,
+    }
+    editor = policy_editor.PolicyEditorDialog(
+        PolicyRecord(0, raw, parse_policy(raw), ()), set(), edit_fixture.parent
+    )
+    editor.show()
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    _assert_condition_geometry_is_disjoint(editor, [])
+    assert editor.conditions_scroll.verticalScrollBar().maximum() > 0
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_policy_editor_action_height_caps_and_shrinks(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    QApplication.processEvents()
+    QApplication.processEvents()
+    compact_height = editor.height()
+
+    editor._add_action("add_tags", tags=("one",))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    one_action_height = editor.height()
+    editor._add_action("add_tags", tags=("two",))
+    QApplication.processEvents()
+    QApplication.processEvents()
+    two_action_height = editor.height()
+    viewport_limit = editor.actions_scroll.maximumHeight()
+    second = editor._actions[-1]
+    editor._add_action("add_tags", tags=("three",))
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert compact_height < one_action_height < two_action_height
+    assert editor.actions_scroll.maximumHeight() == viewport_limit
+    assert editor.height() == two_action_height
+    assert editor.actions_scroll.verticalScrollBar().maximum() > 0
+
+    editor._remove_action(editor._actions[-1])
+    QApplication.processEvents()
+    QApplication.processEvents()
+    assert editor.height() == two_action_height
+    assert editor.actions_scroll.verticalScrollBar().maximum() == 0
+
+    editor._remove_action(second)
+    QApplication.processEvents()
+    QApplication.processEvents()
+    assert editor.height() == one_action_height
+    editor._remove_action(editor._actions[0])
+    QApplication.processEvents()
+    QApplication.processEvents()
+    assert editor.height() == compact_height
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_policy_editor_reveals_items_added_past_section_caps(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    QApplication.processEvents()
+
+    for _ in range(3):
+        editor._add_condition(None)
+    group = editor._add_condition_group()
+    QApplication.processEvents()
+    QApplication.processEvents()
+    group_top = group.mapTo(editor.conditions_scroll.viewport(), QPoint()).y()
+    assert editor.conditions_scroll.verticalScrollBar().maximum() > 0
+    assert 0 <= group_top < editor.conditions_scroll.viewport().height()
+
+    for _ in range(5):
+        condition = editor._add_condition(None, group=group)
+    for _ in range(3):
+        editor._add_action("add_tags", tags=(f"tag_{len(editor._actions)}",))
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    condition_top = condition.mapTo(editor.conditions_scroll.viewport(), QPoint()).y()
+    action = editor._actions[-1]
+    action_top = action.mapTo(editor.actions_scroll.viewport(), QPoint()).y()
+    assert editor.conditions_scroll.verticalScrollBar().maximum() > 0
+    assert 0 <= condition_top < editor.conditions_scroll.viewport().height()
+    assert editor.actions_scroll.verticalScrollBar().maximum() > 0
+    assert 0 <= action_top < editor.actions_scroll.viewport().height()
+    editor.done(QDialog.DialogCode.Rejected)
+
+
+def test_policy_editor_section_fitting_preserves_manual_dialog_size(
+    edit_fixture: SimpleNamespace,
+) -> None:
+    editor = policy_editor.PolicyEditorDialog(None, set(), edit_fixture.parent)
+    editor.show()
+    QApplication.processEvents()
+    QApplication.processEvents()
+    editor.resize(editor.width() + 200, editor.height() + 350)
+    QApplication.processEvents()
+    manual_size = editor.size()
+
+    group = editor._add_condition_group()
+    for _ in range(6):
+        editor._add_condition(None, group=group)
+    for _ in range(3):
+        editor._add_action("add_tags", tags=(f"tag_{len(editor._actions)}",))
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert editor.size() == manual_size
     editor.done(QDialog.DialogCode.Rejected)
 
 

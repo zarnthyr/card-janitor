@@ -150,6 +150,25 @@ def test_any_conditions_matches_either_child() -> None:
     assert matches_conditions(condition, facts(interval=180), 2000 + MILLIS_PER_DAY)
 
 
+def test_one_level_condition_group_combines_and_with_or() -> None:
+    condition = AllConditions(
+        (
+            CardStateCondition(("review",)),
+            AnyConditions(
+                (
+                    IntervalCondition(180, "gte"),
+                    SuspensionCondition("is_suspended"),
+                )
+            ),
+        )
+    )
+
+    assert matches_conditions(condition, facts(card_type=2, interval=180), 0)
+    assert matches_conditions(condition, facts(card_type=2, interval=30, queue=-1), 0)
+    assert not matches_conditions(condition, facts(card_type=2, interval=30), 0)
+    assert not matches_conditions(condition, facts(card_type=0, interval=180), 0)
+
+
 def test_interval_condition_uses_current_interval_without_requiring_revlog() -> None:
     assert matches_conditions(
         IntervalCondition(180, "gte"), facts(interval=180, first_review_ms=None), 0

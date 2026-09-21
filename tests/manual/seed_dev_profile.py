@@ -166,5 +166,5 @@ for operation in ("suspend", "unsuspend", "move"):
         )
 invoke("reloadCollection")
 print(f"Seeded {len(fixtures) + 6} cards in the dev profile")
-print("Load tests/manual/dev-profile-config.json: 13 planned cards, 2 overlapping cards")
+print("Load tests/manual/dev-profile-config.json: 13 planned cards, 7 overlapping cards")
 print("Use Preview to inspect merged changes and note-action siblings before cleanup")

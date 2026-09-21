@@ -122,6 +122,94 @@
       ]
     },
     {
+      "id": "2a56976f-fc41-5064-b657-f25c282c1e17",
+      "name": "Dev — Grouped Mature Reviews",
+      "scope": {
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Source",
+            "include_subdecks": true
+          }
+        ]
+      },
+      "match": "all",
+      "conditions": [
+        {
+          "type": "card_state",
+          "states": [
+            "review"
+          ]
+        },
+        {
+          "match": "any",
+          "conditions": [
+            {
+              "type": "age",
+              "days": 365,
+              "source": "first_review",
+              "operator": "gte"
+            },
+            {
+              "type": "interval",
+              "days": 365,
+              "operator": "gte"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "add_tags",
+          "tags": [
+            "cj_test_grouped_mature"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "0ddbeaf2-32fa-5503-8af4-1fe5f3a44c8d",
+      "name": "Dev — Grouped New or Learning",
+      "scope": {
+        "decks": [
+          {
+            "deck": "Card Janitor Test::Source",
+            "include_subdecks": true
+          }
+        ]
+      },
+      "match": "any",
+      "conditions": [
+        {
+          "type": "review_history",
+          "operator": "not_exists"
+        },
+        {
+          "match": "all",
+          "conditions": [
+            {
+              "type": "card_state",
+              "states": [
+                "learning",
+                "relearning"
+              ]
+            },
+            {
+              "type": "review_history",
+              "operator": "exists"
+            }
+          ]
+        }
+      ],
+      "actions": [
+        {
+          "type": "add_tags",
+          "tags": [
+            "cj_test_grouped_state"
+          ]
+        }
+      ]
+    },
+    {
       "id": "1067e16f-853c-5ad0-8d98-4bb2b1ac1204",
       "name": "Dev — Repair Suspended Leech",
       "scope": {

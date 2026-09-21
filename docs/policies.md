@@ -191,7 +191,9 @@ for OR.
 Omit both fields to match every card allowed by the scope. The obsolete
 `{"type": "all_cards"}` pseudo-condition is invalid.
 
-Nested condition groups are not supported.
+A policy's condition list may contain simple conditions and one level of
+condition groups. A group uses the same `match` and `conditions` fields, must
+contain at least two simple conditions, and cannot contain another group.
 
 Numeric conditions generally support:
 
@@ -459,6 +461,37 @@ To match when either of two conditions is true, use `match: "any"`:
       }
     ]
 
+To require one condition together with either of two alternatives, place the
+alternatives in a group:
+
+    "match": "all",
+    "conditions": [
+      {
+        "type": "age",
+        "days": 365,
+        "source": "first_review",
+        "operator": "gte"
+      },
+      {
+        "match": "any",
+        "conditions": [
+          {
+            "type": "interval",
+            "days": 180,
+            "operator": "gte"
+          },
+          {
+            "type": "suspension",
+            "operator": "is_suspended"
+          }
+        ]
+      }
+    ]
+
+The ordinary editor presents groups visually. It supports multiple groups at
+the policy level while keeping simple policies as a flat list. Remove and
+recreate a condition to place it in a different group or at the policy level.
+
 ## Actions
 
 Every policy requires at least one action.
@@ -650,7 +683,9 @@ Preview reflects the collection state when it is calculated. Before mutation,
 Card Janitor re-evaluates current collection state within the initially
 evaluated card boundary. It cancels cleanup if a participating saved policy
 definition changed, rather than applying a stale or silently substituted
-definition.
+definition. All participating policies in one evaluation pass use the same
+captured time for time-dependent conditions; the pre-execution re-evaluation is
+a new pass with a newly captured time.
 
 ## Undo
 

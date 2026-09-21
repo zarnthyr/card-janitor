@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import contextlib
 import itertools
+import math
 from collections import Counter
 from dataclasses import dataclass, replace
 from html import escape
@@ -16,6 +17,7 @@ from aqt import mw
 from aqt.operations import CollectionOp, QueryOp
 from aqt.qt import (
     QAbstractItemView,
+    QAbstractTextDocumentLayout,
     QAction,
     QColor,
     QDialog,
@@ -25,18 +27,27 @@ from aqt.qt import (
     QHeaderView,
     QKeyEvent,
     QLabel,
+    QModelIndex,
     QPainter,
+    QPalette,
     QPushButton,
     QRect,
+    QRectF,
     QSignalBlocker,
+    QSize,
     QSizePolicy,
     QStackedWidget,
     QStyle,
+    QStyledItemDelegate,
     QStyleOptionButton,
+    QStyleOptionViewItem,
     Qt,
     QTableWidget,
     QTableWidgetItem,
+    QTextBlockFormat,
     QTextBrowser,
+    QTextCursor,
+    QTextDocument,
     QTimer,
     QVBoxLayout,
     QWidget,
@@ -165,6 +176,119 @@ class CheckBoxHeader(QHeaderView):
         style.drawControl(QStyle.ControlElement.CE_CheckBox, option, painter, self)
 
 
+def _condition_text_document(
+    text: str,
+    option: QStyleOptionViewItem,
+    text_width: int,
+) -> QTextDocument:
+    document = QTextDocument()
+    document.setDocumentMargin(0)
+    document.setDefaultFont(option.font)
+    cursor = QTextCursor(document)
+    for index, source_line in enumerate(text.splitlines()):
+        if index:
+            cursor.insertBlock()
+        indentation = len(source_line) - len(source_line.lstrip(" "))
+        line = source_line[indentation:]
+        block_format = QTextBlockFormat()
+        left_margin = option.fontMetrics.horizontalAdvance(" " * indentation)
+        operator_prefix = next(
+            (
+                prefix
+                for prefix in ("AND ", "OR ")
+                if line.startswith(prefix) and line != f"{prefix}("
+            ),
+            "",
+        )
+        if operator_prefix:
+            hanging_indent = option.fontMetrics.horizontalAdvance(operator_prefix)
+            left_margin += hanging_indent
+            block_format.setTextIndent(-hanging_indent)
+        block_format.setLeftMargin(left_margin)
+        cursor.setBlockFormat(block_format)
+        cursor.insertText(line)
+    document.setTextWidth(max(1, text_width))
+    return document
+
+
+class ConditionTextDelegate(QStyledItemDelegate):
+    def __init__(self, table: QTableWidget) -> None:
+        super().__init__(table)
+        self._table = table
+
+    def _text_option_and_rect(
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> tuple[QStyleOptionViewItem, QRect]:
+        text_option = QStyleOptionViewItem(option)
+        self.initStyleOption(text_option, index)
+        text_rect = self._table.style().subElementRect(
+            QStyle.SubElement.SE_ItemViewItemText,
+            text_option,
+            self._table,
+        )
+        return text_option, text_rect
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> None:
+        text_option, text_rect = self._text_option_and_rect(option, index)
+        background_option = QStyleOptionViewItem(text_option)
+        background_option.text = ""
+        self._table.style().drawControl(
+            QStyle.ControlElement.CE_ItemViewItem,
+            background_option,
+            painter,
+            self._table,
+        )
+        document = _condition_text_document(
+            text_option.text,
+            text_option,
+            text_rect.width(),
+        )
+        context = QAbstractTextDocumentLayout.PaintContext()
+        context.palette = text_option.palette
+        if text_option.state & QStyle.StateFlag.State_Selected:
+            context.palette.setColor(
+                QPalette.ColorRole.Text,
+                text_option.palette.color(QPalette.ColorRole.HighlightedText),
+            )
+        context.clip = QRectF(0, 0, text_rect.width(), text_rect.height())
+        vertical_offset = max(0.0, (text_rect.height() - document.size().height()) / 2)
+        painter.save()
+        painter.setClipRect(text_rect)
+        painter.translate(text_rect.x(), text_rect.y() + vertical_offset)
+        document.documentLayout().draw(painter, context)
+        painter.restore()
+
+    def sizeHint(  # noqa: N802 - Qt override
+        self,
+        option: QStyleOptionViewItem,
+        index: QModelIndex,
+    ) -> QSize:
+        width = self._table.columnWidth(index.column())
+        sized_option = QStyleOptionViewItem(option)
+        sized_option.rect = QRect(0, 0, width, 10_000)
+        text_option, text_rect = self._text_option_and_rect(sized_option, index)
+        document = _condition_text_document(
+            text_option.text,
+            text_option,
+            text_rect.width(),
+        )
+        base = super().sizeHint(option, index)
+        vertical_padding = 2 * self._table.style().pixelMetric(
+            QStyle.PixelMetric.PM_FocusFrameVMargin,
+            text_option,
+            self._table,
+        )
+        height = math.ceil(document.size().height()) + vertical_padding
+        return QSize(base.width(), max(base.height(), height))
+
+
 class CardJanitorDialog(QDialog):
     COLUMN_RUN = 0
     COLUMN_POLICY = 1
@@ -211,6 +335,11 @@ class CardJanitorDialog(QDialog):
         layout.addLayout(intro)
 
         self.table = QTableWidget(0, 7, self)
+        self._condition_text_delegate = ConditionTextDelegate(self.table)
+        self.table.setItemDelegateForColumn(
+            self.COLUMN_CONDITIONS,
+            self._condition_text_delegate,
+        )
         self.table_header = CheckBoxHeader(self.table)
         self.table.setHorizontalHeader(self.table_header)
         self.table.setHorizontalHeaderLabels(
