@@ -280,6 +280,49 @@ def test_note_wide_effect_separates_trigger_from_consequential_sibling() -> None
     assert event.effects[0].contributors[0].trigger_cards == 1
 
 
+def test_note_wide_effect_allows_only_consequential_sibling_to_change() -> None:
+    value = policy(actions=(SuspendAction("note"),))
+    trigger = card(1, 10, queue=-1)
+    sibling = card(2, 10)
+    report = evaluated_report(value, trigger)
+    resolved = report.resolved_actions
+    report = replace(
+        report,
+        actionable=(sibling,),
+        card_actions=((trigger, resolved), (sibling, resolved)),
+        evaluation_actionable_cards=1,
+    )
+    ledger = ExecutionLedger(
+        "complete",
+        (
+            ExecutionLedgerStep(
+                0,
+                "suspend",
+                "card",
+                (ExecutionLedgerTarget(None, (sibling.card_id,)),),
+                "completed",
+            ),
+        ),
+        effects_complete=True,
+        unknown_effects_possible=False,
+    )
+
+    event = successful_event((value,), (report,), ledger)
+    effect = event.effects[0]
+
+    assert effect.counts.cards == 1
+    assert effect.counts.matching_trigger_cards == 0
+    assert effect.counts.consequential_sibling_cards == 1
+    assert effect.contributors[0].trigger_cards == 1
+    assert event_from_json(event_to_json(event)) == event
+    already_satisfied = next(
+        item for item in event.non_applied if item.disposition == "already_satisfied"
+    )
+    assert already_satisfied.counts.cards == 1
+    assert already_satisfied.counts.matching_trigger_cards == 1
+    assert already_satisfied.counts.consequential_sibling_cards == 0
+
+
 def test_no_op_and_narrow_non_applied_outcome_are_complete() -> None:
     value = policy(actions=(SuspendAction(),))
     report = evaluated_report(value, card(queue=-1))

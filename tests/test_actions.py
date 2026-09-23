@@ -129,6 +129,30 @@ def test_plan_semantics_preserve_all_effect_contributors() -> None:
     assert tuple(item.policy_id for item in effect.contributors) == ("p", "second")
 
 
+def test_note_wide_effect_keeps_satisfied_trigger_as_cause_not_changed_card() -> None:
+    trigger = replace(card(1), queue=-1)
+    sibling = card(2)
+    action = ResolvedAction(SuspendAction("note"))
+    base = report((action,), trigger, actionable=False)
+    wide = replace(
+        base,
+        actionable=(sibling,),
+        card_actions=((trigger, (action,)), (sibling, (action,))),
+    )
+
+    ordinary = build_execution_plan((wide,))
+    plan = build_execution_plan((wide,), collect_history=True)
+
+    assert plan == ordinary
+    assert plan.suspend_card_ids == (sibling.card_id,)
+    assert len(plan.semantics.effects) == 1
+    effect = plan.semantics.effects[0]
+    assert effect.affected_card_ids == (sibling.card_id,)
+    assert effect.matching_trigger_card_ids == ()
+    assert effect.consequential_sibling_card_ids == (sibling.card_id,)
+    assert effect.contributors[0].trigger_card_ids == (trigger.card_id,)
+
+
 def test_plan_semantics_admit_only_concrete_non_applied_intentions() -> None:
     satisfied = report(
         (ResolvedAction(SuspendAction()),),

@@ -630,6 +630,9 @@ def _build_plan_semantics(
                 else {item.target_card_id for item in grouped}
             )
         )
+        affected_matching_trigger_ids = tuple(
+            sorted(set(affected_card_ids).intersection(trigger_card_ids))
+        )
         effects.append(
             LogicalEffect(
                 action=action,
@@ -638,7 +641,7 @@ def _build_plan_semantics(
                 affected_card_ids=affected_card_ids,
                 affected_note_ids=tuple(sorted({item.target_note_id for item in grouped})),
                 affected_card_ids_complete=not is_tag_effect or tag_cards_complete,
-                matching_trigger_card_ids=trigger_card_ids,
+                matching_trigger_card_ids=affected_matching_trigger_ids,
                 consequential_sibling_card_ids=tuple(
                     sorted(set(affected_card_ids) - set(trigger_card_ids))
                 ),

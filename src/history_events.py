@@ -714,7 +714,7 @@ def _aggregate_non_applied(
         trigger_cards = {card_id for item in target_items for card_id in item.trigger_card_ids}
         aggregate.card_ids.update(target_cards)
         aggregate.note_ids.update(item.target_note_id for item in target_items)
-        aggregate.trigger_card_ids.update(trigger_cards)
+        aggregate.trigger_card_ids.update(target_cards & trigger_cards)
         aggregate.sibling_card_ids.update(target_cards - trigger_cards)
         for item in target_items:
             aggregate.contributor_cards.setdefault(item.policy_id, set()).update(
@@ -2037,7 +2037,6 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
         if (
             counts.cards <= 0
             or counts.notes <= 0
-            or counts.matching_trigger_cards <= 0
             or counts.notes > counts.cards
             or counts.matching_trigger_cards + counts.consequential_sibling_cards != counts.cards
         ):

@@ -921,11 +921,22 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
             collection.sched.suspend_cards([first])
         elif kind == "unsuspend_note":
             collection.sched.unsuspend_cards([first])
+        session = prepare_history_session(
+            enabled=True,
+            profile={},
+            policies=(policy,),
+            invocation=Invocation("manual"),
+            activations=(PolicyActivation(policy.id, "manual"),),
+            anki_version="test",
+            root=tmp_path / "local-history",
+        )
+        assert session is not None
         result = execute_approved_reports(
             collection,
             (report,),
             {policy.id: {sibling}},
             "Apply note action",
+            history=session,
         )
         assert result.affected_cards == 1
         changed = collection.get_card(sibling)
@@ -934,6 +945,18 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
             if kind == "move_note"
             else changed.queue == (-1 if kind == "suspend_note" else 0)
         )
+        assert session.error_message is None
+        assert session.store is not None
+        history_event = session.store.read_recent().records[0].event
+        assert history_event is not None
+        assert history_event.outcome.status == "succeeded"
+        assert history_event.outcome.result == "changed"
+        assert len(history_event.effects) == 1
+        assert history_event.effects[0].action.type == kind
+        assert history_event.effects[0].counts.cards == 1
+        assert history_event.effects[0].counts.matching_trigger_cards == 0
+        assert history_event.effects[0].counts.consequential_sibling_cards == 1
+        assert history_event.effects[0].contributors[0].trigger_cards == 1
         collection.undo()
         restored = collection.get_card(sibling)
         assert restored.did == outside
