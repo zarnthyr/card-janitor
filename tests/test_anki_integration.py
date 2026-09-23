@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 from anki.collection import Collection
 from aqt.operations import QueryOp
+from card_janitor import actions as actions_module
 from card_janitor import automatic, evaluator, ui
 from card_janitor.actions import CleanupError, build_execution_plan, execute_plan
 from card_janitor.cleanup_preview import build_preview_rows
@@ -68,8 +69,20 @@ def test_partial_cleanup_failure_is_grouped_and_recoverable(
             raise RuntimeError(message)
 
         monkeypatch.setattr(collection.sched, "suspend_cards", fail)
-        with pytest.raises(CleanupError, match="Earlier changes may have been applied"):
-            execute_plan(collection, build_execution_plan((report,), collection), "Failed cleanup")
+        with pytest.raises(CleanupError, match="Earlier changes may have been applied") as exc_info:
+            execute_plan(
+                collection,
+                build_execution_plan((report,), collection, collect_history=True),
+                "Failed cleanup",
+            )
+        ledger = exc_info.value.execution_ledger
+        assert exc_info.value.semantics.status == "complete"
+        assert ledger.status == "partial"
+        assert [step.status for step in ledger.steps] == ["completed", "failed_unknown"]
+        assert ledger.steps[0].targets[0].value == "retired"
+        assert ledger.steps[0].targets[0].target_ids == (note.id,)
+        assert not ledger.effects_complete
+        assert ledger.unknown_effects_possible
         assert collection.get_note(note.id).has_tag("retired")
         assert collection.undo_status().undo == "Failed cleanup"
         collection.undo()
@@ -94,15 +107,59 @@ def test_cleanup_over_undo_history_limit_remains_one_undo_entry(tmp_path: Path) 
             conditions=AllCardsCondition(),
             actions=tuple(TagAction(tag) for tag in tags),
         )
-        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+        plan = build_execution_plan(
+            (evaluate_policy(collection, policy),),
+            collection,
+            collect_history=True,
+        )
 
         result = execute_plan(collection, plan, "Large cleanup")
 
         assert result.affected_cards == 1
+        assert result.execution_ledger.status == "complete"
+        assert all(step.status == "completed" for step in result.execution_ledger.steps)
         assert set(tags).issubset(collection.get_note(note.id).tags)
         assert collection.undo_status().undo == "Large cleanup"
         collection.undo()
         assert not set(tags).intersection(collection.get_note(note.id).tags)
+    finally:
+        collection.close()
+
+
+def test_execution_ledger_failure_does_not_change_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collection = Collection(str(tmp_path / "ledger-unavailable.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        policy = Policy(
+            id="ledger-unavailable",
+            name="Ledger unavailable",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+        plan = build_execution_plan(
+            (evaluate_policy(collection, policy),),
+            collection,
+            collect_history=True,
+        )
+
+        def fail(_plan: object) -> object:
+            message = "injected ledger failure"
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(actions_module, "_planned_ledger_steps", fail)
+        result = execute_plan(collection, plan, "Unavailable ledger")
+
+        assert collection.get_note(note.id).has_tag("retired")
+        assert result.execution_ledger.status == "unavailable"
+        assert result.execution_ledger.reason_code == "execution_ledger_failed"
     finally:
         collection.close()
 
@@ -125,7 +182,11 @@ def test_large_partial_cleanup_failure_remains_one_undo_entry(
             conditions=AllCardsCondition(),
             actions=(*tuple(TagAction(tag) for tag in tags), SuspendAction()),
         )
-        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+        plan = build_execution_plan(
+            (evaluate_policy(collection, policy),),
+            collection,
+            collect_history=True,
+        )
 
         def fail(*_args: object) -> None:
             message = "injected suspension failure"
@@ -160,7 +221,11 @@ def test_completed_cleanup_reports_merge_undo_failure(
             conditions=AllCardsCondition(),
             actions=(TagAction("retired"),),
         )
-        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+        plan = build_execution_plan(
+            (evaluate_policy(collection, policy),),
+            collection,
+            collect_history=True,
+        )
 
         def fail_merge(_undo_target: int) -> None:
             message = "injected merge failure"
@@ -172,6 +237,11 @@ def test_completed_cleanup_reports_merge_undo_failure(
 
         assert collection.get_note(note.id).has_tag("retired")
         assert "complete recovery cannot be guaranteed" in str(exc_info.value)
+        ledger = exc_info.value.execution_ledger
+        assert ledger.status == "partial"
+        assert [step.status for step in ledger.steps] == ["completed_undo_merge_failed"]
+        assert ledger.effects_complete
+        assert not ledger.unknown_effects_possible
     finally:
         collection.close()
 
@@ -779,8 +849,12 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
             (report,),
             {policy.id: {sibling}},
             "Skip unapproved note",
+            collect_history=True,
         )
         assert skipped.affected_cards == 0
+        assert {item.disposition for item in skipped.semantics.non_applied} == {
+            "preview_note_boundary"
+        }
         collection.set_deck([first], source)
         collection.set_deck([sibling], outside)
         if kind == "suspend_note":
@@ -865,6 +939,106 @@ def test_policy_actions_only_affect_other_policy_matching_on_next_cleanup(tmp_pa
             "Second batch",
         )
         assert collection.get_card(card_id).queue == -1
+    finally:
+        collection.close()
+
+
+def test_fresh_execution_records_only_meaningful_preview_boundary_dispositions(
+    tmp_path: Path,
+) -> None:
+    collection = Collection(str(tmp_path / "history-boundary.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        first_note = collection.new_note(collection.models.by_name("Basic"))
+        first_note["Front"] = "first"
+        collection.add_note(first_note, deck_id)
+        first_card = int(collection.card_ids_of_note(first_note.id)[0])
+        policy = parse_policy(
+            {
+                "id": "boundary",
+                "name": "Boundary",
+                "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
+                "match": "all",
+                "conditions": [
+                    {
+                        "type": "tags",
+                        "operator": "contains_none",
+                        "tags": ["excluded"],
+                    }
+                ],
+                "actions": [{"type": "suspend"}],
+            }
+        )
+        save_policies(collection, policy)
+        preview = evaluate_policy(collection, policy)
+        assert [card.card_id for card in preview.actionable] == [first_card]
+
+        collection.tags.bulk_add([first_note.id], "excluded")
+        second_note = collection.new_note(collection.models.by_name("Basic"))
+        second_note["Front"] = "second"
+        collection.add_note(second_note, deck_id)
+        second_card = int(collection.card_ids_of_note(second_note.id)[0])
+
+        result = execute_approved_reports(
+            collection,
+            (preview,),
+            {policy.id: {first_card}},
+            "Boundary test",
+            collect_history=True,
+        )
+
+        assert result.affected_cards == 0
+        assert collection.get_card(second_card).queue != -1
+        dispositions = {
+            (item.disposition, item.target_card_id) for item in result.semantics.non_applied
+        }
+        assert dispositions == {
+            ("preview_no_longer_matching", first_card),
+            ("preview_newly_matching", second_card),
+        }
+        assert result.semantics.effects == ()
+        assert result.execution_ledger.status == "complete"
+        assert result.execution_ledger.steps == ()
+    finally:
+        collection.close()
+
+
+def test_note_tag_effect_distinguishes_trigger_and_consequential_sibling(
+    tmp_path: Path,
+) -> None:
+    collection = Collection(str(tmp_path / "tag-sibling-history.anki2"))
+    try:
+        source = collection.decks.id("Source")
+        outside = collection.decks.id("Outside")
+        model = collection.models.by_name("Basic (and reversed card)")
+        assert model is not None
+        note = collection.new_note(model)
+        note["Front"], note["Back"] = "front", "back"
+        collection.add_note(note, source)
+        first, sibling = map(int, collection.card_ids_of_note(note.id))
+        collection.set_deck([sibling], outside)
+        policy = Policy(
+            id="tag-note",
+            name="Tag note",
+            triggers=(),
+            scope=Scope((DeckSelector("Source"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+
+        report = evaluate_policy(collection, policy, collect_provenance=True)
+        plan = build_execution_plan(
+            (report,),
+            collection,
+            collect_history=True,
+        )
+
+        assert len(plan.semantics.effects) == 1
+        effect = plan.semantics.effects[0]
+        assert effect.affected_card_ids_complete
+        assert effect.affected_card_ids == tuple(sorted((first, sibling)))
+        assert effect.matching_trigger_card_ids == (first,)
+        assert effect.consequential_sibling_card_ids == (sibling,)
     finally:
         collection.close()
 

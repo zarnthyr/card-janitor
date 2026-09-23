@@ -19,6 +19,7 @@ from .engine import (
     conditions_need_sm2,
     evaluate_facts,
 )
+from .history_semantics import NOT_COLLECTED_PROVENANCE, PolicyMatchProvenance
 from .log import debug
 from .models import MoveAction, Policy, action_expands_to_siblings
 
@@ -279,7 +280,13 @@ def _load_deck_facts(
     )
 
 
-def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = None) -> PolicyReport:
+def evaluate_policy(
+    col: Collection,
+    policy: Policy,
+    *,
+    now_ms: int | None = None,
+    collect_provenance: bool = False,
+) -> PolicyReport:
     started = perf_counter()
     now_ms = int(time() * 1000) if now_ms is None else now_ms
     deck_ids, errors = _resolve_deck_ids(col, policy)
@@ -297,6 +304,14 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
             resolved_actions=resolved_actions,
             card_actions=(),
             errors=tuple(errors),
+            match_provenance=(
+                PolicyMatchProvenance(
+                    "unavailable",
+                    reason_code="policy_evaluation_failed",
+                )
+                if collect_provenance
+                else NOT_COLLECTED_PROVENANCE
+            ),
         )
         debug(
             "policy evaluation failed",
@@ -340,6 +355,7 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
         resolved_actions,
         now_ms=now_ms,
         note_facts=note_facts,
+        collect_provenance=collect_provenance,
     )
     if any(action_expands_to_siblings(action.action) for action in resolved_actions):
         note_ids = {card.note_id for card in report.qualifying}
@@ -382,6 +398,21 @@ def evaluate_policy(col: Collection, policy: Policy, *, now_ms: int | None = Non
     return report
 
 
-def evaluate_policies(col: Collection, policies: tuple[Policy, ...]) -> tuple[PolicyReport, ...]:
+def evaluate_policies(
+    col: Collection,
+    policies: tuple[Policy, ...],
+    *,
+    collect_provenance: bool = False,
+) -> tuple[PolicyReport, ...]:
     now_ms = int(time() * 1000)
-    return tuple(evaluate_policy(col, policy, now_ms=now_ms) for policy in policies)
+    if not collect_provenance:
+        return tuple(evaluate_policy(col, policy, now_ms=now_ms) for policy in policies)
+    return tuple(
+        evaluate_policy(
+            col,
+            policy,
+            now_ms=now_ms,
+            collect_provenance=collect_provenance,
+        )
+        for policy in policies
+    )

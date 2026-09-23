@@ -4,6 +4,7 @@
 from dataclasses import replace
 
 import pytest
+from card_janitor import actions as actions_module
 from card_janitor.actions import CleanupError, build_execution_plan
 from card_janitor.cleanup_preview import build_preview_rows
 from card_janitor.engine import CardFacts, PolicyReport, ResolvedAction
@@ -112,6 +113,60 @@ def test_build_plan_merges_compatible_actions() -> None:
     assert plan.card_count == 1
     assert not plan.conflicted_card_ids
     assert not plan.conflict_details
+
+
+def test_plan_semantics_preserve_all_effect_contributors() -> None:
+    first = report((ResolvedAction(TagAction("retired")),))
+    second = replace(first, policy=replace(first.policy, id="second", name="Second"))
+
+    plan = build_execution_plan((first, second), collect_history=True)
+
+    assert plan.semantics.status == "complete"
+    assert len(plan.semantics.effects) == 1
+    effect = plan.semantics.effects[0]
+    assert effect.target_kind == "note"
+    assert effect.target_id == 10
+    assert tuple(item.policy_id for item in effect.contributors) == ("p", "second")
+
+
+def test_plan_semantics_admit_only_concrete_non_applied_intentions() -> None:
+    satisfied = report(
+        (ResolvedAction(SuspendAction()),),
+        replace(card(), queue=-1),
+        actionable=False,
+    )
+    conflicting = (
+        report((ResolvedAction(TagAction("leech")),)),
+        report((ResolvedAction(RemoveTagAction("leech")),)),
+    )
+
+    satisfied_plan = build_execution_plan((satisfied,), collect_history=True)
+    conflict_plan = build_execution_plan(conflicting, collect_history=True)
+
+    assert {item.disposition for item in satisfied_plan.semantics.non_applied} == {
+        "already_satisfied"
+    }
+    assert {item.disposition for item in conflict_plan.semantics.non_applied} == {"conflict"}
+    assert {code for item in conflict_plan.semantics.non_applied for code in item.reason_codes} == {
+        "tag_add_remove"
+    }
+
+
+def test_planning_history_failure_does_not_change_authoritative_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reports = (report((ResolvedAction(SuspendAction()),)),)
+    ordinary = build_execution_plan(reports)
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        message = "injected planning history failure"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(actions_module, "_build_plan_semantics", fail)
+    traced = build_execution_plan(reports, collect_history=True)
+
+    assert traced == ordinary
+    assert traced.semantics.status == "unavailable"
 
 
 def test_build_plan_uses_explicit_card_intentions_not_policy_actions() -> None:

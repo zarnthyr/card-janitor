@@ -8,7 +8,9 @@ from typing import TYPE_CHECKING
 
 from .actions import ExecutionResult, build_execution_plan, execute_plan
 from .configuration import COLLECTION_POLICIES_KEY
+from .engine import action_is_satisfied
 from .evaluator import evaluate_policies
+from .history_semantics import BoundaryDisposition
 from .models import Policy, action_expands_to_siblings, parse_policy, policy_to_dict
 
 if TYPE_CHECKING:
@@ -59,13 +61,20 @@ def execute_approved_reports(
     reports: tuple[PolicyReport, ...],
     approved_card_ids: dict[str, set[int]],
     undo_name: str,
+    *,
+    collect_history: bool = False,
 ) -> ExecutionResult:
     policies = tuple(report.policy for report in reports)
     _ensure_policy_definitions_current(col, policies)
-    fresh_reports = evaluate_policies(col, policies)
+    fresh_reports = evaluate_policies(
+        col,
+        policies,
+        collect_provenance=collect_history,
+    )
     runtime_errors = [item for report in fresh_reports for item in report.errors]
     if runtime_errors:
         raise RuntimeError("; ".join(runtime_errors))
+    preview_by_id = {report.policy.id: report for report in reports}
     approved_reports = []
     for report in fresh_reports:
         approved_ids = approved_card_ids[report.policy.id]
@@ -74,6 +83,57 @@ def execute_approved_reports(
             if any(action_expands_to_siblings(action.action) for action in report.resolved_actions)
             else set()
         )
+        boundary_dispositions: tuple[BoundaryDisposition, ...] = ()
+        if collect_history:
+            preview = preview_by_id[report.policy.id]
+            preview_cards = {
+                card.card_id: card for card in (*preview.qualifying, *preview.actionable)
+            }
+            preview_actions = {card.card_id: actions for card, actions in preview.card_actions}
+            preview_qualifying_ids = {card.card_id for card in preview.qualifying}
+            fresh_qualifying_ids = {card.card_id for card in report.qualifying}
+            boundary = []
+            for card_id in sorted((approved_ids & preview_qualifying_ids) - fresh_qualifying_ids):
+                card = preview_cards[card_id]
+                actions = tuple(
+                    action
+                    for action in preview_actions.get(card_id, ())
+                    if not action_is_satisfied(action, card)
+                )
+                if actions:
+                    boundary.append(
+                        BoundaryDisposition(
+                            "preview_no_longer_matching",
+                            card.card_id,
+                            card.note_id,
+                            actions,
+                        )
+                    )
+            for card in report.actionable:
+                if card.card_id in approved_ids and card.note_id not in blocked_notes:
+                    continue
+                actions = tuple(
+                    action
+                    for item, item_actions in report.card_actions
+                    if item.card_id == card.card_id
+                    for action in item_actions
+                    if not action_is_satisfied(action, card)
+                )
+                if not actions:
+                    continue
+                boundary.append(
+                    BoundaryDisposition(
+                        (
+                            "preview_note_boundary"
+                            if card.note_id in blocked_notes
+                            else "preview_newly_matching"
+                        ),
+                        card.card_id,
+                        card.note_id,
+                        actions,
+                    )
+                )
+            boundary_dispositions = tuple(boundary)
         approved_reports.append(
             replace(
                 report,
@@ -90,6 +150,15 @@ def execute_approved_reports(
                     for card in report.actionable
                     if card.card_id in approved_ids and card.note_id not in blocked_notes
                 ),
+                boundary_dispositions=boundary_dispositions,
             )
         )
-    return execute_plan(col, build_execution_plan(tuple(approved_reports), col), undo_name)
+    return execute_plan(
+        col,
+        build_execution_plan(
+            tuple(approved_reports),
+            col,
+            collect_history=collect_history,
+        ),
+        undo_name,
+    )
