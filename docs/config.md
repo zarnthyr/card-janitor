@@ -48,9 +48,16 @@ gap. Deliberate exports can contain collection metadata such as policy, deck,
 tag, and note-type names.
 
 History has no automatic retention limit. Export copies the complete local
-history without changing it. Clear permanently removes all cleanup history for
+history without changing it. Delete permanently removes all cleanup history for
 the profile and retains no archive or recovery copy, so export or manually copy
 the JSONL file first when it should be kept. Import is not currently supported.
+Open the local viewer through the clickable Last cleanup summary on the Card
+Janitor dashboard. The viewer shows recent runs newest-first and provides
+`Load Older`, complete-history Export, and permanent Delete controls. Its run
+list separates Manual/Automatic source from the effective policy trigger or
+triggers. Selecting a run shows a compact summary of changes, affected cards or
+notes, and why the historical policies matched; policy scope and other
+secondary context are available in tooltips when useful.
 
 ### Debug logging
 

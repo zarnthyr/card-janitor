@@ -42,6 +42,7 @@ REQUIRED_PACKAGE_FILES = {
     "evaluator.py",
     "execution.py",
     "history_events.py",
+    "history_dialog.py",
     "history_runtime.py",
     "history_semantics.py",
     "history_store.py",

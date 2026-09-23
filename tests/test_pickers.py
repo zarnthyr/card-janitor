@@ -26,8 +26,6 @@ from aqt.qt import (
     QStyle,
     QStyleOptionViewItem,
     Qt,
-    QTextBrowser,
-    QUrl,
     QWidget,
 )
 from card_janitor import cleanup_preview, policy_editor, settings_dialog, ui
@@ -154,24 +152,28 @@ def test_last_cleanup_links_only_existing_policies() -> None:
     assert 'href="policy:deleted"' not in details
 
 
-def test_last_cleanup_policy_link_opens_current_editor(
+def test_last_cleanup_link_opens_history_dialog(
     edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     parsed = parse_config({**DEFAULT_CONFIG, "policies": [edit_fixture.raw]})
     policy = parsed.config.policies[0]
     record_cleanup(edit_fixture.parent.pm.profile, policies=(policy.name,), policy_ids=(policy.id,))
-    monkeypatch.setattr(ui, "_load_configured", lambda: parsed)
     dashboard = ui.CardJanitorDialog(parsed, ())
-    dialog = QDialog(dashboard)
-    browser = QTextBrowser(dialog)
-    monkeypatch.setattr(ui, "showText", lambda *_args, **_kwargs: (dialog, None))
-    opened = []
-    monkeypatch.setattr(dashboard, "_open_editor", opened.append)
+    created = []
+
+    def history_dialog(profile: object, parent: object, **kwargs: object) -> QDialog:
+        created.append((profile, parent, kwargs))
+        return QDialog(dashboard)
+
+    monkeypatch.setattr(ui, "CleanupHistoryDialog", history_dialog)
     dashboard._show_cleanup_status("last_cleanup")
-    browser.anchorClicked.emit(QUrl(f"policy:{policy.id}"))
-    assert opened == [parsed.policy_records[0]]
+
+    assert created[0][0] is edit_fixture.parent.pm.profile
+    assert created[0][1] is dashboard
+    assert created[0][2]["on_cleared"] == dashboard._update_cleanup_status
+    dialog = dashboard._cleanup_details
+    assert dialog is not None
     assert dialog.isVisible()
-    assert not dialog.isModal()
     dialog.close()
     dashboard.close()
 
@@ -385,25 +387,25 @@ def test_condition_renderer_preserves_unwrapped_group_structure() -> None:
     ]
 
 
-def test_closing_linked_policy_editor_returns_to_cleanup_details(
+def test_visible_cleanup_history_dialog_is_reused(
     edit_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     parsed = parse_config({**DEFAULT_CONFIG, "policies": [edit_fixture.raw]})
-    policy = parsed.config.policies[0]
-    record_cleanup(edit_fixture.parent.pm.profile, policies=(policy.name,), policy_ids=(policy.id,))
-    monkeypatch.setattr(ui, "_load_configured", lambda: parsed)
     dashboard = ui.CardJanitorDialog(parsed, ())
     dashboard.show()
     dialog = QDialog(dashboard)
-    browser = QTextBrowser(dialog)
-    monkeypatch.setattr(ui, "showText", lambda *_args, **_kwargs: (dialog, None))
+    dialog.show()
+    dashboard._cleanup_details = dialog
     activated = []
     monkeypatch.setattr(dialog, "activateWindow", lambda: activated.append(True))
+    monkeypatch.setattr(
+        ui,
+        "CleanupHistoryDialog",
+        lambda *_args, **_kwargs: pytest.fail("created a second history dialog"),
+    )
+
     dashboard._show_cleanup_status("cleanup")
-    browser.anchorClicked.emit(QUrl(f"policy:{policy.id}"))
-    assert dashboard._policy_editor is not None
-    activated.clear()
-    dashboard._policy_editor.reject()
+
     assert activated == [True]
     assert dialog.isVisible()
     dialog.close()
@@ -423,12 +425,15 @@ def test_last_cleanup_status_is_local_and_clickable(
     assert not dashboard.cleanup_status.isHidden()
     assert "3 cards cleaned up; 2 skipped due to conflicts." in dashboard.cleanup_status.text()
     shown = []
-    monkeypatch.setattr(ui, "showText", lambda text, **_kwargs: shown.append(text))
+
+    def history_dialog(*_args: object, **_kwargs: object) -> QDialog:
+        dialog = QDialog(dashboard)
+        shown.append(dialog)
+        return dialog
+
+    monkeypatch.setattr(ui, "CleanupHistoryDialog", history_dialog)
     dashboard.cleanup_status.linkActivated.emit("cleanup")
-    assert "Manual" in shown[0]
-    assert "<b>Cards skipped</b>" in shown[0]
-    assert '<td valign="top">2</td>' in shown[0]
-    assert "<b>Triggers</b>" not in shown[0]
+    assert shown[0].isVisible()
     assert LAST_CLEANUP_KEY not in DEFAULT_CONFIG
     edit_fixture.parent.pm.profile = {}
     dashboard._update_cleanup_status()

@@ -30,6 +30,7 @@ from card_janitor.history_store import (
     SOURCE_ID_PROFILE_KEY,
     HistoryStorageError,
     HistoryStore,
+    existing_source_id_for_profile,
     source_id_for_profile,
 )
 from card_janitor.models import DeckSelector, IntervalCondition, Policy, Scope, SuspendAction
@@ -99,6 +100,16 @@ def test_invalid_profile_source_id_is_replaced() -> None:
 
     assert source_id != "../not-a-uuid"
     assert profile[SOURCE_ID_PROFILE_KEY] == source_id
+
+
+def test_existing_profile_source_id_lookup_does_not_create_or_replace_it() -> None:
+    empty: dict[str, object] = {}
+    invalid: dict[str, object] = {SOURCE_ID_PROFILE_KEY: "not-a-uuid"}
+
+    assert existing_source_id_for_profile(empty) is None
+    assert empty == {}
+    assert existing_source_id_for_profile(invalid) is None
+    assert invalid[SOURCE_ID_PROFILE_KEY] == "not-a-uuid"
 
 
 def test_append_and_read_recent_round_trip(tmp_path: Path) -> None:

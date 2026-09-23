@@ -71,12 +71,17 @@ def _canonical_source_id(value: object) -> str | None:
 
 
 def source_id_for_profile(profile: dict[str, object]) -> str:
-    existing = _canonical_source_id(profile.get(SOURCE_ID_PROFILE_KEY))
+    existing = existing_source_id_for_profile(profile)
     if existing is not None:
         return existing
     source_id = str(uuid4())
     profile[SOURCE_ID_PROFILE_KEY] = source_id
     return source_id
+
+
+def existing_source_id_for_profile(profile: dict[str, object]) -> str | None:
+    """Return an existing history identity without creating one while merely viewing."""
+    return _canonical_source_id(profile.get(SOURCE_ID_PROFILE_KEY))
 
 
 def _decode_record(line_number: int, line: str) -> HistoryRecord:

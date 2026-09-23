@@ -10,7 +10,6 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from html import escape
 from typing import TYPE_CHECKING
-from urllib.parse import unquote
 from uuid import uuid4
 
 from aqt import appVersion, mw
@@ -45,7 +44,6 @@ from aqt.qt import (
     QTableWidget,
     QTableWidgetItem,
     QTextBlockFormat,
-    QTextBrowser,
     QTextCursor,
     QTextDocument,
     QTimer,
@@ -53,7 +51,7 @@ from aqt.qt import (
     QWidget,
     qconnect,
 )
-from aqt.utils import askUser, showText, showWarning, tooltip
+from aqt.utils import askUser, showWarning, tooltip
 
 from .actions import ExecutionResult, build_execution_plan
 from .browsing import open_cards_in_browser
@@ -67,6 +65,7 @@ from .configuration import (
 from .editor_utils import fit_initial_table_height
 from .evaluator import evaluate_policies
 from .execution import execute_approved_reports
+from .history_dialog import CleanupHistoryDialog
 from .history_events import Invocation, PolicyActivation
 from .history_runtime import prepare_history_session
 from .history_semantics import PlanSemantics
@@ -839,50 +838,16 @@ class CardJanitorDialog(QDialog):
             self._cleanup_details.raise_()
             self._cleanup_details.activateWindow()
             return
-        parsed = _load_configured()
-        ids = {record.policy.id for record in parsed.policy_records if record.policy is not None}
-        status = last_cleanup(mw.pm.profile or {}, existing_policy_ids=ids)
-        if status:
-            result = showText(
-                status[1], parent=self, type="html", title="Last Cleanup", minHeight=300, run=False
-            )
-            if result:
-                dialog, _buttons = result
-                self._cleanup_details = dialog
-                qconnect(self.finished, dialog.close)
-                browser = dialog.findChild(QTextBrowser)
-                browser.setOpenLinks(False)
-                browser.setOpenExternalLinks(False)
-
-                def open_policy(url: object) -> None:
-                    link = url.toString()
-                    if not link.startswith("policy:"):
-                        return
-                    policy_id = unquote(link.removeprefix("policy:"))
-                    record = next(
-                        (
-                            item
-                            for item in _load_configured().policy_records
-                            if item.policy is not None and item.policy.id == policy_id
-                        ),
-                        None,
-                    )
-                    if record is not None:
-                        self._open_editor(record)
-                        if self._policy_editor is not None:
-
-                            def return_to_details(_result: int) -> None:
-                                if dialog.isVisible() and self.isVisible():
-                                    dialog.raise_()
-                                    dialog.activateWindow()
-
-                            qconnect(self._policy_editor.finished, return_to_details)
-
-                qconnect(browser.anchorClicked, open_policy)
-                dialog.setModal(False)
-                dialog.show()
-                dialog.raise_()
-                dialog.activateWindow()
+        dialog = CleanupHistoryDialog(
+            mw.pm.profile or {},
+            self,
+            on_cleared=self._update_cleanup_status,
+        )
+        self._cleanup_details = dialog
+        qconnect(self.finished, dialog.close)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     def _refresh(self, _checked: object = None, *, selected_key: str | None = None) -> None:
         refresh_on_demand_dialog(self, selected_key=selected_key)
