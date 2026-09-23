@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from collections import deque
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock, RLock
 from uuid import UUID, uuid4
@@ -43,13 +43,6 @@ class HistoryRecord:
 class HistoryPage:
     records: tuple[HistoryRecord, ...]
     next_before_line: int | None
-
-
-@dataclass(frozen=True)
-class HistoryExportResult:
-    exported: int
-    corrupt_skipped: int
-    unsupported_preserved: int
 
 
 _locks_guard = Lock()
@@ -202,77 +195,58 @@ class HistoryStore:
     def export(
         self,
         destination: Path,
-        *,
-        event_ids: set[str] | None = None,
-    ) -> HistoryExportResult:
+    ) -> int:
         if destination.absolute() == self.path.absolute():
             raise ValueError("history export destination cannot be the active log")
         destination = destination.absolute()
         exported = 0
-        corrupt = 0
-        unsupported = 0
         temporary: Path | None = None
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.NamedTemporaryFile(
-                "w",
-                encoding="utf-8",
-                newline="\n",
+                "wb",
                 dir=destination.parent,
                 prefix=f".{destination.name}.",
                 suffix=".tmp",
                 delete=False,
             ) as output:
                 temporary = Path(output.name)
-                if self.path.exists():
-                    with self._lock, self.path.open("rb") as source:
-                        for line_number, line in enumerate(source, start=1):
-                            record = _decode_bytes_record(line_number, line)
-                            event_id = None
-                            if record.event is not None:
-                                event_id = record.event.event_id
-                            elif record.unsupported_schema is not None:
-                                raw = json.loads(record.raw_json)
-                                candidate = raw.get("event_id") if isinstance(raw, dict) else None
-                                event_id = candidate if isinstance(candidate, str) else None
-                            if event_ids is not None and event_id not in event_ids:
-                                continue
-                            if record.event is not None:
-                                output.write(event_to_json(record.event) + "\n")
+                with self._lock:
+                    if self.path.exists():
+                        with self.path.open("rb") as source:
+                            for line in source:
+                                output.write(line)
                                 exported += 1
-                            elif record.unsupported_schema is not None:
-                                output.write(record.raw_json + "\n")
-                                exported += 1
-                                unsupported += 1
-                            else:
-                                corrupt += 1
                 _flush_file(output)
             temporary.replace(destination)
             _flush_directory(destination.parent)
-        except (OSError, json.JSONDecodeError) as exc:
+        except OSError as exc:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
             raise HistoryStorageError(f"could not export cleanup history: {exc}") from exc
-        return HistoryExportResult(exported, corrupt, unsupported)
+        return exported
 
-    def archive(self, *, now: datetime | None = None) -> Path | None:
-        return self._rotate("archive", now=now)
-
-    def clear(self, *, now: datetime | None = None) -> Path | None:
-        return self._rotate("cleared", now=now)
-
-    def _rotate(self, prefix: str, *, now: datetime | None) -> Path | None:
+    def clear(self) -> bool:
         with self._lock:
-            if not self.path.exists():
-                return None
-            timestamp = (now or datetime.now(UTC)).astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
-            archive_directory = self.directory / "archive"
-            archive_path = archive_directory / f"{prefix}-{timestamp}-{uuid4()}.jsonl"
+            staged = (
+                list(self.root.glob(f".{self.source_id}.clearing-*")) if self.root.exists() else []
+            )
+            if self.directory.exists():
+                clearing = self.root / f".{self.source_id}.clearing-{uuid4()}"
+                try:
+                    self.directory.replace(clearing)
+                    _flush_directory(self.root)
+                except OSError as exc:
+                    raise HistoryStorageError(
+                        f"could not prepare cleanup history for clearing: {exc}"
+                    ) from exc
+                staged.append(clearing)
+            if not staged:
+                return False
             try:
-                archive_directory.mkdir(parents=True, exist_ok=True)
-                self.path.replace(archive_path)
-                _flush_directory(archive_directory)
-                _flush_directory(self.directory)
+                for path in staged:
+                    shutil.rmtree(path)
+                _flush_directory(self.root)
             except OSError as exc:
-                raise HistoryStorageError(f"could not {prefix} cleanup history: {exc}") from exc
-            return archive_path
+                raise HistoryStorageError(f"could not clear cleanup history: {exc}") from exc
+            return True

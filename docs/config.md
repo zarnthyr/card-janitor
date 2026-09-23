@@ -47,6 +47,11 @@ history. Turning it on again records future runs and does not reconstruct the
 gap. Deliberate exports can contain collection metadata such as policy, deck,
 tag, and note-type names.
 
+History has no automatic retention limit. Export copies the complete local
+history without changing it. Clear permanently removes all cleanup history for
+the profile and retains no archive or recovery copy, so export or manually copy
+the JSONL file first when it should be kept. Import is not currently supported.
+
 ### Debug logging
 
 `debug_logging` — prints additional cleanup diagnostics to Anki's terminal

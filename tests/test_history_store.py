@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from anki.collection import OpChanges
+from card_janitor import history_store as history_store_module
 from card_janitor.actions import ExecutionResult, build_execution_plan
 from card_janitor.engine import CardFacts, ResolvedAction, evaluate_facts
 from card_janitor.history_events import (
@@ -27,6 +28,7 @@ from card_janitor.history_semantics import (
 from card_janitor.history_store import (
     HISTORY_FILENAME,
     SOURCE_ID_PROFILE_KEY,
+    HistoryStorageError,
     HistoryStore,
     source_id_for_profile,
 )
@@ -172,66 +174,99 @@ def test_invalid_utf8_line_is_isolated(tmp_path: Path) -> None:
     assert [record.error for record in records if record.error] == ["line is not valid UTF-8"]
 
 
-def test_export_is_canonical_and_reports_skipped_corruption(tmp_path: Path) -> None:
+def test_export_copies_entire_history_without_modifying_it(tmp_path: Path) -> None:
     source_id = str(uuid4())
     store = HistoryStore(source_id, root=tmp_path / "history")
     event = cleanup_event(source_id)
     store.append(event)
-    with store.path.open("a", encoding="utf-8") as handle:
-        handle.write("not-json\n")
-        handle.write(
-            json.dumps(
-                {
-                    "schema": {"name": "card_janitor.cleanup_history", "version": 2},
-                    "event_id": "future",
-                }
-            )
-            + "\n"
-        )
+    with store.path.open("ab") as handle:
+        handle.write(b"not-json\n")
+        handle.write(b"\xff\xfe\n")
     destination = tmp_path / "export" / "history.jsonl"
+    original = store.path.read_bytes()
 
-    result = store.export(destination)
+    exported = store.export(destination)
 
-    lines = destination.read_text(encoding="utf-8").splitlines()
-    assert lines[0] == event_to_json(event)
-    assert json.loads(lines[1])["event_id"] == "future"
-    assert result.exported == 2
-    assert result.corrupt_skipped == 1
-    assert result.unsupported_preserved == 1
+    assert exported == 3
+    assert destination.read_bytes() == original
+    assert store.path.read_bytes() == original
 
 
-def test_selected_export_filters_by_event_id(tmp_path: Path) -> None:
+def test_failed_export_does_not_replace_existing_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     source_id = str(uuid4())
     store = HistoryStore(source_id, root=tmp_path / "history")
+    store.append(cleanup_event(source_id))
+    destination = tmp_path / "history.jsonl"
+    destination.write_bytes(b"existing export\n")
+
+    def fail(_handle: object) -> None:
+        message = "injected export failure"
+        raise OSError(message)
+
+    monkeypatch.setattr(history_store_module, "_flush_file", fail)
+
+    with pytest.raises(HistoryStorageError, match="could not export"):
+        store.export(destination)
+
+    assert destination.read_bytes() == b"existing export\n"
+    assert not tuple(destination.parent.glob(f".{destination.name}.*.tmp"))
+
+
+def test_clear_permanently_deletes_all_profile_history(tmp_path: Path) -> None:
+    source_id = str(uuid4())
+    store = HistoryStore(source_id, root=tmp_path)
     first = cleanup_event(source_id)
     second = cleanup_event(source_id)
     store.append(first)
+    legacy_archive = store.directory / "archive" / "old.jsonl"
+    legacy_archive.parent.mkdir()
+    legacy_archive.write_text(event_to_json(first) + "\n", encoding="utf-8")
+
+    assert store.clear()
+
+    assert not store.directory.exists()
+    assert not tuple(store.root.glob(f".{source_id}.clearing-*"))
+    assert store.read_recent().records == ()
+    assert not store.clear()
     store.append(second)
-    destination = tmp_path / "selected.jsonl"
-
-    result = store.export(destination, event_ids={second.event_id})
-
-    assert destination.read_text(encoding="utf-8") == event_to_json(second) + "\n"
-    assert result.exported == 1
+    assert store.path.read_text(encoding="utf-8") == event_to_json(second) + "\n"
 
 
-@pytest.mark.parametrize("operation", ["archive", "clear"])
-def test_rotation_preserves_the_old_log_and_starts_fresh(
+def test_clear_failure_does_not_prevent_future_appends_or_clear_retry(
     tmp_path: Path,
-    operation: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     source_id = str(uuid4())
     store = HistoryStore(source_id, root=tmp_path)
     first = cleanup_event(source_id)
     second = cleanup_event(source_id)
     store.append(first)
+    original_rmtree = history_store_module.shutil.rmtree
+    failures = 0
 
-    archived = getattr(store, operation)(now=datetime(2026, 9, 23, tzinfo=UTC))
+    def fail_once(path: Path) -> None:
+        nonlocal failures
+        if failures == 0:
+            failures += 1
+            message = "injected clear failure"
+            raise OSError(message)
+        original_rmtree(path)
+
+    monkeypatch.setattr(history_store_module.shutil, "rmtree", fail_once)
+
+    with pytest.raises(HistoryStorageError, match="could not clear"):
+        store.clear()
+
+    assert not store.directory.exists()
+    assert len(tuple(store.root.glob(f".{source_id}.clearing-*"))) == 1
     store.append(second)
-
-    assert archived is not None
-    assert archived.read_text(encoding="utf-8") == event_to_json(first) + "\n"
-    assert store.path.read_text(encoding="utf-8") == event_to_json(second) + "\n"
+    assert store.read_recent().records[0].event == second
+    assert store.clear()
+    assert not store.directory.exists()
+    assert not tuple(store.root.glob(f".{source_id}.clearing-*"))
 
 
 def test_store_rejects_event_from_another_source_before_creating_files(tmp_path: Path) -> None:
