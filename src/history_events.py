@@ -8,7 +8,7 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 from uuid import UUID
 
 from .models import (
@@ -1149,6 +1149,516 @@ def event_to_dict(event: CleanupEvent) -> dict[str, object]:
 def event_to_json(event: CleanupEvent) -> str:
     validate_cleanup_event(event)
     return _canonical_json(event_to_dict(event))
+
+
+def _object(
+    value: object,
+    path: str,
+    *,
+    required: set[str],
+    optional: set[str] | None = frozenset(),
+) -> dict[str, object]:
+    if not isinstance(value, dict) or not all(isinstance(key, str) for key in value):
+        raise HistoryEventValidationError(f"{path} must be an object")
+    missing = required - set(value)
+    unknown = set() if optional is None else set(value) - required - optional
+    if missing:
+        raise HistoryEventValidationError(f"{path} is missing {min(missing)!r}")
+    if unknown:
+        raise HistoryEventValidationError(f"{path} has unknown field {min(unknown)!r}")
+    return value
+
+
+def _array(value: object, path: str) -> list[object]:
+    if not isinstance(value, list):
+        raise HistoryEventValidationError(f"{path} must be an array")
+    return value
+
+
+def _string(value: object, path: str) -> str:
+    if not isinstance(value, str):
+        raise HistoryEventValidationError(f"{path} must be a string")
+    return value
+
+
+def _integer(value: object, path: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise HistoryEventValidationError(f"{path} must be an integer")
+    return value
+
+
+def _boolean(value: object, path: str) -> bool:
+    if not isinstance(value, bool):
+        raise HistoryEventValidationError(f"{path} must be a boolean")
+    return value
+
+
+def _strings(value: object, path: str) -> tuple[str, ...]:
+    return tuple(
+        _string(item, f"{path}[{index}]") for index, item in enumerate(_array(value, path))
+    )
+
+
+def _policy_reference_from_dict(value: object, path: str) -> PolicyReference:
+    raw = _object(value, path, required={"id", "definition_hash"})
+    return PolicyReference(
+        _string(raw["id"], f"{path}.id"),
+        _string(raw["definition_hash"], f"{path}.definition_hash"),
+    )
+
+
+def _action_from_dict(value: object, path: str) -> EventAction:
+    raw = _object(
+        value,
+        path,
+        required={"type"},
+        optional={"tag", "tags", "target_deck", "flag"},
+    )
+    return EventAction(
+        _string(raw["type"], f"{path}.type"),
+        (_string(raw["tag"], f"{path}.tag") if "tag" in raw else None),
+        _strings(raw["tags"], f"{path}.tags") if "tags" in raw else (),
+        (_string(raw["target_deck"], f"{path}.target_deck") if "target_deck" in raw else None),
+        (_string(raw["flag"], f"{path}.flag") if "flag" in raw else None),
+    )
+
+
+def _counts_from_dict(value: object, path: str) -> EntityCounts:
+    raw = _object(
+        value,
+        path,
+        required={
+            "cards",
+            "notes",
+            "matching_trigger_cards",
+            "consequential_sibling_cards",
+        },
+    )
+    return EntityCounts(
+        _integer(raw["cards"], f"{path}.cards"),
+        _integer(raw["notes"], f"{path}.notes"),
+        _integer(raw["matching_trigger_cards"], f"{path}.matching_trigger_cards"),
+        _integer(
+            raw["consequential_sibling_cards"],
+            f"{path}.consequential_sibling_cards",
+        ),
+    )
+
+
+def _contributors_from_dict(value: object, path: str) -> tuple[ContributorRecord, ...]:
+    records = []
+    for index, item in enumerate(_array(value, path)):
+        item_path = f"{path}[{index}]"
+        raw = _object(
+            item,
+            item_path,
+            required={"policy", "match_signatures", "trigger_cards"},
+        )
+        records.append(
+            ContributorRecord(
+                _policy_reference_from_dict(raw["policy"], f"{item_path}.policy"),
+                _strings(raw["match_signatures"], f"{item_path}.match_signatures"),
+                _integer(raw["trigger_cards"], f"{item_path}.trigger_cards"),
+            )
+        )
+    return tuple(records)
+
+
+def event_from_dict(value: object) -> CleanupEvent:
+    """Decode and validate one version-1 cleanup event."""
+    raw = _object(
+        value,
+        "event",
+        required={
+            "schema",
+            "event_type",
+            "event_id",
+            "source_id",
+            "producer",
+            "time",
+            "invocation",
+            "policies",
+            "policy_results",
+            "outcome",
+            "summary",
+            "effects",
+            "non_applied",
+            "execution",
+        },
+    )
+
+    schema_raw = _object(raw["schema"], "schema", required={"name", "version"})
+    schema = SchemaVersion(
+        _string(schema_raw["name"], "schema.name"),
+        _integer(schema_raw["version"], "schema.version"),
+    )
+    producer_raw = _object(
+        raw["producer"],
+        "producer",
+        required={"card_janitor_version", "anki_version"},
+    )
+    producer = Producer(
+        _string(producer_raw["card_janitor_version"], "producer.card_janitor_version"),
+        _string(producer_raw["anki_version"], "producer.anki_version"),
+    )
+    time_raw = _object(raw["time"], "time", required={"started_at", "finished_at"})
+    event_time = EventTime(
+        _string(time_raw["started_at"], "time.started_at"),
+        _string(time_raw["finished_at"], "time.finished_at"),
+    )
+    invocation_raw = _object(
+        raw["invocation"],
+        "invocation",
+        required={"kind"},
+        optional={"events"},
+    )
+    invocation = Invocation(
+        _string(invocation_raw["kind"], "invocation.kind"),
+        (
+            _strings(invocation_raw["events"], "invocation.events")
+            if "events" in invocation_raw
+            else ()
+        ),
+    )
+
+    snapshots = []
+    for index, item in enumerate(_array(raw["policies"], "policies")):
+        path = f"policies[{index}]"
+        snapshot_raw = _object(
+            item,
+            path,
+            required={"snapshot_schema_version", "definition_hash", "definition"},
+        )
+        definition = _object(
+            snapshot_raw["definition"],
+            f"{path}.definition",
+            required=set(),
+            optional=None,
+        )
+        snapshots.append(
+            PolicySnapshot(
+                _integer(
+                    snapshot_raw["snapshot_schema_version"],
+                    f"{path}.snapshot_schema_version",
+                ),
+                _string(snapshot_raw["definition_hash"], f"{path}.definition_hash"),
+                _canonical_json(definition),
+            )
+        )
+
+    results = []
+    for index, item in enumerate(_array(raw["policy_results"], "policy_results")):
+        path = f"policy_results[{index}]"
+        result_raw = _object(
+            item,
+            path,
+            required={"policy", "activation", "evaluation", "match_provenance"},
+        )
+        policy_ref = _policy_reference_from_dict(result_raw["policy"], f"{path}.policy")
+        activation_raw = _object(
+            result_raw["activation"],
+            f"{path}.activation",
+            required={"kind"},
+            optional={"triggers"},
+        )
+        activation = PolicyActivation(
+            policy_ref.id,
+            _string(activation_raw["kind"], f"{path}.activation.kind"),
+            (
+                _strings(activation_raw["triggers"], f"{path}.activation.triggers")
+                if "triggers" in activation_raw
+                else ()
+            ),
+        )
+        evaluation_raw = _object(
+            result_raw["evaluation"],
+            f"{path}.evaluation",
+            required={"status"},
+            optional={
+                "qualifying_trigger_cards",
+                "actionable_cards_after_expansion",
+                "reason_code",
+            },
+        )
+        evaluation = EvaluationRecord(
+            _string(evaluation_raw["status"], f"{path}.evaluation.status"),
+            (
+                _integer(
+                    evaluation_raw["qualifying_trigger_cards"],
+                    f"{path}.evaluation.qualifying_trigger_cards",
+                )
+                if "qualifying_trigger_cards" in evaluation_raw
+                else None
+            ),
+            (
+                _integer(
+                    evaluation_raw["actionable_cards_after_expansion"],
+                    f"{path}.evaluation.actionable_cards_after_expansion",
+                )
+                if "actionable_cards_after_expansion" in evaluation_raw
+                else None
+            ),
+            (
+                _string(evaluation_raw["reason_code"], f"{path}.evaluation.reason_code")
+                if "reason_code" in evaluation_raw
+                else None
+            ),
+        )
+        provenance_raw = _object(
+            result_raw["match_provenance"],
+            f"{path}.match_provenance",
+            required={"status"},
+            optional={"signatures", "reason"},
+        )
+        signatures = []
+        if "signatures" in provenance_raw:
+            for signature_index, signature_value in enumerate(
+                _array(provenance_raw["signatures"], f"{path}.match_provenance.signatures")
+            ):
+                signature_path = f"{path}.match_provenance.signatures[{signature_index}]"
+                signature_raw = _object(
+                    signature_value,
+                    signature_path,
+                    required={"id", "trigger_cards", "any_nodes"},
+                )
+                nodes = []
+                for node_index, node_value in enumerate(
+                    _array(signature_raw["any_nodes"], f"{signature_path}.any_nodes")
+                ):
+                    node_path = f"{signature_path}.any_nodes[{node_index}]"
+                    node_raw = _object(
+                        node_value,
+                        node_path,
+                        required={"path", "matched_children"},
+                    )
+                    nodes.append(
+                        AnyNodeRecord(
+                            _string(node_raw["path"], f"{node_path}.path"),
+                            _strings(
+                                node_raw["matched_children"],
+                                f"{node_path}.matched_children",
+                            ),
+                        )
+                    )
+                signatures.append(
+                    MatchSignature(
+                        _string(signature_raw["id"], f"{signature_path}.id"),
+                        _integer(
+                            signature_raw["trigger_cards"],
+                            f"{signature_path}.trigger_cards",
+                        ),
+                        tuple(nodes),
+                    )
+                )
+        reason_code = None
+        reason_message = None
+        if "reason" in provenance_raw:
+            reason_raw = _object(
+                provenance_raw["reason"],
+                f"{path}.match_provenance.reason",
+                required={"code", "message"},
+            )
+            reason_code = _string(reason_raw["code"], f"{path}.match_provenance.reason.code")
+            reason_message = _string(
+                reason_raw["message"],
+                f"{path}.match_provenance.reason.message",
+            )
+        provenance = ProvenanceRecord(
+            _string(provenance_raw["status"], f"{path}.match_provenance.status"),
+            tuple(signatures),
+            reason_code,
+            reason_message,
+        )
+        results.append(PolicyResultRecord(policy_ref, activation, evaluation, provenance))
+
+    outcome_raw = _object(
+        raw["outcome"],
+        "outcome",
+        required={
+            "status",
+            "stage",
+            "result",
+            "effects_complete",
+            "unknown_effects_possible",
+        },
+        optional={"failure"},
+    )
+    failure = None
+    if "failure" in outcome_raw:
+        failure_raw = _object(
+            outcome_raw["failure"],
+            "outcome.failure",
+            required={"code", "message"},
+            optional={"recovery"},
+        )
+        failure = FailureRecord(
+            _string(failure_raw["code"], "outcome.failure.code"),
+            _string(failure_raw["message"], "outcome.failure.message"),
+            (
+                _string(failure_raw["recovery"], "outcome.failure.recovery")
+                if "recovery" in failure_raw
+                else None
+            ),
+        )
+    outcome = OutcomeRecord(
+        _string(outcome_raw["status"], "outcome.status"),
+        _string(outcome_raw["stage"], "outcome.stage"),
+        _string(outcome_raw["result"], "outcome.result"),
+        _boolean(outcome_raw["effects_complete"], "outcome.effects_complete"),
+        _boolean(
+            outcome_raw["unknown_effects_possible"],
+            "outcome.unknown_effects_possible",
+        ),
+        failure,
+    )
+
+    def effect_records(value: object, path: str, *, non_applied: bool) -> tuple[object, ...]:
+        records: list[object] = []
+        required = {"action", "counts", "contributors"}
+        if non_applied:
+            required.add("disposition")
+        for index, item in enumerate(_array(value, path)):
+            item_path = f"{path}[{index}]"
+            item_raw = _object(
+                item,
+                item_path,
+                required=required,
+                optional={"reason_codes"} if non_applied else set(),
+            )
+            action = _action_from_dict(item_raw["action"], f"{item_path}.action")
+            counts = _counts_from_dict(item_raw["counts"], f"{item_path}.counts")
+            contributors = _contributors_from_dict(
+                item_raw["contributors"],
+                f"{item_path}.contributors",
+            )
+            if non_applied:
+                records.append(
+                    NonAppliedRecord(
+                        _string(item_raw["disposition"], f"{item_path}.disposition"),
+                        action,
+                        counts,
+                        contributors,
+                        (
+                            _strings(item_raw["reason_codes"], f"{item_path}.reason_codes")
+                            if "reason_codes" in item_raw
+                            else ()
+                        ),
+                    )
+                )
+            else:
+                records.append(EffectRecord(action, counts, contributors))
+        return tuple(records)
+
+    effects = cast(
+        "tuple[EffectRecord, ...]",
+        effect_records(raw["effects"], "effects", non_applied=False),
+    )
+    non_applied = cast(
+        "tuple[NonAppliedRecord, ...]",
+        effect_records(raw["non_applied"], "non_applied", non_applied=True),
+    )
+
+    summary_raw = _object(
+        raw["summary"],
+        "summary",
+        required={
+            "policies",
+            "distinct_cards_changed",
+            "distinct_notes_changed",
+            "effect_groups",
+            "non_applied_groups",
+        },
+    )
+    summary = SummaryRecord(
+        _integer(summary_raw["policies"], "summary.policies"),
+        _integer(summary_raw["distinct_cards_changed"], "summary.distinct_cards_changed"),
+        _integer(summary_raw["distinct_notes_changed"], "summary.distinct_notes_changed"),
+        _integer(summary_raw["effect_groups"], "summary.effect_groups"),
+        _integer(summary_raw["non_applied_groups"], "summary.non_applied_groups"),
+    )
+
+    execution_raw = _object(
+        raw["execution"],
+        "execution",
+        required={"status", "steps"},
+        optional={"reason_code"},
+    )
+    steps = []
+    for index, item in enumerate(_array(execution_raw["steps"], "execution.steps")):
+        path = f"execution.steps[{index}]"
+        step_raw = _object(
+            item,
+            path,
+            required={"sequence", "operation", "target_kind", "targets", "status"},
+        )
+        targets = []
+        for target_index, target_value in enumerate(_array(step_raw["targets"], f"{path}.targets")):
+            target_path = f"{path}.targets[{target_index}]"
+            target_raw = _object(
+                target_value,
+                target_path,
+                required={"count"},
+                optional={"parameter"},
+            )
+            parameter: str | tuple[str, ...] | None = None
+            if "parameter" in target_raw:
+                raw_parameter = target_raw["parameter"]
+                parameter = (
+                    _strings(raw_parameter, f"{target_path}.parameter")
+                    if isinstance(raw_parameter, list)
+                    else _string(raw_parameter, f"{target_path}.parameter")
+                )
+            targets.append(
+                ExecutionTargetRecord(
+                    parameter,
+                    _integer(target_raw["count"], f"{target_path}.count"),
+                )
+            )
+        steps.append(
+            ExecutionStepRecord(
+                _integer(step_raw["sequence"], f"{path}.sequence"),
+                _string(step_raw["operation"], f"{path}.operation"),
+                _string(step_raw["target_kind"], f"{path}.target_kind"),
+                tuple(targets),
+                _string(step_raw["status"], f"{path}.status"),
+            )
+        )
+    execution = ExecutionRecord(
+        _string(execution_raw["status"], "execution.status"),
+        tuple(steps),
+        (
+            _string(execution_raw["reason_code"], "execution.reason_code")
+            if "reason_code" in execution_raw
+            else None
+        ),
+    )
+
+    event = CleanupEvent(
+        schema,
+        _string(raw["event_type"], "event_type"),
+        _string(raw["event_id"], "event_id"),
+        _string(raw["source_id"], "source_id"),
+        producer,
+        event_time,
+        invocation,
+        tuple(snapshots),
+        tuple(results),
+        outcome,
+        summary,
+        effects,
+        non_applied,
+        execution,
+    )
+    validate_cleanup_event(event)
+    return event
+
+
+def event_from_json(value: str) -> CleanupEvent:
+    try:
+        raw = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise HistoryEventValidationError("history line is not valid JSON") from exc
+    return event_from_dict(raw)
 
 
 def _parse_aware_timestamp(value: str, field: str) -> datetime:

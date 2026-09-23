@@ -106,6 +106,7 @@ def test_settings_disable_cancels_pending_automatic_work(
     monkeypatch.setattr(settings_dialog, "cancel_automatic_run", lambda: cancelled.append(True))
     assert dialog.notify.isEnabled()
     assert dialog.warn_invalid.isEnabled()
+    assert dialog.history_enabled.isChecked()
     assert dialog.debug_logging.isEnabled()
     dialog.automatic_enabled.setChecked(False)
     assert not dialog.notify.isEnabled()
@@ -117,6 +118,7 @@ def test_settings_disable_cancels_pending_automatic_work(
     assert writes[0]["automatic_cleanup_enabled"] is False
     assert writes[0]["notify_after_automatic_run"] is True
     assert writes[0]["warn_on_invalid_automatic_policies"] is True
+    assert writes[0]["cleanup_history_enabled"] is True
     assert cancelled == [True]
     assert dialog.result() == QDialog.DialogCode.Accepted
 

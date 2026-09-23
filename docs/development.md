@@ -265,8 +265,8 @@ git push origin vX.Y.Z
 ```
 
 Pushing the tag publishes the GitHub Release automatically. Do not move or
-reuse a published version tag; increment the project version for the next
-release.
+reuse a published version tag; increment the project version in both
+`pyproject.toml` and `src/version.py` for the next release.
 
 Releases are created as drafts, receive the add-on asset, and are then
 published. With release immutability enabled, published assets and tags cannot

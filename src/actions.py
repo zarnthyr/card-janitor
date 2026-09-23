@@ -115,11 +115,13 @@ class CleanupError(RuntimeError):
         stage: str = "execution",
         semantics: PlanSemantics = NOT_COLLECTED_PLAN_SEMANTICS,
         execution_ledger: ExecutionLedger = NOT_COLLECTED_EXECUTION_LEDGER,
+        recovery: str | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
         self.semantics = semantics
         self.execution_ledger = execution_ledger
+        self.recovery = recovery
 
 
 class _UndoMergeError(RuntimeError):
@@ -476,14 +478,10 @@ def _tag_note_card_ids(
     return grouped, True
 
 
-def _build_plan_semantics(
+def policy_evaluation_facts(
     reports: tuple[PolicyReport, ...],
-    plan: ExecutionPlan,
-    col: Collection | None,
-) -> PlanSemantics:
-    conflict_codes = {detail.card_id: detail.reason_codes for detail in plan.conflict_details}
-    intentions: list[LogicalIntention] = []
-    policy_evaluations = tuple(
+) -> tuple[PolicyEvaluationFacts, ...]:
+    return tuple(
         PolicyEvaluationFacts(
             report.policy.id,
             (
@@ -500,6 +498,16 @@ def _build_plan_semantics(
         )
         for report in reports
     )
+
+
+def _build_plan_semantics(
+    reports: tuple[PolicyReport, ...],
+    plan: ExecutionPlan,
+    col: Collection | None,
+) -> PlanSemantics:
+    conflict_codes = {detail.card_id: detail.reason_codes for detail in plan.conflict_details}
+    intentions: list[LogicalIntention] = []
+    policy_evaluations = policy_evaluation_facts(reports)
     provenance_by_card = {
         report.policy.id: {match.card_id: match for match in report.match_provenance.cards}
         for report in reports
@@ -694,6 +702,10 @@ def execute_plan(col: Collection, plan: ExecutionPlan, undo_name: str) -> Execut
             stage="undo_merge",
             semantics=plan.semantics,
             execution_ledger=ledger.snapshot(succeeded=False),
+            recovery=(
+                "Some changes may be recoverable through Anki Undo, but complete recovery "
+                "cannot be guaranteed."
+            ),
         ) from exc
     except Exception as exc:
         if _undo_entry_is_current(col, undo_target, undo_name):
@@ -708,6 +720,7 @@ def execute_plan(col: Collection, plan: ExecutionPlan, undo_name: str) -> Execut
             message,
             semantics=plan.semantics,
             execution_ledger=ledger.snapshot(succeeded=False),
+            recovery=recovery,
         ) from exc
     return ExecutionResult(
         changes=changes,

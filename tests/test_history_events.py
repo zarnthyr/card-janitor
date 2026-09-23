@@ -19,6 +19,7 @@ from card_janitor.history_events import (
     TerminalState,
     build_cleanup_event,
     build_success_event,
+    event_from_json,
     event_to_dict,
     event_to_json,
     make_policy_snapshot,
@@ -191,6 +192,7 @@ def test_success_event_is_self_contained_and_preserves_complete_provenance() -> 
     )
     assert event.effects[0].contributors[0].match_signatures == ("m0",)
     assert event_to_json(event) == event_to_json(event)
+    assert event_from_json(event_to_json(event)) == event
 
     def keys(value: object) -> set[str]:
         if isinstance(value, dict):

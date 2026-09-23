@@ -6,18 +6,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
-from aqt import mw
+from aqt import appVersion, mw
 from aqt import utils as aqt_utils
 from aqt.operations import CollectionOp, QueryOp
 from aqt.qt import QTimer
 from aqt.utils import showWarning, tooltip
 
-from .actions import ExecutionResult, build_execution_plan
+from .actions import CleanupError, ExecutionResult, build_execution_plan, policy_evaluation_facts
 from .configuration import load_config
 from .evaluator import evaluate_policies, validate_policy_references
 from .execution import execute_approved_reports
+from .history_events import AUTOMATIC_EVENT_ORDER, Invocation, PolicyActivation
+from .history_runtime import prepare_history_session
+from .history_semantics import EMPTY_EXECUTION_LEDGER, PlanSemantics
 from .log import configure as configure_logging
-from .log import debug, error
+from .log import debug, error, exception
 from .presentation import TRIGGER_LABELS, applied_message, configuration_error_text, record_cleanup
 
 if TYPE_CHECKING:
@@ -210,6 +213,46 @@ def run_automatic_policies(
     trigger_names = tuple(
         label for kind, label in TRIGGER_LABELS.items() if kind in matched_triggers
     )
+    history_events = {event for event in events if event in {"on_open", "on_sync"}}
+    if "daily" in matched_triggers:
+        history_events.add("daily")
+    activations = tuple(
+        PolicyActivation(
+            policy.id,
+            "automatic",
+            tuple(
+                kind
+                for kind in AUTOMATIC_EVENT_ORDER
+                if any(
+                    item.type == kind
+                    and (
+                        kind in events
+                        or (
+                            kind == "daily"
+                            and bool(events & {"on_open", "day_change"})
+                            and automatic_run_is_due(
+                                today=today,
+                                last_automatic_day=last_days.get(policy.id),
+                            )
+                        )
+                    )
+                    for item in policy.triggers
+                )
+            ),
+        )
+        for policy in policies
+    )
+    history = prepare_history_session(
+        enabled=getattr(parsed.config, "cleanup_history_enabled", False),
+        profile=profile,
+        policies=policies,
+        invocation=Invocation(
+            "automatic",
+            tuple(kind for kind in AUTOMATIC_EVENT_ORDER if kind in history_events),
+        ),
+        activations=activations,
+        anki_version=appVersion,
+    )
 
     def record_result(
         *, affected_cards: int | None = 0, conflicts: int = 0, failure: str = ""
@@ -229,6 +272,22 @@ def run_automatic_policies(
 
     def is_current() -> bool:
         return _run_state.token is token and mw.col is collection and mw.pm.profile is profile
+
+    history_gap_reported = False
+
+    def report_history_gap() -> None:
+        nonlocal history_gap_reported
+        if (
+            not history_gap_reported
+            and history is not None
+            and history.error_message
+            and is_current()
+        ):
+            history_gap_reported = True
+            try:
+                showWarning(history.error_message, parent=mw)
+            except Exception:
+                exception("cleanup history audit-gap warning could not be shown")
 
     def finish(*, complete: bool = False) -> None:
         current = is_current()
@@ -257,16 +316,44 @@ def run_automatic_policies(
     def on_failure(exc: Exception) -> None:
         current = is_current()
         try:
+            if history is not None and not history.terminal_recorded:
+                history.record_terminal(
+                    semantics=PlanSemantics(
+                        "unavailable",
+                        reason_code=(
+                            "not_recorded"
+                            if isinstance(exc, CancelledAutomaticRunError)
+                            else "policy_evaluation_failed"
+                        ),
+                    ),
+                    status=(
+                        "cancelled" if isinstance(exc, CancelledAutomaticRunError) else "failed"
+                    ),
+                    stage=(
+                        "validation"
+                        if isinstance(exc, CancelledAutomaticRunError)
+                        else "evaluation"
+                    ),
+                    code=(
+                        "context_changed"
+                        if isinstance(exc, CancelledAutomaticRunError)
+                        else "evaluation_failed"
+                    ),
+                    message=str(exc) or "Automatic cleanup was cancelled",
+                )
             if current and not isinstance(exc, CancelledAutomaticRunError):
                 record_result(affected_cards=None, failure=str(exc))
                 error("automatic cleanup failed", reason=str(exc))
                 showWarning(str(exc), parent=mw)
+            report_history_gap()
         finally:
             finish()
 
     def evaluate_current(col: Collection) -> tuple[PolicyReport, ...]:
         if col is not collection or not is_current():
             raise CancelledAutomaticRunError
+        if history is not None and history.collect_history:
+            return evaluate_policies(col, policies, collect_provenance=True)
         return evaluate_policies(col, policies)
 
     debug(
@@ -277,6 +364,14 @@ def run_automatic_policies(
 
     def apply_evaluated(reports: tuple[PolicyReport, ...]) -> None:
         if not is_current():
+            if history is not None:
+                history.record_terminal(
+                    semantics=PlanSemantics("not_collected"),
+                    status="cancelled",
+                    stage="validation",
+                    code="context_changed",
+                    message="Automatic cleanup was cancelled because the context changed",
+                )
             finish()
             return
         invalid_reports = tuple(report for report in reports if report.errors)
@@ -286,7 +381,19 @@ def run_automatic_policies(
                 for report in invalid_reports
                 for item in report.errors
             ]
+            if history is not None:
+                history.record_terminal(
+                    semantics=PlanSemantics(
+                        "unavailable",
+                        reason_code="policy_evaluation_failed",
+                    ),
+                    status="failed",
+                    stage="evaluation",
+                    code="policy_evaluation_failed",
+                    message="\n".join(errors),
+                )
             record_result(failure="\n".join(errors))
+            report_history_gap()
             finish()
             error("automatic run evaluation failed", errors=tuple(errors))
             _notify_automatic(
@@ -295,9 +402,50 @@ def run_automatic_policies(
                 ),
             )
             return
-        plan = build_execution_plan(reports, collection)
+        try:
+            plan = (
+                build_execution_plan(reports, collection, collect_history=True)
+                if history is not None and history.collect_history
+                else build_execution_plan(reports, collection)
+            )
+        except CleanupError as exc:
+            if history is not None:
+                history.record_terminal(
+                    semantics=PlanSemantics(
+                        "unavailable",
+                        policy_evaluations=policy_evaluation_facts(reports),
+                        reason_code="planning_failed",
+                    ),
+                    status="cancelled",
+                    stage="planning",
+                    code="safety_check_cancelled",
+                    message=str(exc),
+                )
+            raise
+        except Exception as exc:
+            if history is not None:
+                history.record_terminal(
+                    semantics=PlanSemantics(
+                        "unavailable",
+                        policy_evaluations=policy_evaluation_facts(reports),
+                        reason_code="planning_failed",
+                    ),
+                    status="failed",
+                    stage="planning",
+                    code="planning_failed",
+                    message=str(exc),
+                )
+            raise
         if plan.is_empty:
+            if history is not None:
+                history.record_terminal(
+                    semantics=plan.semantics,
+                    ledger=EMPTY_EXECUTION_LEDGER,
+                    status="succeeded",
+                    stage="complete",
+                )
             record_result(conflicts=len(plan.conflicted_card_ids))
+            report_history_gap()
             finish(complete=True)
             if plan.conflicted_card_ids:
                 _notify_automatic(
@@ -311,7 +459,23 @@ def run_automatic_policies(
 
         def execute_fresh(col: Collection) -> ExecutionResult:
             if col is not collection or not is_current():
+                if history is not None:
+                    history.record_terminal(
+                        semantics=PlanSemantics("not_collected"),
+                        status="cancelled",
+                        stage="validation",
+                        code="context_changed",
+                        message="Automatic cleanup was cancelled because the context changed",
+                    )
                 raise CancelledAutomaticRunError
+            if history is not None:
+                return execute_approved_reports(
+                    col,
+                    reports,
+                    approved,
+                    "Card Janitor: Automatic Clean Up",
+                    history=history,
+                )
             return execute_approved_reports(
                 col,
                 reports,
@@ -324,6 +488,7 @@ def run_automatic_policies(
                 finish()
                 return
             record_result(affected_cards=result.affected_cards, conflicts=result.conflicts)
+            report_history_gap()
             finish(complete=True)
             debug(
                 "automatic run complete",
@@ -353,7 +518,16 @@ def run_automatic_policies(
             on_failure
         ).run_in_background()
     except Exception as exc:
+        if history is not None and not history.terminal_recorded:
+            history.record_terminal(
+                semantics=PlanSemantics("unavailable", reason_code="policy_evaluation_failed"),
+                status="failed",
+                stage="evaluation",
+                code="evaluation_start_failed",
+                message=str(exc),
+            )
         if is_current():
             record_result(failure=str(exc))
+            report_history_gap()
         finish()
         raise

@@ -60,6 +60,17 @@ class SettingsDialog(QDialog):
         self._update_automatic_options(self.automatic_enabled.isChecked())
         layout.addWidget(automatic_group)
 
+        history_group = QGroupBox("Cleanup History", self)
+        history_layout = QVBoxLayout(history_group)
+        self.history_enabled = QCheckBox("Record cleanup history on this device", history_group)
+        self.history_enabled.setChecked(config.cleanup_history_enabled)
+        self.history_enabled.setToolTip(
+            "Keep an append-only local audit of future cleanup runs; turning this off does not "
+            "delete existing history"
+        )
+        history_layout.addWidget(self.history_enabled)
+        layout.addWidget(history_group)
+
         troubleshooting_group = QGroupBox("Troubleshooting", self)
         troubleshooting_layout = QVBoxLayout(troubleshooting_group)
         self.debug_logging = QCheckBox("Enable debug logging", troubleshooting_group)
@@ -79,7 +90,8 @@ class SettingsDialog(QDialog):
         cancel_button = buttons.button(QDialogButtonBox.StandardButton.Cancel)
         QWidget.setTabOrder(self.automatic_enabled, self.notify)
         QWidget.setTabOrder(self.notify, self.warn_invalid)
-        QWidget.setTabOrder(self.warn_invalid, self.debug_logging)
+        QWidget.setTabOrder(self.warn_invalid, self.history_enabled)
+        QWidget.setTabOrder(self.history_enabled, self.debug_logging)
         QWidget.setTabOrder(self.debug_logging, save_button)
         QWidget.setTabOrder(save_button, cancel_button)
         QTimer.singleShot(0, self.automatic_enabled.setFocus)
@@ -92,6 +104,7 @@ class SettingsDialog(QDialog):
         try:
             save_settings(
                 automatic_cleanup_enabled=self.automatic_enabled.isChecked(),
+                cleanup_history_enabled=self.history_enabled.isChecked(),
                 notify_after_automatic_run=self.notify.isChecked(),
                 warn_on_invalid_automatic_policies=self.warn_invalid.isChecked(),
                 debug_logging=self.debug_logging.isChecked(),
@@ -106,6 +119,7 @@ class SettingsDialog(QDialog):
         debug(
             "settings saved",
             automatic_cleanup_enabled=self.automatic_enabled.isChecked(),
+            cleanup_history_enabled=self.history_enabled.isChecked(),
             notify_after_automatic_run=self.notify.isChecked(),
             warn_on_invalid_automatic_policies=self.warn_invalid.isChecked(),
             debug_logging=self.debug_logging.isChecked(),

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import unquote
 from uuid import uuid4
 
-from aqt import mw
+from aqt import appVersion, mw
 from aqt.operations import CollectionOp, QueryOp
 from aqt.qt import (
     QAbstractItemView,
@@ -67,6 +67,9 @@ from .configuration import (
 from .editor_utils import fit_initial_table_height
 from .evaluator import evaluate_policies
 from .execution import execute_approved_reports
+from .history_events import Invocation, PolicyActivation
+from .history_runtime import prepare_history_session
+from .history_semantics import PlanSemantics
 from .json_editor import open_policy_json
 from .log import configure as configure_logging
 from .log import debug, error, exception
@@ -1110,12 +1113,41 @@ def execute_on_demand_reports(
     collection = mw.col
     policy_names = tuple(report.policy.name for report in reports)
     policy_ids = tuple(report.policy.id for report in reports)
+    policies = tuple(report.policy for report in reports)
+    dialog_config = getattr(getattr(dialog, "_parsed", None), "config", None)
+    history = prepare_history_session(
+        enabled=getattr(dialog_config, "cleanup_history_enabled", False),
+        profile=profile,
+        policies=policies,
+        invocation=Invocation("manual"),
+        activations=tuple(PolicyActivation(policy.id, "manual") for policy in policies),
+        anki_version=appVersion,
+    )
     dialog.close()
+
+    def history_gap() -> str | None:
+        return history.error_message if history is not None else None
 
     def execute_fresh(col: Collection) -> ExecutionResult:
         if col is not collection or mw.col is not collection or mw.pm.profile is not profile:
             message = "Cleanup cancelled because the collection changed."
+            if history is not None:
+                history.record_terminal(
+                    semantics=PlanSemantics("not_collected"),
+                    status="cancelled",
+                    stage="validation",
+                    code="context_changed",
+                    message=message,
+                )
             raise RuntimeError(message)
+        if history is not None:
+            return execute_approved_reports(
+                col,
+                reports,
+                approved,
+                "Card Janitor: Clean Up",
+                history=history,
+            )
         return execute_approved_reports(
             col,
             reports,
@@ -1149,6 +1181,11 @@ def execute_on_demand_reports(
             messages.append(f"{result.conflicts} conflicting cards were skipped")
         message = messages[0] if len(messages) == 1 else ". ".join(messages) + "."
         tooltip(message, parent=mw)
+        if history_gap():
+            try:
+                showWarning(history_gap(), parent=mw)
+            except Exception:
+                exception("cleanup history audit-gap warning could not be shown")
 
     def on_failure(exc: Exception) -> None:
         if mw.pm.profile is not profile or mw.col is not collection:
@@ -1163,7 +1200,10 @@ def execute_on_demand_reports(
             policy_ids=policy_ids,
             triggers=("Manual",),
         )
-        showWarning(str(exc), parent=mw)
+        message = str(exc)
+        if history_gap():
+            message = f"{message}\n\n{history_gap()}"
+        showWarning(message, parent=mw)
 
     CollectionOp(parent=mw, op=execute_fresh).success(on_applied).failure(
         on_failure

@@ -16,6 +16,8 @@ from card_janitor.cleanup_preview import build_preview_rows
 from card_janitor.configuration import COLLECTION_POLICIES_KEY
 from card_janitor.evaluator import evaluate_policy
 from card_janitor.execution import StalePolicyDefinitionsError, execute_approved_reports
+from card_janitor.history_events import Invocation, PolicyActivation
+from card_janitor.history_runtime import prepare_history_session
 from card_janitor.models import (
     AgeCondition,
     AllCardsCondition,
@@ -633,6 +635,64 @@ def test_manual_execution_rejects_policy_changed_after_evaluation(tmp_path: Path
             )
 
         assert not collection.get_note(note.id).has_tag("retired")
+    finally:
+        collection.close()
+
+
+def test_approved_cleanup_writes_a_complete_local_history_event(tmp_path: Path) -> None:
+    collection = Collection(str(tmp_path / "recorded-cleanup.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+        policy = Policy(
+            id="recorded-cleanup",
+            name="Recorded cleanup",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+        save_policies(collection, policy)
+        preview = evaluate_policy(collection, policy)
+        session = prepare_history_session(
+            enabled=True,
+            profile={},
+            policies=(policy,),
+            invocation=Invocation("manual"),
+            activations=(PolicyActivation(policy.id, "manual"),),
+            anki_version="test",
+            root=tmp_path / "local-history",
+        )
+        assert session is not None
+
+        result = execute_approved_reports(
+            collection,
+            (preview,),
+            {policy.id: {card_id}},
+            "Recorded cleanup",
+            history=session,
+        )
+
+        assert result.affected_cards == 1
+        assert collection.get_note(note.id).has_tag("retired")
+        assert session.error_message is None
+        assert session.store is not None
+        page = session.store.read_recent()
+        assert len(page.records) == 1
+        event = page.records[0].event
+        assert event is not None
+        assert event.event_id == session.context.event_id
+        assert event.invocation == Invocation("manual")
+        assert event.outcome.status == "succeeded"
+        assert event.outcome.stage == "complete"
+        assert event.outcome.result == "changed"
+        assert event.outcome.effects_complete
+        assert event.policies[0].definition == policy_to_dict(policy)
+        assert event.policy_results[0].match_provenance.status == "complete"
+        assert event.execution.status == "complete"
     finally:
         collection.close()
 

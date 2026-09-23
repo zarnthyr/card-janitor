@@ -59,6 +59,19 @@ def test_automatic_cleanup_defaults_enabled_and_rejects_invalid_values() -> None
     assert not parsed.config.automatic_cleanup_enabled
 
 
+def test_cleanup_history_is_default_on_and_malformed_value_never_blocks_cleanup() -> None:
+    defaulted = parse_config({"config_version": 1, "policies": []})
+    disabled = parse_config({"config_version": 1, "cleanup_history_enabled": False, "policies": []})
+    malformed = parse_config(
+        {"config_version": 1, "cleanup_history_enabled": "false", "policies": []}
+    )
+
+    assert defaulted.config.cleanup_history_enabled
+    assert not disabled.config.cleanup_history_enabled
+    assert malformed.config.cleanup_history_enabled
+    assert not any(issue.path == "cleanup_history_enabled" for issue in malformed.issues)
+
+
 def test_invalid_automatic_policy_warning_setting_defaults_on_and_validates() -> None:
     assert parse_config(
         {"config_version": 1, "policies": []}

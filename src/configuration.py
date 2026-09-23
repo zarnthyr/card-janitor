@@ -24,6 +24,7 @@ COLLECTION_POLICIES_KEY = "card_janitor_policies"
 DEFAULT_SETTINGS: dict[str, Any] = {
     "config_version": CONFIG_VERSION,
     "automatic_cleanup_enabled": True,
+    "cleanup_history_enabled": True,
     "notify_after_automatic_run": True,
     "warn_on_invalid_automatic_policies": True,
     "debug_logging": False,
@@ -153,6 +154,7 @@ def remove_policy(*, record: PolicyRecord) -> None:
 def save_settings(
     *,
     automatic_cleanup_enabled: bool = True,
+    cleanup_history_enabled: bool = True,
     notify_after_automatic_run: bool,
     debug_logging: bool,
     warn_on_invalid_automatic_policies: bool = True,
@@ -166,6 +168,7 @@ def save_settings(
     updated.pop("policies", None)
     updated["config_version"] = CONFIG_VERSION
     updated["automatic_cleanup_enabled"] = automatic_cleanup_enabled
+    updated["cleanup_history_enabled"] = cleanup_history_enabled
     updated["notify_after_automatic_run"] = notify_after_automatic_run
     updated["warn_on_invalid_automatic_policies"] = warn_on_invalid_automatic_policies
     updated["debug_logging"] = debug_logging
