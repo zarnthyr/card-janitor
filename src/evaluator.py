@@ -385,6 +385,11 @@ def evaluate_policy(
                 if any(not action_is_satisfied(action, card) for action in actions)
             ),
         )
+    report = replace(
+        report,
+        evaluation_qualifying_cards=len(report.qualifying),
+        evaluation_actionable_cards=len(report.actionable),
+    )
     debug(
         "policy evaluated",
         policy_id=policy.id,

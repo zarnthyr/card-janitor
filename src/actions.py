@@ -21,6 +21,7 @@ from .history_semantics import (
     LogicalEffect,
     LogicalIntention,
     PlanSemantics,
+    PolicyEvaluationFacts,
 )
 from .log import exception
 from .models import (
@@ -482,7 +483,23 @@ def _build_plan_semantics(
 ) -> PlanSemantics:
     conflict_codes = {detail.card_id: detail.reason_codes for detail in plan.conflict_details}
     intentions: list[LogicalIntention] = []
-    provenance_by_policy = tuple((report.policy.id, report.match_provenance) for report in reports)
+    policy_evaluations = tuple(
+        PolicyEvaluationFacts(
+            report.policy.id,
+            (
+                report.evaluation_qualifying_cards
+                if report.evaluation_qualifying_cards is not None
+                else len(report.qualifying)
+            ),
+            (
+                report.evaluation_actionable_cards
+                if report.evaluation_actionable_cards is not None
+                else len(report.actionable)
+            ),
+            report.match_provenance,
+        )
+        for report in reports
+    )
     provenance_by_card = {
         report.policy.id: {match.card_id: match for match in report.match_provenance.cards}
         for report in reports
@@ -611,6 +628,7 @@ def _build_plan_semantics(
                 target_kind=target_kind,
                 target_id=target_id,
                 affected_card_ids=affected_card_ids,
+                affected_note_ids=tuple(sorted({item.target_note_id for item in grouped})),
                 affected_card_ids_complete=not is_tag_effect or tag_cards_complete,
                 matching_trigger_card_ids=trigger_card_ids,
                 consequential_sibling_card_ids=tuple(
@@ -638,10 +656,10 @@ def _build_plan_semantics(
         )
     )
     return PlanSemantics(
-        "complete",
-        tuple(intentions),
-        tuple(effects),
-        provenance_by_policy,
+        status="complete",
+        intentions=tuple(intentions),
+        effects=tuple(effects),
+        policy_evaluations=policy_evaluations,
     )
 
 

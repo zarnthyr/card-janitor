@@ -41,6 +41,7 @@ REQUIRED_PACKAGE_FILES = {
     "engine.py",
     "evaluator.py",
     "execution.py",
+    "history_events.py",
     "history_semantics.py",
     "log.py",
     "manifest.json",

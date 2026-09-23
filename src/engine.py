@@ -121,6 +121,8 @@ class PolicyReport:
     errors: tuple[str, ...] = ()
     match_provenance: PolicyMatchProvenance = NOT_COLLECTED_PROVENANCE
     boundary_dispositions: tuple[BoundaryDisposition, ...] = ()
+    evaluation_qualifying_cards: int | None = None
+    evaluation_actionable_cards: int | None = None
 
 
 def _matches_number(actual: float, operator: str, expected: float) -> bool:
@@ -463,4 +465,6 @@ def evaluate_facts(
         resolved_actions=resolved_actions,
         card_actions=tuple((card, resolved_actions) for card in qualifying),
         match_provenance=provenance,
+        evaluation_qualifying_cards=len(qualifying),
+        evaluation_actionable_cards=len(actionable),
     )

@@ -62,6 +62,7 @@ ignore = [
 "package.py" = ["INP001", "T201"]
 "src/engine.py" = ["EM102", "TRY003"]
 "src/evaluator.py" = ["S608"]
+"src/history_events.py" = ["EM101", "EM102", "PLR0911", "PLR0912", "TRY003"]
 "src/log.py" = ["PLW0603", "T201"]
 "src/models.py" = ["EM102", "PERF203", "TRY003", "TRY004", "TRY301"]
 "src/package.py" = ["EM102", "TRY003"]

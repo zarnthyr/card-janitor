@@ -55,6 +55,14 @@ NOT_COLLECTED_PROVENANCE = PolicyMatchProvenance("not_collected")
 
 
 @dataclass(frozen=True)
+class PolicyEvaluationFacts:
+    policy_id: str
+    qualifying_trigger_cards: int
+    actionable_cards_after_expansion: int
+    provenance: PolicyMatchProvenance
+
+
+@dataclass(frozen=True)
 class BoundaryDisposition:
     """A Preview-to-execution candidate deliberately excluded before planning."""
 
@@ -96,6 +104,7 @@ class LogicalEffect:
     target_kind: TargetKind
     target_id: int
     affected_card_ids: tuple[int, ...]
+    affected_note_ids: tuple[int, ...]
     affected_card_ids_complete: bool
     matching_trigger_card_ids: tuple[int, ...]
     consequential_sibling_card_ids: tuple[int, ...]
@@ -107,8 +116,12 @@ class PlanSemantics:
     status: SemanticsStatus
     intentions: tuple[LogicalIntention, ...] = ()
     effects: tuple[LogicalEffect, ...] = ()
-    policy_provenance: tuple[tuple[str, PolicyMatchProvenance], ...] = ()
+    policy_evaluations: tuple[PolicyEvaluationFacts, ...] = ()
     reason_code: str | None = None
+
+    @property
+    def policy_provenance(self) -> tuple[tuple[str, PolicyMatchProvenance], ...]:
+        return tuple((item.policy_id, item.provenance) for item in self.policy_evaluations)
 
     @property
     def non_applied(self) -> tuple[LogicalIntention, ...]:
