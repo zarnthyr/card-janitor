@@ -74,6 +74,7 @@ class BoundaryDisposition:
     card_id: int
     note_id: int
     actions: tuple[ResolvedAction, ...]
+    trigger_card_ids: tuple[int, ...]
 
 
 @dataclass(frozen=True)

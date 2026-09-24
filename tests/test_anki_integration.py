@@ -11,6 +11,7 @@ from anki.collection import Collection
 from aqt.operations import QueryOp
 from card_janitor import actions as actions_module
 from card_janitor import automatic, evaluator, ui
+from card_janitor import execution as execution_module
 from card_janitor.actions import CleanupError, build_execution_plan, execute_plan
 from card_janitor.cleanup_preview import build_preview_rows
 from card_janitor.configuration import COLLECTION_POLICIES_KEY
@@ -697,6 +698,53 @@ def test_approved_cleanup_writes_a_complete_local_history_event(tmp_path: Path) 
         collection.close()
 
 
+def test_preview_boundary_history_failure_does_not_change_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collection = Collection(str(tmp_path / "boundary-history-failure.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+        policy = Policy(
+            id="boundary-history-failure",
+            name="Boundary history failure",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+        save_policies(collection, policy)
+        preview = evaluate_policy(collection, policy)
+
+        def fail(*_args: object, **_kwargs: object) -> object:
+            message = "injected boundary history failure"
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(execution_module, "_history_boundary_dispositions", fail)
+        monkeypatch.setattr(execution_module, "exception", lambda *_args, **_kwargs: None)
+
+        result = execute_approved_reports(
+            collection,
+            (preview,),
+            {policy.id: {card_id}},
+            "Boundary history failure",
+            collect_history=True,
+        )
+
+        assert collection.get_note(note.id).has_tag("retired")
+        assert result.affected_cards == 1
+        assert result.semantics.status == "unavailable"
+        assert result.semantics.reason_code == "preview_boundary_trace_failed"
+        collection.undo()
+        assert not collection.get_note(note.id).has_tag("retired")
+    finally:
+        collection.close()
+
+
 def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path: Path) -> None:
     collection = Collection(str(tmp_path / "history.anki2"))
     try:
@@ -904,17 +952,40 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
         else:
             collection.set_deck([sibling], source)
             collection.set_deck([first], outside)
+        skipped_session = prepare_history_session(
+            enabled=True,
+            profile={},
+            policies=(policy,),
+            invocation=Invocation("manual"),
+            activations=(PolicyActivation(policy.id, "manual"),),
+            anki_version="test",
+            root=tmp_path / "skipped-history",
+        )
+        assert skipped_session is not None
         skipped = execute_approved_reports(
             collection,
             (report,),
             {policy.id: {sibling}},
             "Skip unapproved note",
-            collect_history=True,
+            history=skipped_session,
         )
         assert skipped.affected_cards == 0
         assert {item.disposition for item in skipped.semantics.non_applied} == {
             "preview_note_boundary"
         }
+        expected_trigger = sibling if kind == "move_note" else first
+        assert all(
+            item.trigger_card_ids == (expected_trigger,) for item in skipped.semantics.non_applied
+        )
+        assert skipped_session.store is not None
+        skipped_event = skipped_session.store.read_recent().records[0].event
+        assert skipped_event is not None
+        assert len(skipped_event.non_applied) == 1
+        skipped_record = skipped_event.non_applied[0]
+        assert skipped_record.counts.cards == (1 if kind == "move_note" else 2)
+        assert skipped_record.counts.matching_trigger_cards == (0 if kind == "move_note" else 1)
+        assert skipped_record.counts.consequential_sibling_cards == 1
+        assert skipped_record.contributors[0].trigger_cards == 1
         collection.set_deck([first], source)
         collection.set_deck([sibling], outside)
         if kind == "suspend_note":
@@ -961,6 +1032,71 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
         restored = collection.get_card(sibling)
         assert restored.did == outside
         assert restored.queue == (-1 if kind == "unsuspend_note" else 0)
+    finally:
+        collection.close()
+
+
+def test_note_wide_preview_candidate_retains_lost_trigger_provenance(
+    tmp_path: Path,
+) -> None:
+    collection = Collection(str(tmp_path / "lost-note-trigger.anki2"))
+    try:
+        source = collection.decks.add_normal_deck_with_name("Source").id
+        outside = collection.decks.add_normal_deck_with_name("Outside").id
+        model = collection.models.by_name("Basic (and reversed card)")
+        assert model is not None
+        note = collection.new_note(model)
+        note["Front"], note["Back"] = "front", "back"
+        collection.add_note(note, source)
+        trigger, sibling = map(int, collection.card_ids_of_note(note.id))
+        collection.set_deck([sibling], outside)
+        collection.sched.suspend_cards([trigger])
+        policy = Policy(
+            id="lost-note-trigger",
+            name="Lost note trigger",
+            triggers=(),
+            scope=Scope((DeckSelector("Source"),)),
+            conditions=TagCondition(("excluded",), "contains_none"),
+            actions=(SuspendAction("note"),),
+        )
+        save_policies(collection, policy)
+        preview = evaluate_policy(collection, policy)
+        assert [card.card_id for card in preview.qualifying] == [trigger]
+        assert [card.card_id for card in preview.actionable] == [sibling]
+        collection.tags.bulk_add([note.id], "excluded")
+        session = prepare_history_session(
+            enabled=True,
+            profile={},
+            policies=(policy,),
+            invocation=Invocation("manual"),
+            activations=(PolicyActivation(policy.id, "manual"),),
+            anki_version="test",
+            root=tmp_path / "local-history",
+        )
+        assert session is not None
+
+        result = execute_approved_reports(
+            collection,
+            (preview,),
+            {policy.id: {sibling}},
+            "Lost note trigger",
+            history=session,
+        )
+
+        assert result.affected_cards == 0
+        disposition = result.semantics.non_applied[0]
+        assert disposition.disposition == "preview_no_longer_matching"
+        assert disposition.target_card_id == sibling
+        assert disposition.trigger_card_ids == (trigger,)
+        assert session.store is not None
+        event = session.store.read_recent().records[0].event
+        assert event is not None
+        record = event.non_applied[0]
+        assert record.counts.cards == 1
+        assert record.counts.matching_trigger_cards == 0
+        assert record.counts.consequential_sibling_cards == 1
+        assert record.contributors[0].trigger_cards == 1
+        assert record.contributors[0].match_signatures == ()
     finally:
         collection.close()
 

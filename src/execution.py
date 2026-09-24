@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .actions import (
     CleanupError,
     ExecutionResult,
     build_execution_plan,
     execute_plan,
+    history_action_target_kind,
     policy_evaluation_facts,
 )
 from .configuration import COLLECTION_POLICIES_KEY
@@ -21,12 +23,18 @@ from .history_semantics import (
     BoundaryDisposition,
     PlanSemantics,
 )
-from .models import Policy, action_expands_to_siblings, parse_policy, policy_to_dict
+from .log import exception
+from .models import (
+    Policy,
+    action_expands_to_siblings,
+    parse_policy,
+    policy_to_dict,
+)
 
 if TYPE_CHECKING:
     from anki.collection import Collection
 
-    from .engine import PolicyReport
+    from .engine import CardFacts, PolicyReport, ResolvedAction
     from .history_runtime import HistorySession
 
 
@@ -38,6 +46,94 @@ _STALE_POLICIES_MESSAGE = (
     "Cleanup cancelled because one or more selected policies changed. "
     "Refresh Card Janitor and try again."
 )
+
+
+def _append_boundary_dispositions(
+    boundary: list[BoundaryDisposition],
+    *,
+    code: Literal[
+        "preview_no_longer_matching",
+        "preview_newly_matching",
+        "preview_note_boundary",
+    ],
+    card: CardFacts,
+    actions: tuple[ResolvedAction, ...],
+    qualifying_by_note: dict[int, set[int]],
+) -> None:
+    grouped: dict[tuple[int, ...], list[ResolvedAction]] = {}
+    for resolved in actions:
+        trigger_ids = (
+            tuple(sorted(qualifying_by_note.get(card.note_id, ())))
+            if history_action_target_kind(resolved.action) == "note"
+            else (card.card_id,)
+        )
+        grouped.setdefault(trigger_ids, []).append(resolved)
+    for trigger_ids, grouped_actions in grouped.items():
+        boundary.append(
+            BoundaryDisposition(
+                code,
+                card.card_id,
+                card.note_id,
+                tuple(grouped_actions),
+                trigger_ids,
+            )
+        )
+
+
+def _history_boundary_dispositions(
+    preview: PolicyReport,
+    fresh: PolicyReport,
+    approved_ids: set[int],
+    blocked_notes: set[int],
+) -> tuple[BoundaryDisposition, ...]:
+    preview_cards = {card.card_id: card for card in (*preview.qualifying, *preview.actionable)}
+    preview_actions = {card.card_id: actions for card, actions in preview.card_actions}
+    fresh_actions = {card.card_id: actions for card, actions in fresh.card_actions}
+    preview_qualifying_by_note: dict[int, set[int]] = {}
+    fresh_qualifying_by_note: dict[int, set[int]] = {}
+    for card in preview.qualifying:
+        preview_qualifying_by_note.setdefault(card.note_id, set()).add(card.card_id)
+    for card in fresh.qualifying:
+        fresh_qualifying_by_note.setdefault(card.note_id, set()).add(card.card_id)
+
+    boundary: list[BoundaryDisposition] = []
+    for card_id in sorted(approved_ids):
+        card = preview_cards[card_id]
+        current_actions = fresh_actions.get(card_id, ())
+        actions = tuple(
+            action
+            for action in preview_actions.get(card_id, ())
+            if not action_is_satisfied(action, card)
+            and not any(current.action == action.action for current in current_actions)
+        )
+        _append_boundary_dispositions(
+            boundary,
+            code="preview_no_longer_matching",
+            card=card,
+            actions=actions,
+            qualifying_by_note=preview_qualifying_by_note,
+        )
+
+    for card in fresh.actionable:
+        if card.card_id in approved_ids and card.note_id not in blocked_notes:
+            continue
+        actions = tuple(
+            action
+            for action in fresh_actions.get(card.card_id, ())
+            if not action_is_satisfied(action, card)
+        )
+        _append_boundary_dispositions(
+            boundary,
+            code=(
+                "preview_note_boundary"
+                if card.note_id in blocked_notes
+                else "preview_newly_matching"
+            ),
+            card=card,
+            actions=actions,
+            qualifying_by_note=fresh_qualifying_by_note,
+        )
+    return tuple(boundary)
 
 
 def _ensure_policy_definitions_current(col: Collection, policies: tuple[Policy, ...]) -> None:
@@ -130,6 +226,7 @@ def execute_approved_reports(  # noqa: PLR0912
         raise RuntimeError(message)
     preview_by_id = {report.policy.id: report for report in reports}
     approved_reports = []
+    boundary_history_available = True
     for report in fresh_reports:
         approved_ids = approved_card_ids[report.policy.id]
         blocked_notes = (
@@ -140,54 +237,17 @@ def execute_approved_reports(  # noqa: PLR0912
         boundary_dispositions: tuple[BoundaryDisposition, ...] = ()
         if collect_history:
             preview = preview_by_id[report.policy.id]
-            preview_cards = {
-                card.card_id: card for card in (*preview.qualifying, *preview.actionable)
-            }
-            preview_actions = {card.card_id: actions for card, actions in preview.card_actions}
-            preview_qualifying_ids = {card.card_id for card in preview.qualifying}
-            fresh_qualifying_ids = {card.card_id for card in report.qualifying}
-            boundary = []
-            for card_id in sorted((approved_ids & preview_qualifying_ids) - fresh_qualifying_ids):
-                card = preview_cards[card_id]
-                actions = tuple(
-                    action
-                    for action in preview_actions.get(card_id, ())
-                    if not action_is_satisfied(action, card)
+            try:
+                boundary_dispositions = _history_boundary_dispositions(
+                    preview,
+                    report,
+                    approved_ids,
+                    blocked_notes,
                 )
-                if actions:
-                    boundary.append(
-                        BoundaryDisposition(
-                            "preview_no_longer_matching",
-                            card.card_id,
-                            card.note_id,
-                            actions,
-                        )
-                    )
-            for card in report.actionable:
-                if card.card_id in approved_ids and card.note_id not in blocked_notes:
-                    continue
-                actions = tuple(
-                    action
-                    for item, item_actions in report.card_actions
-                    if item.card_id == card.card_id
-                    for action in item_actions
-                    if not action_is_satisfied(action, card)
-                )
-                if not actions:
-                    continue
-                boundary.append(
-                    BoundaryDisposition(
-                        (
-                            "preview_note_boundary"
-                            if card.note_id in blocked_notes
-                            else "preview_newly_matching"
-                        ),
-                        card.card_id,
-                        card.note_id,
-                        actions,
-                    )
-                )
-            boundary_dispositions = tuple(boundary)
+            except Exception:
+                boundary_history_available = False
+                with suppress(Exception):
+                    exception("history preview-boundary collection failed")
         approved_reports.append(
             replace(
                 report,
@@ -211,8 +271,17 @@ def execute_approved_reports(  # noqa: PLR0912
         plan = build_execution_plan(
             tuple(approved_reports),
             col,
-            collect_history=collect_history,
+            collect_history=collect_history and boundary_history_available,
         )
+        if collect_history and not boundary_history_available:
+            plan = replace(
+                plan,
+                semantics=PlanSemantics(
+                    "unavailable",
+                    policy_evaluations=policy_evaluation_facts(tuple(approved_reports)),
+                    reason_code="preview_boundary_trace_failed",
+                ),
+            )
     except CleanupError as exc:
         if history is not None:
             history.record_terminal(

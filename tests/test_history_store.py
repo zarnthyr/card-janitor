@@ -151,6 +151,11 @@ def test_corrupt_and_unsupported_lines_do_not_hide_valid_events(tmp_path: Path) 
     store.append(first)
     with store.path.open("a", encoding="utf-8") as handle:
         handle.write("{truncated\n")
+        handle.write('{"schema": NaN}\n')
+        handle.write(
+            '{"schema":{"name":"card_janitor.cleanup_history","version":1},'
+            '"schema":{"name":"card_janitor.cleanup_history","version":1}}\n'
+        )
         handle.write(
             json.dumps(
                 {
@@ -165,8 +170,23 @@ def test_corrupt_and_unsupported_lines_do_not_hide_valid_events(tmp_path: Path) 
     records = store.read_recent(limit=10).records
 
     assert [record.event for record in records if record.event is not None] == [second, first]
-    assert sum(record.error is not None for record in records) == 1
+    assert sum(record.error is not None for record in records) == 3
     assert sum(record.unsupported_schema is not None for record in records) == 1
+
+
+def test_record_from_another_source_is_isolated_as_corrupt(tmp_path: Path) -> None:
+    source_id = str(uuid4())
+    store = HistoryStore(source_id, root=tmp_path)
+    store.append(cleanup_event(source_id))
+    foreign = cleanup_event(str(uuid4()))
+    with store.path.open("a", encoding="utf-8") as handle:
+        handle.write(event_to_json(foreign) + "\n")
+
+    records = store.read_recent().records
+
+    assert records[0].event is None
+    assert records[0].error == "event source does not match history store"
+    assert records[1].event is not None
 
 
 def test_invalid_utf8_line_is_isolated(tmp_path: Path) -> None:
@@ -185,6 +205,24 @@ def test_invalid_utf8_line_is_isolated(tmp_path: Path) -> None:
     assert [record.error for record in records if record.error] == ["line is not valid UTF-8"]
 
 
+def test_append_after_truncated_final_write_keeps_new_event_readable(tmp_path: Path) -> None:
+    source_id = str(uuid4())
+    store = HistoryStore(source_id, root=tmp_path)
+    first = cleanup_event(source_id)
+    second = cleanup_event(source_id)
+    store.append(first)
+    truncated = store.path.read_bytes()[:-12]
+    assert not truncated.endswith(b"\n")
+    store.path.write_bytes(truncated)
+
+    store.append(second)
+
+    records = store.read_recent().records
+    assert records[0].event == second
+    assert records[1].event is None
+    assert records[1].error is not None
+
+
 def test_export_copies_entire_history_without_modifying_it(tmp_path: Path) -> None:
     source_id = str(uuid4())
     store = HistoryStore(source_id, root=tmp_path / "history")
@@ -201,6 +239,18 @@ def test_export_copies_entire_history_without_modifying_it(tmp_path: Path) -> No
     assert exported == 3
     assert destination.read_bytes() == original
     assert store.path.read_bytes() == original
+
+
+def test_export_rejects_active_log_through_symlink_alias(tmp_path: Path) -> None:
+    source_id = str(uuid4())
+    root = tmp_path / "history"
+    store = HistoryStore(source_id, root=root)
+    store.append(cleanup_event(source_id))
+    alias = tmp_path / "history-alias"
+    alias.symlink_to(root, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="active log"):
+        store.export(alias / source_id / HISTORY_FILENAME)
 
 
 def test_failed_export_does_not_replace_existing_destination(
@@ -244,6 +294,25 @@ def test_clear_permanently_deletes_all_profile_history(tmp_path: Path) -> None:
     assert not store.clear()
     store.append(second)
     assert store.path.read_text(encoding="utf-8") == event_to_json(second) + "\n"
+
+
+def test_read_treats_a_log_deleted_while_waiting_for_its_lock_as_empty(
+    tmp_path: Path,
+) -> None:
+    source_id = str(uuid4())
+    store = HistoryStore(source_id, root=tmp_path)
+    store.append(cleanup_event(source_id))
+
+    class DeleteOnEnter:
+        def __enter__(self) -> None:
+            store.path.unlink()
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    store._lock = DeleteOnEnter()
+
+    assert store.read_recent().records == ()
 
 
 def test_clear_failure_does_not_prevent_future_appends_or_clear_retry(

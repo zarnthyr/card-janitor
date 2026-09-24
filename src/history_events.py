@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Literal, cast
 from uuid import UUID
 
 from .models import (
+    Action,
     ClearFlagAction,
     DeleteCardAction,
     DeleteNoteAction,
@@ -348,6 +349,32 @@ def _canonical_json(value: object) -> str:
     )
 
 
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    value: dict[str, object] = {}
+    for key, item in pairs:
+        if key in value:
+            raise HistoryEventValidationError(f"history line has duplicate field {key!r}")
+        value[key] = item
+    return value
+
+
+def _reject_json_constant(value: str) -> object:
+    raise HistoryEventValidationError(f"history line contains non-standard JSON value {value}")
+
+
+def _parse_json(value: str) -> object:
+    try:
+        return json.loads(
+            value,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_json_constant,
+        )
+    except HistoryEventValidationError:
+        raise
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise HistoryEventValidationError("history line is not valid JSON") from exc
+
+
 def _canonical_events(events: tuple[AutomaticEvent, ...]) -> tuple[AutomaticEvent, ...]:
     if len(events) != len(set(events)) or not set(events) <= AUTOMATIC_EVENTS:
         raise HistoryEventValidationError("invalid or duplicate automatic event")
@@ -382,7 +409,9 @@ def _reason_message(code: str) -> str:
 
 
 def _signature_key(match: CardMatchProvenance) -> tuple[tuple[str, tuple[str, ...]], ...]:
-    return tuple((node.path, node.matched_children) for node in match.any_nodes)
+    return tuple(
+        sorted((node.path, tuple(sorted(node.matched_children))) for node in match.any_nodes)
+    )
 
 
 def _build_provenance(
@@ -478,8 +507,7 @@ def _build_policy_results(
     return tuple(results), signature_maps
 
 
-def _event_action(resolved: ResolvedAction) -> EventAction:
-    action = resolved.action
+def _model_event_action(action: Action) -> EventAction:
     if isinstance(action, TagAction):
         return EventAction("add_tag", tag=action.tag)
     if isinstance(action, RemoveTagAction):
@@ -504,6 +532,10 @@ def _event_action(resolved: ResolvedAction) -> EventAction:
     if isinstance(action, ClearFlagAction):
         return EventAction("clear_flag")
     raise HistoryEventValidationError(f"unsupported action: {action!r}")
+
+
+def _event_action(resolved: ResolvedAction) -> EventAction:
+    return _model_event_action(resolved.action)
 
 
 def _step_matches_effect(step: ExecutionLedgerStep, effect: LogicalEffect) -> bool:
@@ -951,7 +983,7 @@ def _action_to_dict(action: EventAction) -> dict[str, object]:
     value: dict[str, object] = {"type": action.type}
     if action.tag is not None:
         value["tag"] = action.tag
-    if action.tags:
+    if action.type == "replace_tags":
         value["tags"] = list(action.tags)
     if action.target_deck is not None:
         value["target_deck"] = action.target_deck
@@ -1214,8 +1246,11 @@ def _action_from_dict(value: object, path: str) -> EventAction:
         required={"type"},
         optional={"tag", "tags", "target_deck", "flag"},
     )
+    action_type = _string(raw["type"], f"{path}.type")
+    if action_type == "replace_tags" and "tags" not in raw:
+        raise HistoryEventValidationError(f"{path}.tags is required for replace_tags")
     return EventAction(
-        _string(raw["type"], f"{path}.type"),
+        action_type,
         (_string(raw["tag"], f"{path}.tag") if "tag" in raw else None),
         _strings(raw["tags"], f"{path}.tags") if "tags" in raw else (),
         (_string(raw["target_deck"], f"{path}.target_deck") if "target_deck" in raw else None),
@@ -1654,11 +1689,7 @@ def event_from_dict(value: object) -> CleanupEvent:
 
 
 def event_from_json(value: str) -> CleanupEvent:
-    try:
-        raw = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise HistoryEventValidationError("history line is not valid JSON") from exc
-    return event_from_dict(raw)
+    return event_from_dict(_parse_json(value))
 
 
 def _parse_aware_timestamp(value: str, field: str) -> datetime:
@@ -1692,7 +1723,7 @@ def _resolve_pointer(value: object, pointer: str) -> object:
     return current
 
 
-def _validate_policy_snapshot(snapshot: PolicySnapshot) -> None:
+def _validate_policy_snapshot(snapshot: PolicySnapshot) -> Policy:
     if snapshot.snapshot_schema_version != POLICY_SNAPSHOT_SCHEMA_VERSION:
         raise HistoryEventValidationError("unsupported policy snapshot schema")
     definition = snapshot.definition
@@ -1705,6 +1736,7 @@ def _validate_policy_snapshot(snapshot: PolicySnapshot) -> None:
         raise HistoryEventValidationError("policy definition is not canonical")
     if expected.definition_hash != snapshot.definition_hash:
         raise HistoryEventValidationError("policy definition hash does not match snapshot")
+    return policy
 
 
 def _validate_action(action: EventAction) -> None:
@@ -1721,12 +1753,7 @@ def _validate_action(action: EventAction) -> None:
             and action.target_deck is None
             and action.flag is None
         ),
-        "replace_tags": (
-            action.tag is None
-            and bool(action.tags)
-            and action.target_deck is None
-            and action.flag is None
-        ),
+        "replace_tags": (action.tag is None and action.target_deck is None and action.flag is None),
         "move_card": (
             action.tag is None
             and not action.tags
@@ -1811,14 +1838,38 @@ def _validate_action(action: EventAction) -> None:
         raise HistoryEventValidationError("invalid history flag")
 
 
+def _effect_execution_key(action: EventAction) -> tuple[str, str | tuple[str, ...] | None]:
+    if action.type == "add_tag":
+        return "add_tag", action.tag
+    if action.type == "remove_tag":
+        return "remove_tag", action.tag
+    if action.type == "replace_tags":
+        return "replace_tags", action.tags
+    if action.type.startswith("move"):
+        return "move", action.target_deck
+    if action.type == "set_flag":
+        return "set_flag", action.flag
+    if action.type == "clear_flag":
+        return "set_flag", "none"
+    if action.type.startswith("suspend"):
+        return "suspend", None
+    if action.type.startswith("unsuspend"):
+        return "unsuspend", None
+    if action.type == "delete_card":
+        return "delete_card", None
+    return "delete_note", None
+
+
 def validate_cleanup_event(event: CleanupEvent) -> None:
     if event.schema != SchemaVersion() or event.event_type != "cleanup_run":
         raise HistoryEventValidationError("unsupported cleanup-history schema")
     for field, value in (("event_id", event.event_id), ("source_id", event.source_id)):
         try:
-            UUID(value)
+            parsed = UUID(value)
         except (AttributeError, TypeError, ValueError) as exc:
             raise HistoryEventValidationError(f"{field} must be a UUID") from exc
+        if str(parsed) != value:
+            raise HistoryEventValidationError(f"{field} must be a canonical UUID")
     if not event.producer.card_janitor_version or not event.producer.anki_version:
         raise HistoryEventValidationError("producer versions must not be empty")
     started = _parse_aware_timestamp(event.time.started_at, "time.started_at")
@@ -1841,12 +1892,14 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
         raise HistoryEventValidationError("cleanup event requires at least one policy")
 
     refs: dict[tuple[str, str], PolicySnapshot] = {}
+    actions_by_policy: dict[tuple[str, str], set[EventAction]] = {}
     for snapshot in event.policies:
-        _validate_policy_snapshot(snapshot)
+        policy = _validate_policy_snapshot(snapshot)
         key = snapshot.reference.id, snapshot.reference.definition_hash
         if key in refs:
             raise HistoryEventValidationError("duplicate policy snapshot")
         refs[key] = snapshot
+        actions_by_policy[key] = {_model_event_action(action) for action in policy.actions}
     if len({snapshot.reference.id.casefold() for snapshot in event.policies}) != len(
         event.policies
     ):
@@ -1855,6 +1908,8 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
     if len(event.policy_results) != len(event.policies):
         raise HistoryEventValidationError("every policy must have exactly one result")
     signatures_by_policy: dict[tuple[str, str], set[str]] = {}
+    signature_counts_by_policy: dict[tuple[str, str], dict[str, int]] = {}
+    complete_provenance_by_policy: dict[tuple[str, str], bool] = {}
     result_keys: set[tuple[str, str]] = set()
     for result in event.policy_results:
         key = result.policy.id, result.policy.definition_hash
@@ -1914,6 +1969,10 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
         if provenance.status == "complete":
             if provenance.reason_code is not None or provenance.reason_message is not None:
                 raise HistoryEventValidationError("complete provenance cannot contain a reason")
+            if result.evaluation.status != "succeeded":
+                raise HistoryEventValidationError(
+                    "complete provenance requires a successful evaluation"
+                )
             signature_ids = {signature.id for signature in provenance.signatures}
             if len(signature_ids) != len(provenance.signatures):
                 raise HistoryEventValidationError("duplicate match signature")
@@ -1957,10 +2016,16 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
                             )
                         _resolve_pointer(definition, child)
             signatures_by_policy[key] = signature_ids
+            signature_counts_by_policy[key] = {
+                signature.id: signature.trigger_cards for signature in provenance.signatures
+            }
+            complete_provenance_by_policy[key] = True
         else:
             if provenance.signatures or not provenance.reason_code or not provenance.reason_message:
                 raise HistoryEventValidationError("unavailable provenance requires a reason")
             signatures_by_policy[key] = set()
+            signature_counts_by_policy[key] = {}
+            complete_provenance_by_policy[key] = False
     if result_keys != set(refs):
         raise HistoryEventValidationError("every policy must have exactly one result")
 
@@ -2009,6 +2074,8 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
         not event.outcome.failure.code or not event.outcome.failure.message
     ):
         raise HistoryEventValidationError("failure details must include a code and message")
+    if event.outcome.failure is not None and event.outcome.failure.recovery == "":
+        raise HistoryEventValidationError("failure recovery must not be empty")
     if (
         event.outcome.status != "succeeded"
         and event.outcome.stage
@@ -2043,6 +2110,12 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
             raise HistoryEventValidationError("history entity counts are inconsistent")
         if not record.contributors:
             raise HistoryEventValidationError("effect/disposition requires contributors")
+        if counts.matching_trigger_cards > sum(
+            contributor.trigger_cards for contributor in record.contributors
+        ):
+            raise HistoryEventValidationError(
+                "matching-trigger count exceeds contributor trigger counts"
+            )
         contributor_keys = tuple(
             (item.policy.id, item.policy.definition_hash) for item in record.contributors
         )
@@ -2054,12 +2127,33 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
             key = contributor.policy.id, contributor.policy.definition_hash
             if key not in refs:
                 raise HistoryEventValidationError("contributor references a missing policy")
+            if record.action not in actions_by_policy[key]:
+                raise HistoryEventValidationError(
+                    "contributor policy does not contain the recorded action"
+                )
             if not set(contributor.match_signatures) <= signatures_by_policy[key]:
                 raise HistoryEventValidationError("contributor references a missing signature")
             if contributor.trigger_cards <= 0:
                 raise HistoryEventValidationError("contributor count must be positive")
             if contributor.match_signatures != tuple(sorted(set(contributor.match_signatures))):
                 raise HistoryEventValidationError("contributor signatures are not canonical")
+            is_historical_preview_match = (
+                isinstance(record, NonAppliedRecord)
+                and record.disposition == "preview_no_longer_matching"
+            )
+            if complete_provenance_by_policy[key] and not is_historical_preview_match:
+                if not contributor.match_signatures:
+                    raise HistoryEventValidationError(
+                        "complete provenance requires contributor match signatures"
+                    )
+                available_trigger_cards = sum(
+                    signature_counts_by_policy[key][signature_id]
+                    for signature_id in contributor.match_signatures
+                )
+                if contributor.trigger_cards > available_trigger_cards:
+                    raise HistoryEventValidationError(
+                        "contributor count exceeds its match-signature counts"
+                    )
     admitted_dispositions = {
         "already_satisfied",
         "conflict",
@@ -2102,6 +2196,8 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
             step.status != "completed" for step in event.execution.steps
         ):
             raise HistoryEventValidationError("complete execution contains an incomplete step")
+        if event.outcome.status != "succeeded":
+            raise HistoryEventValidationError("complete execution conflicts with outcome")
     elif event.execution.status == "not_reached":
         if event.execution.steps or event.execution.reason_code is not None:
             raise HistoryEventValidationError("unreached execution cannot contain details")
@@ -2132,6 +2228,17 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
         "failed_unknown",
         "not_attempted_due_to_failure",
     }
+    target_kinds = {
+        "add_tag": "note",
+        "remove_tag": "note",
+        "replace_tags": "note",
+        "move": "card",
+        "set_flag": "card",
+        "suspend": "card",
+        "unsuspend": "card",
+        "delete_card": "card",
+        "delete_note": "note",
+    }
     for step in event.execution.steps:
         if step.operation not in {
             "add_tag",
@@ -2147,6 +2254,8 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
             raise HistoryEventValidationError("invalid execution operation")
         if step.target_kind not in {"card", "note"} or step.status not in allowed_step_statuses:
             raise HistoryEventValidationError("invalid execution step")
+        if step.target_kind != target_kinds[step.operation]:
+            raise HistoryEventValidationError("execution operation has the wrong target kind")
         if not step.targets or any(target.targets <= 0 for target in step.targets):
             raise HistoryEventValidationError("execution target counts must be positive")
         for target in step.targets:
@@ -2154,13 +2263,13 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
             if step.operation in {"suspend", "unsuspend", "delete_card", "delete_note"}:
                 valid_parameter = parameter is None
             elif parameter is None:
-                valid_parameter = True
+                valid_parameter = step.operation == "move"
             elif step.operation == "replace_tags":
                 valid_parameter = (
                     isinstance(parameter, tuple)
-                    and bool(parameter)
                     and all(isinstance(item, str) and item for item in parameter)
                     and len({item.casefold() for item in parameter}) == len(parameter)
+                    and parameter == tuple(sorted(parameter, key=str.casefold))
                 )
             elif step.operation == "set_flag":
                 valid_parameter = parameter in {
@@ -2177,3 +2286,63 @@ def validate_cleanup_event(event: CleanupEvent) -> None:
                 valid_parameter = isinstance(parameter, str) and bool(parameter)
             if not valid_parameter:
                 raise HistoryEventValidationError("invalid execution target parameter")
+
+    if event.execution.status == "partial":
+        terminal_statuses = {
+            "completed_undo_merge_failed",
+            "failed_before_mutation",
+            "failed_unknown",
+        }
+        terminal_indices = [
+            index
+            for index, step in enumerate(event.execution.steps)
+            if step.status in terminal_statuses
+        ]
+        if len(terminal_indices) != 1:
+            raise HistoryEventValidationError(
+                "partial execution requires exactly one terminal failed step"
+            )
+        terminal_index = terminal_indices[0]
+        if any(
+            step.status != "completed" for step in event.execution.steps[:terminal_index]
+        ) or any(
+            step.status != "not_attempted_due_to_failure"
+            for step in event.execution.steps[terminal_index + 1 :]
+        ):
+            raise HistoryEventValidationError("partial execution step order is inconsistent")
+        terminal_status = event.execution.steps[terminal_index].status
+        expected_stage = (
+            "undo_merge" if terminal_status == "completed_undo_merge_failed" else "execution"
+        )
+        if event.outcome.stage != expected_stage:
+            raise HistoryEventValidationError("partial execution conflicts with outcome stage")
+
+    if event.outcome.effects_complete and event.execution.status in {"complete", "partial"}:
+        completed_targets = tuple(
+            (step.operation, target.parameter)
+            for step in event.execution.steps
+            if step.status in {"completed", "completed_undo_merge_failed"}
+            for target in step.targets
+        )
+        effect_keys = tuple(_effect_execution_key(effect.action) for effect in event.effects)
+
+        def keys_match(
+            effect_key: tuple[str, str | tuple[str, ...] | None],
+            target_key: tuple[str, str | tuple[str, ...] | None],
+        ) -> bool:
+            effect_operation, effect_parameter = effect_key
+            target_operation, target_parameter = target_key
+            return effect_operation == target_operation and (
+                target_parameter is None or target_parameter == effect_parameter
+            )
+
+        if any(
+            not any(keys_match(effect_key, target_key) for target_key in completed_targets)
+            for effect_key in effect_keys
+        ) or any(
+            not any(keys_match(effect_key, target_key) for effect_key in effect_keys)
+            for target_key in completed_targets
+        ):
+            raise HistoryEventValidationError(
+                "recorded effects do not agree with completed execution steps"
+            )

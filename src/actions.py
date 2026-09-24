@@ -448,7 +448,7 @@ def build_execution_plan(  # noqa: PLR0912
         )
 
 
-def _action_target_kind(action: object) -> str:
+def history_action_target_kind(action: object) -> str:
     if isinstance(action, (TagAction, RemoveTagAction, ReplaceTagsAction)):
         return "note"
     return "note" if action_expands_to_siblings(action) else "card"
@@ -522,7 +522,7 @@ def _build_plan_semantics(
             qualifying_by_note.setdefault(card.note_id, set()).add(card.card_id)
         for card, actions in report.card_actions:
             for resolved in actions:
-                target_kind = _action_target_kind(resolved.action)
+                target_kind = history_action_target_kind(resolved.action)
                 trigger_ids = (
                     qualifying_by_note.get(card.note_id, set())
                     if target_kind == "note"
@@ -559,7 +559,7 @@ def _build_plan_semantics(
                 )
         for boundary in report.boundary_dispositions:
             for resolved in boundary.actions:
-                target_kind = _action_target_kind(resolved.action)
+                target_kind = history_action_target_kind(resolved.action)
                 intentions.append(
                     LogicalIntention(
                         policy_id=report.policy.id,
@@ -568,7 +568,7 @@ def _build_plan_semantics(
                         target_id=(boundary.note_id if target_kind == "note" else boundary.card_id),
                         target_card_id=boundary.card_id,
                         target_note_id=boundary.note_id,
-                        trigger_card_ids=(boundary.card_id,),
+                        trigger_card_ids=boundary.trigger_card_ids,
                         disposition=boundary.code,
                     )
                 )

@@ -41,6 +41,7 @@ from card_janitor.models import (
     MoveAction,
     Policy,
     RemoveTagAction,
+    ReplaceTagsAction,
     Scope,
     SetFlagAction,
     SuspendAction,
@@ -211,6 +212,34 @@ def test_success_event_is_self_contained_and_preserves_complete_provenance() -> 
     assert serialized["execution"]["steps"][0]["targets"] == [{"count": 1}]
 
 
+def test_wide_any_provenance_is_canonical_before_validation() -> None:
+    value = replace(
+        policy(),
+        conditions=AnyConditions(tuple(IntervalCondition(days, "gte") for days in range(11))),
+    )
+    report = evaluated_report(value, card())
+    ledger = ExecutionLedger(
+        "complete",
+        (
+            ExecutionLedgerStep(
+                0,
+                "suspend",
+                "card",
+                (ExecutionLedgerTarget(None, (1,)),),
+                "completed",
+            ),
+        ),
+        effects_complete=True,
+        unknown_effects_possible=False,
+    )
+
+    event = successful_event((value,), (report,), ledger)
+    node = event.policy_results[0].match_provenance.signatures[0].any_nodes[0]
+
+    assert node.matched_children == tuple(sorted(f"/conditions/{index}" for index in range(11)))
+    assert event_from_json(event_to_json(event)) == event
+
+
 def test_overlapping_policies_are_contributors_to_one_physical_effect() -> None:
     first = policy("first", "First")
     second = policy("second", "Second")
@@ -333,6 +362,32 @@ def test_no_op_and_narrow_non_applied_outcome_are_complete() -> None:
     assert event.effects == ()
     assert len(event.non_applied) == 1
     assert event.non_applied[0].disposition == "already_satisfied"
+
+
+def test_replace_tags_with_empty_set_round_trips_as_clear_all_tags() -> None:
+    value = policy(actions=(ReplaceTagsAction(()),))
+    report = evaluated_report(value, card())
+    ledger = ExecutionLedger(
+        "complete",
+        (
+            ExecutionLedgerStep(
+                0,
+                "replace_tags",
+                "note",
+                (ExecutionLedgerTarget((), (10,)),),
+                "completed",
+            ),
+        ),
+        effects_complete=True,
+        unknown_effects_possible=False,
+    )
+
+    event = successful_event((value,), (report,), ledger)
+    serialized = event_to_dict(event)
+
+    assert serialized["effects"][0]["action"] == {"type": "replace_tags", "tags": []}
+    assert serialized["execution"]["steps"][0]["targets"] == [{"parameter": [], "count": 1}]
+    assert event_from_json(event_to_json(event)) == event
 
 
 def test_event_keeps_fresh_evaluation_counts_after_approval_filtering() -> None:
@@ -458,11 +513,11 @@ def test_execution_ledger_translates_move_ids_to_historical_deck_names() -> None
                 "move",
                 "card",
                 (ExecutionLedgerTarget(2, (1,)),),
-                "not_attempted_due_to_failure",
+                "failed_unknown",
             ),
         ),
-        effects_complete=True,
-        unknown_effects_possible=False,
+        effects_complete=False,
+        unknown_effects_possible=True,
     )
 
     event = build_cleanup_event(
@@ -593,6 +648,48 @@ def test_validation_rejects_broken_snapshot_hash_and_provenance_pointer() -> Non
     with pytest.raises(HistoryEventValidationError, match="outside"):
         validate_cleanup_event(replace(event, policy_results=(result,)))
 
+    unavailable_evaluation = replace(
+        event.policy_results[0].evaluation,
+        status="unavailable",
+        qualifying_trigger_cards=None,
+        actionable_cards_after_expansion=None,
+        reason_code="evaluation_unavailable",
+    )
+    result = replace(event.policy_results[0], evaluation=unavailable_evaluation)
+    with pytest.raises(HistoryEventValidationError, match="successful evaluation"):
+        validate_cleanup_event(replace(event, policy_results=(result,)))
+
+    contributor = replace(event.effects[0].contributors[0], match_signatures=())
+    effect = replace(event.effects[0], contributors=(contributor,))
+    with pytest.raises(HistoryEventValidationError, match="contributor match signatures"):
+        validate_cleanup_event(replace(event, effects=(effect,)))
+
+    contributor = replace(event.effects[0].contributors[0], trigger_cards=2)
+    effect = replace(event.effects[0], contributors=(contributor,))
+    with pytest.raises(HistoryEventValidationError, match="match-signature counts"):
+        validate_cleanup_event(replace(event, effects=(effect,)))
+
+    unrelated_action = replace(event.effects[0].action, type="delete_card")
+    effect = replace(event.effects[0], action=unrelated_action)
+    with pytest.raises(HistoryEventValidationError, match="does not contain"):
+        validate_cleanup_event(replace(event, effects=(effect,)))
+
+    mismatched_step = replace(event.execution.steps[0], operation="unsuspend")
+    execution = replace(event.execution, steps=(mismatched_step,))
+    with pytest.raises(HistoryEventValidationError, match="do not agree"):
+        validate_cleanup_event(replace(event, execution=execution))
+
+    incomplete_step = replace(event.execution.steps[0], status="not_attempted_due_to_failure")
+    execution = replace(event.execution, status="partial", steps=(incomplete_step,))
+    outcome = replace(
+        event.outcome,
+        status="failed",
+        stage="execution",
+        failure=FailureRecord("execution_failed", "Execution failed"),
+    )
+    with pytest.raises(HistoryEventValidationError, match="terminal failed step"):
+        validate_cleanup_event(replace(event, outcome=outcome, execution=execution))
+
 
 def test_validation_rejects_naive_timestamps() -> None:
     value = policy()
@@ -603,3 +700,16 @@ def test_validation_rejects_naive_timestamps() -> None:
         validate_cleanup_event(
             replace(event, time=replace(event.time, started_at="2026-09-23T14:32:09"))
         )
+
+
+def test_decoder_rejects_noncanonical_json_and_event_identity() -> None:
+    with pytest.raises(HistoryEventValidationError, match="duplicate field"):
+        event_from_json('{"schema":{},"schema":{}}')
+    with pytest.raises(HistoryEventValidationError, match="non-standard JSON"):
+        event_from_json('{"schema":NaN}')
+
+    value = policy()
+    report = evaluated_report(value, card(interval=1, tags=frozenset()))
+    event = successful_event((value,), (report,), EMPTY_EXECUTION_LEDGER)
+    with pytest.raises(HistoryEventValidationError, match="canonical UUID"):
+        validate_cleanup_event(replace(event, event_id=event.event_id.upper()))

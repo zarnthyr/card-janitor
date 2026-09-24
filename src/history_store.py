@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import shutil
 import tempfile
@@ -18,6 +17,7 @@ from .history_events import (
     HISTORY_SCHEMA_VERSION,
     CleanupEvent,
     HistoryEventValidationError,
+    _parse_json,
     event_from_dict,
     event_to_json,
 )
@@ -87,9 +87,9 @@ def existing_source_id_for_profile(profile: dict[str, object]) -> str | None:
 def _decode_record(line_number: int, line: str) -> HistoryRecord:
     raw_json = line.rstrip("\r\n")
     try:
-        value = json.loads(raw_json)
-    except json.JSONDecodeError as exc:
-        return HistoryRecord(line_number, raw_json, error=f"invalid JSON: {exc.msg}")
+        value = _parse_json(raw_json)
+    except HistoryEventValidationError as exc:
+        return HistoryRecord(line_number, raw_json, error=str(exc))
     if not isinstance(value, dict):
         return HistoryRecord(line_number, raw_json, error="event must be an object")
     schema = value.get("schema")
@@ -109,6 +109,8 @@ def _decode_record(line_number: int, line: str) -> HistoryRecord:
         event = event_from_dict(value)
     except HistoryEventValidationError as exc:
         return HistoryRecord(line_number, raw_json, error=str(exc))
+    except Exception as exc:
+        return HistoryRecord(line_number, raw_json, error=f"event could not be decoded: {exc}")
     return HistoryRecord(line_number, raw_json, event=event)
 
 
@@ -157,16 +159,25 @@ class HistoryStore:
     def append(self, event: CleanupEvent) -> None:
         if event.source_id != self.source_id:
             raise HistoryEventValidationError("event source does not match history store")
-        encoded = event_to_json(event) + "\n"
+        encoded = (event_to_json(event) + "\n").encode("utf-8")
         try:
             with self._lock:
                 created = not self.directory.exists()
                 self.directory.mkdir(parents=True, exist_ok=True)
                 if created:
                     _flush_directory(self.directory.parent)
-                with self.path.open("a", encoding="utf-8", newline="\n") as handle:
-                    handle.write(encoded)
+                file_created = not self.path.exists()
+                with self.path.open("a+b") as handle:
+                    handle.seek(0, os.SEEK_END)
+                    size = handle.tell()
+                    needs_separator = False
+                    if size:
+                        handle.seek(-1, os.SEEK_END)
+                        needs_separator = handle.read(1) != b"\n"
+                    handle.write((b"\n" if needs_separator else b"") + encoded)
                     _flush_file(handle)
+                if file_created:
+                    _flush_directory(self.directory)
         except OSError as exc:
             raise HistoryStorageError(f"could not append cleanup history: {exc}") from exc
 
@@ -180,17 +191,25 @@ class HistoryStore:
             raise ValueError("history page limit must be positive")
         if before_line is not None and before_line <= 1:
             return HistoryPage((), None)
-        if not self.path.exists():
-            return HistoryPage((), None)
         records: deque[HistoryRecord] = deque(maxlen=limit)
         eligible = 0
         try:
-            with self._lock, self.path.open("rb") as handle:
-                for line_number, line in enumerate(handle, start=1):
-                    if before_line is not None and line_number >= before_line:
-                        break
-                    eligible += 1
-                    records.append(_decode_bytes_record(line_number, line))
+            with self._lock:
+                if not self.path.exists():
+                    return HistoryPage((), None)
+                with self.path.open("rb") as handle:
+                    for line_number, line in enumerate(handle, start=1):
+                        if before_line is not None and line_number >= before_line:
+                            break
+                        eligible += 1
+                        record = _decode_bytes_record(line_number, line)
+                        if record.event is not None and record.event.source_id != self.source_id:
+                            record = HistoryRecord(
+                                line_number,
+                                record.raw_json,
+                                error="event source does not match history store",
+                            )
+                        records.append(record)
         except OSError as exc:
             raise HistoryStorageError(f"could not read cleanup history: {exc}") from exc
         newest_first = tuple(reversed(records))
@@ -201,7 +220,7 @@ class HistoryStore:
         self,
         destination: Path,
     ) -> int:
-        if destination.absolute() == self.path.absolute():
+        if destination.resolve() == self.path.resolve():
             raise ValueError("history export destination cannot be the active log")
         destination = destination.absolute()
         exported = 0
