@@ -169,6 +169,19 @@ contains all successfully completed operations from that cleanup.
 Undo availability still follows Anki's normal Undo history and is not a
 persistent rollback mechanism.
 
+## Cleanup history
+
+Card Janitor records a local cleanup history by default. Click the **Last
+cleanup** summary in the policy manager to review recent manual and automatic
+runs, including the participating policies, changes made, affected cards or
+notes, and the historical reasons those policies matched.
+
+Cleanup history is an audit, not a backup or persistent Undo mechanism. It is
+stored locally for the current Anki profile and does not sync. The viewer can
+load older entries, export the complete JSONL history, or permanently delete
+it. Recording can be disabled under **Settings…** without deleting existing
+history; there is no automatic retention limit.
+
 ## Advanced editing
 
 Policies are normally created and edited with Card Janitor's policy editor.
@@ -184,9 +197,10 @@ See [policies.md](./docs/policies.md) for the complete JSON format and reference
 Policies are stored in the Anki collection and sync with it, so each profile
 has its own policies.
 
-Add-on settings such as automatic-cleanup, notification, and debug preferences
-are local to the Anki installation. Automatic cleanup is tracked separately for
-each profile.
+Add-on settings such as automatic-cleanup, cleanup-history, notification, and
+debug preferences are local to the Anki installation. Automatic cleanup and
+cleanup history are tracked separately for each profile. Cleanup history is
+stored in local add-on files rather than in the collection and does not sync.
 
 ## Known limitations
 
