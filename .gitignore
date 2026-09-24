@@ -219,6 +219,7 @@ tempCodeRunnerFile.py
 
 # Local development files
 .local/
+src/user_files/
 
 # PyPI configuration file
 .pypirc

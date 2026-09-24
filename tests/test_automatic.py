@@ -8,6 +8,7 @@ from aqt.main import AnkiQt
 from card_janitor import addon, automatic
 from card_janitor.configuration import COLLECTION_POLICIES_KEY
 from card_janitor.execution import StalePolicyDefinitionsError
+from card_janitor.history_semantics import PlanSemantics
 from card_janitor.models import Trigger, parse_policy, policy_to_dict
 
 
@@ -117,6 +118,7 @@ def runner(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
             notify_after_automatic_run=False,
             warn_on_invalid_automatic_policies=False,
             automatic_cleanup_enabled=True,
+            cleanup_history_enabled=False,
         ),
     )
     monkeypatch.setattr(automatic, "mw", window)
@@ -199,6 +201,93 @@ def test_due_invalid_policy_notification_names_policy(
     assert runner.window.pm.profile["card_janitor_last_cleanup"]["failure"] == (
         "Daily policy: missing deck"
     )
+
+
+def test_enabled_history_records_automatic_no_op_with_exact_triggers(
+    runner: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner.parsed.config.cleanup_history_enabled = True
+    prepared = {}
+    recorded = []
+    provenance_requests = []
+    session = SimpleNamespace(
+        collect_history=True,
+        error_message=None,
+        terminal_recorded=False,
+        record_terminal=lambda **kwargs: recorded.append(kwargs),
+    )
+
+    def prepare(**kwargs: object) -> object:
+        prepared.update(kwargs)
+        return session
+
+    def evaluate(*_args: object, **kwargs: object) -> tuple[()]:
+        provenance_requests.append(kwargs.get("collect_provenance"))
+        return ()
+
+    monkeypatch.setattr(automatic, "prepare_history_session", prepare)
+    monkeypatch.setattr(automatic, "evaluate_policies", evaluate)
+    monkeypatch.setattr(
+        automatic,
+        "build_execution_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            is_empty=True,
+            conflicted_card_ids=(),
+            semantics=PlanSemantics("complete"),
+        ),
+    )
+
+    automatic.run_automatic_policies(events=frozenset({"on_open"}))
+    operation = runner.operations[0]
+    operation.success(operation.op(runner.window.col))
+
+    assert prepared["enabled"] is True
+    assert prepared["invocation"].kind == "automatic"
+    assert prepared["invocation"].events == ("daily", "on_open")
+    assert prepared["activations"][0].triggers == ("daily",)
+    assert provenance_requests == [True]
+    assert len(recorded) == 1
+    assert recorded[0]["status"] == "succeeded"
+    assert recorded[0]["stage"] == "complete"
+    assert recorded[0]["ledger"].status == "complete"
+
+
+def test_audit_gap_warning_failure_does_not_interrupt_automatic_completion(
+    runner: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner.parsed.config.cleanup_history_enabled = True
+    session = SimpleNamespace(
+        collect_history=True,
+        error_message="audit gap",
+        terminal_recorded=False,
+        record_terminal=lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(automatic, "prepare_history_session", lambda **_kwargs: session)
+    monkeypatch.setattr(automatic, "evaluate_policies", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        automatic,
+        "build_execution_plan",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            is_empty=True,
+            conflicted_card_ids=(),
+            semantics=PlanSemantics("complete"),
+        ),
+    )
+    monkeypatch.setattr(
+        automatic,
+        "showWarning",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("display failed")),
+    )
+    monkeypatch.setattr(automatic, "exception", lambda *_args, **_kwargs: None)
+
+    automatic.run_automatic_policies(events=frozenset({"on_open"}))
+    operation = runner.operations[0]
+    operation.success(operation.op(runner.window.col))
+
+    assert runner.window.pm.profile[automatic.LAST_AUTOMATIC_DAYS_PROFILE_KEY] == {"p": 10}
+    assert automatic._run_state.token is None
 
 
 @pytest.mark.parametrize("event", ["on_open", "day_change", "on_sync"])

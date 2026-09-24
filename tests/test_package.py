@@ -3,10 +3,12 @@
 
 import ast
 import json
+import tomllib
 import zipfile
 from pathlib import Path
 
 import pytest
+from card_janitor.version import CARD_JANITOR_VERSION
 
 import package
 from package import (
@@ -32,6 +34,15 @@ def test_valid_archive(tmp_path: Path) -> None:
     archive = tmp_path / "addon.ankiaddon"
     write_archive(archive, set(REQUIRED_PACKAGE_FILES))
     validate_package(archive)
+
+
+def test_project_lockfile_and_runtime_versions_match() -> None:
+    root = Path(__file__).resolve().parents[1]
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    lockfile = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    locked = next(package for package in lockfile["package"] if package["name"] == "card-janitor")
+
+    assert project["project"]["version"] == CARD_JANITOR_VERSION == locked["version"]
 
 
 def test_runtime_relative_imports_are_in_package_allowlist() -> None:

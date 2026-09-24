@@ -3,9 +3,18 @@
 
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import dataclass
 from time import time
 
+from .history_semantics import (
+    NOT_COLLECTED_PROVENANCE,
+    AnyNodeMatch,
+    BoundaryDisposition,
+    CardMatchProvenance,
+    PolicyMatchProvenance,
+)
+from .log import exception
 from .models import (
     Action,
     AgeCondition,
@@ -110,6 +119,10 @@ class PolicyReport:
     resolved_actions: tuple[ResolvedAction, ...]
     card_actions: tuple[tuple[CardFacts, tuple[ResolvedAction, ...]], ...]
     errors: tuple[str, ...] = ()
+    match_provenance: PolicyMatchProvenance = NOT_COLLECTED_PROVENANCE
+    boundary_dispositions: tuple[BoundaryDisposition, ...] = ()
+    evaluation_qualifying_cards: int | None = None
+    evaluation_actionable_cards: int | None = None
 
 
 def _matches_number(actual: float, operator: str, expected: float) -> bool:
@@ -235,6 +248,75 @@ def matches_conditions(  # noqa: PLR0911, PLR0912
     raise TypeError(f"Unsupported condition: {condition!r}")
 
 
+def _trace_conditions(
+    condition: ConditionExpression,
+    card: CardFacts,
+    now_ms: int,
+    *,
+    note: NoteFacts | None,
+    path: str,
+) -> tuple[bool, tuple[AnyNodeMatch, ...]]:
+    """Evaluate every alternative while retaining traces only on successful routes."""
+    if isinstance(condition, (AllConditions, AnyConditions)):
+        evaluated = tuple(
+            _trace_conditions(
+                child,
+                card,
+                now_ms,
+                note=note,
+                path=f"{path}/conditions/{index}",
+            )
+            for index, child in enumerate(condition.conditions)
+        )
+        matched = (
+            all(child_matched for child_matched, _trace in evaluated)
+            if isinstance(condition, AllConditions)
+            else any(child_matched for child_matched, _trace in evaluated)
+        )
+        if not matched:
+            return False, ()
+        child_traces = tuple(
+            item for child_matched, trace in evaluated if child_matched for item in trace
+        )
+        if isinstance(condition, AllConditions):
+            return True, child_traces
+        matched_children = tuple(
+            f"{path}/conditions/{index}"
+            for index, (child_matched, _trace) in enumerate(evaluated)
+            if child_matched
+        )
+        return True, (AnyNodeMatch(path, matched_children), *child_traces)
+    return matches_conditions(condition, card, now_ms, note=note), ()
+
+
+def collect_match_provenance(
+    condition: ConditionExpression,
+    cards: tuple[CardFacts, ...],
+    now_ms: int,
+    *,
+    note_facts: dict[int, NoteFacts] | None,
+) -> PolicyMatchProvenance:
+    """Collect complete explanatory traces without affecting authoritative matching."""
+    try:
+        matches = []
+        for card in cards:
+            matched, any_nodes = _trace_conditions(
+                condition,
+                card,
+                now_ms,
+                note=note_facts.get(card.note_id) if note_facts is not None else None,
+                path="",
+            )
+            if not matched:
+                return PolicyMatchProvenance("unavailable", reason_code="trace_mismatch")
+            matches.append(CardMatchProvenance(card.card_id, any_nodes))
+        return PolicyMatchProvenance("complete", tuple(matches))
+    except Exception:
+        with suppress(Exception):
+            exception("match provenance collection failed")
+        return PolicyMatchProvenance("unavailable", reason_code="trace_evaluation_failed")
+
+
 def conditions_need_siblings(condition: ConditionExpression) -> bool:
     if isinstance(condition, (SiblingSuspensionCondition, SiblingReviewHistoryCondition)):
         return True
@@ -334,6 +416,7 @@ def evaluate_facts(
     *,
     now_ms: int | None = None,
     note_facts: dict[int, NoteFacts] | None = None,
+    collect_provenance: bool = False,
 ) -> PolicyReport:
     now_ms = int(time() * 1000) if now_ms is None else now_ms
     in_scope: list[CardFacts] = []
@@ -364,6 +447,16 @@ def evaluate_facts(
         if conditions_need_first_review(policy.conditions)
         else 0
     )
+    provenance = (
+        collect_match_provenance(
+            policy.conditions,
+            qualifying,
+            now_ms,
+            note_facts=note_facts,
+        )
+        if collect_provenance
+        else NOT_COLLECTED_PROVENANCE
+    )
     return PolicyReport(
         policy=policy,
         qualifying=qualifying,
@@ -371,4 +464,7 @@ def evaluate_facts(
         missing_first_review=missing,
         resolved_actions=resolved_actions,
         card_actions=tuple((card, resolved_actions) for card in qualifying),
+        match_provenance=provenance,
+        evaluation_qualifying_cards=len(qualifying),
+        evaluation_actionable_cards=len(actionable),
     )

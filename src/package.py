@@ -41,6 +41,11 @@ REQUIRED_PACKAGE_FILES = {
     "engine.py",
     "evaluator.py",
     "execution.py",
+    "history_events.py",
+    "history_dialog.py",
+    "history_runtime.py",
+    "history_semantics.py",
+    "history_store.py",
     "log.py",
     "manifest.json",
     "models.py",
@@ -49,6 +54,7 @@ REQUIRED_PACKAGE_FILES = {
     "presentation.py",
     "policies.md",
     "ui.py",
+    "version.py",
 }
 FORBIDDEN_NAMES = {"package.py"}
 FORBIDDEN_PARTS = {"__pycache__"}

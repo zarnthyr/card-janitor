@@ -298,6 +298,7 @@ class Policy:
 class AddonConfig:
     config_version: int
     automatic_cleanup_enabled: bool
+    cleanup_history_enabled: bool
     notify_after_automatic_run: bool
     warn_on_invalid_automatic_policies: bool
     debug_logging: bool
@@ -816,6 +817,7 @@ def parse_config(value: object) -> ParsedConfig:
         value = {
             "config_version": CONFIG_VERSION,
             "automatic_cleanup_enabled": True,
+            "cleanup_history_enabled": True,
             "notify_after_automatic_run": True,
             "warn_on_invalid_automatic_policies": True,
             "debug_logging": False,
@@ -826,6 +828,7 @@ def parse_config(value: object) -> ParsedConfig:
         allowed = {
             "config_version",
             "automatic_cleanup_enabled",
+            "cleanup_history_enabled",
             "notify_after_automatic_run",
             "warn_on_invalid_automatic_policies",
             "debug_logging",
@@ -845,6 +848,12 @@ def parse_config(value: object) -> ParsedConfig:
     if not isinstance(automatic_enabled, bool):
         issues.append(ConfigIssue("automatic_cleanup_enabled", "must be a boolean"))
         automatic_enabled = False
+
+    # History instrumentation must never block cleanup. Treat a malformed
+    # opt-out setting as the safe default instead of adding a fatal config issue.
+    history_enabled = value.get("cleanup_history_enabled", True)
+    if not isinstance(history_enabled, bool):
+        history_enabled = True
 
     notify = value.get("notify_after_automatic_run")
     if not isinstance(notify, bool):
@@ -889,6 +898,7 @@ def parse_config(value: object) -> ParsedConfig:
         config=AddonConfig(
             config_version=CONFIG_VERSION,
             automatic_cleanup_enabled=automatic_enabled,
+            cleanup_history_enabled=history_enabled,
             notify_after_automatic_run=notify,
             warn_on_invalid_automatic_policies=warn_invalid,
             debug_logging=debug_logging,

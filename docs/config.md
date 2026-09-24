@@ -34,6 +34,31 @@ or change the dashboard's Last cleanup result. Errors encountered during an
 actual manual or automatic cleanup are still reported when this setting is
 disabled.
 
+### Cleanup history
+
+`cleanup_history_enabled` — records an append-only audit of future manual and
+automatic cleanup runs in Card Janitor's local add-on files. Enabled by
+default.
+
+History is local to this Anki installation and profile-history stream. It is
+not stored in the collection and does not sync through Anki. Turning history
+off stops new events only; it does not delete, truncate, or hide existing
+history. Turning it on again records future runs and does not reconstruct the
+gap. Deliberate exports can contain collection metadata such as policy, deck,
+tag, and note-type names.
+
+History has no automatic retention limit. Export copies the complete local
+history without changing it. Delete permanently removes all cleanup history for
+the profile and retains no archive or recovery copy, so export or manually copy
+the JSONL file first when it should be kept. Import is not currently supported.
+Open the local viewer through the clickable Last cleanup summary on the Card
+Janitor dashboard. The viewer shows recent runs newest-first and provides
+`Load Older`, complete-history Export, and permanent Delete controls. Its run
+list separates Manual/Automatic source from the effective policy trigger or
+triggers. Selecting a run shows a compact summary of changes, affected cards or
+notes, and why the historical policies matched; policy scope and other
+secondary context are available in tooltips when useful.
+
 ### Debug logging
 
 `debug_logging` — prints additional cleanup diagnostics to Anki's terminal
@@ -51,6 +76,7 @@ The default configuration is:
     {
       "config_version": 1,
       "automatic_cleanup_enabled": true,
+      "cleanup_history_enabled": true,
       "notify_after_automatic_run": true,
       "warn_on_invalid_automatic_policies": true,
       "debug_logging": false

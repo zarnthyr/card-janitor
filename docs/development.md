@@ -139,6 +139,34 @@ from JSON with both Apply and Cancel to check window sizing.
 
 Preview must not create an Undo entry.
 
+### Cleanup History
+
+Use the expendable `dev` profile after changes to history execution semantics,
+event validation, persistence, or the viewer.
+
+1. Enable **Record cleanup history on this device**, run `make dev-seed`, and
+   load `tests/manual/dev-profile-config.json`.
+2. Apply the complete manual cleanup. Open the clickable **Last cleanup**
+   summary and confirm the newest row reports Manual source, no automatic
+   trigger, Changed, 13 distinct cards, and 12 participating policies.
+3. Inspect the selected event. Shared effects should be shown once under all
+   contributing policies, and note-wide changes must identify consequential
+   siblings in **Affected**.
+4. Use Anki Undo once and confirm the collection is restored. The cleanup event
+   should remain in history; v1 does not claim to track later Undo or Redo.
+5. Run a successful no-op cleanup and confirm it appears as **No change** with
+   a policies-evaluated explanation rather than invented changes.
+6. Exercise complete-history Export and permanent Delete. Export must not alter
+   the active history; Delete should remove the profile history only after
+   confirmation and should leave no retained archive.
+7. Disable history, run a cleanup, and confirm no new event is added. Re-enable
+   it and confirm later runs are recorded without reconstructing the gap.
+
+For corruption handling, work only on a copied expendable profile-history log.
+Append one malformed line and confirm the viewer marks that row Corrupt while
+surrounding valid events remain readable and Export preserves the complete
+underlying JSONL.
+
 ### Undo history stress test
 
 Use this focused test after changes to cleanup execution or Undo grouping. It
@@ -265,8 +293,8 @@ git push origin vX.Y.Z
 ```
 
 Pushing the tag publishes the GitHub Release automatically. Do not move or
-reuse a published version tag; increment the project version for the next
-release.
+reuse a published version tag; increment the project version in both
+`pyproject.toml` and `src/version.py` for the next release.
 
 Releases are created as drafts, receive the add-on asset, and are then
 published. With release immutability enabled, published assets and tags cannot

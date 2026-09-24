@@ -9,12 +9,16 @@ from types import SimpleNamespace
 import pytest
 from anki.collection import Collection
 from aqt.operations import QueryOp
+from card_janitor import actions as actions_module
 from card_janitor import automatic, evaluator, ui
+from card_janitor import execution as execution_module
 from card_janitor.actions import CleanupError, build_execution_plan, execute_plan
 from card_janitor.cleanup_preview import build_preview_rows
 from card_janitor.configuration import COLLECTION_POLICIES_KEY
 from card_janitor.evaluator import evaluate_policy
 from card_janitor.execution import StalePolicyDefinitionsError, execute_approved_reports
+from card_janitor.history_events import Invocation, PolicyActivation
+from card_janitor.history_runtime import prepare_history_session
 from card_janitor.models import (
     AgeCondition,
     AllCardsCondition,
@@ -68,8 +72,20 @@ def test_partial_cleanup_failure_is_grouped_and_recoverable(
             raise RuntimeError(message)
 
         monkeypatch.setattr(collection.sched, "suspend_cards", fail)
-        with pytest.raises(CleanupError, match="Earlier changes may have been applied"):
-            execute_plan(collection, build_execution_plan((report,), collection), "Failed cleanup")
+        with pytest.raises(CleanupError, match="Earlier changes may have been applied") as exc_info:
+            execute_plan(
+                collection,
+                build_execution_plan((report,), collection, collect_history=True),
+                "Failed cleanup",
+            )
+        ledger = exc_info.value.execution_ledger
+        assert exc_info.value.semantics.status == "complete"
+        assert ledger.status == "partial"
+        assert [step.status for step in ledger.steps] == ["completed", "failed_unknown"]
+        assert ledger.steps[0].targets[0].value == "retired"
+        assert ledger.steps[0].targets[0].target_ids == (note.id,)
+        assert not ledger.effects_complete
+        assert ledger.unknown_effects_possible
         assert collection.get_note(note.id).has_tag("retired")
         assert collection.undo_status().undo == "Failed cleanup"
         collection.undo()
@@ -94,15 +110,59 @@ def test_cleanup_over_undo_history_limit_remains_one_undo_entry(tmp_path: Path) 
             conditions=AllCardsCondition(),
             actions=tuple(TagAction(tag) for tag in tags),
         )
-        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+        plan = build_execution_plan(
+            (evaluate_policy(collection, policy),),
+            collection,
+            collect_history=True,
+        )
 
         result = execute_plan(collection, plan, "Large cleanup")
 
         assert result.affected_cards == 1
+        assert result.execution_ledger.status == "complete"
+        assert all(step.status == "completed" for step in result.execution_ledger.steps)
         assert set(tags).issubset(collection.get_note(note.id).tags)
         assert collection.undo_status().undo == "Large cleanup"
         collection.undo()
         assert not set(tags).intersection(collection.get_note(note.id).tags)
+    finally:
+        collection.close()
+
+
+def test_execution_ledger_failure_does_not_change_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collection = Collection(str(tmp_path / "ledger-unavailable.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        policy = Policy(
+            id="ledger-unavailable",
+            name="Ledger unavailable",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+        plan = build_execution_plan(
+            (evaluate_policy(collection, policy),),
+            collection,
+            collect_history=True,
+        )
+
+        def fail(_plan: object) -> object:
+            message = "injected ledger failure"
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(actions_module, "_planned_ledger_steps", fail)
+        result = execute_plan(collection, plan, "Unavailable ledger")
+
+        assert collection.get_note(note.id).has_tag("retired")
+        assert result.execution_ledger.status == "unavailable"
+        assert result.execution_ledger.reason_code == "execution_ledger_failed"
     finally:
         collection.close()
 
@@ -125,7 +185,11 @@ def test_large_partial_cleanup_failure_remains_one_undo_entry(
             conditions=AllCardsCondition(),
             actions=(*tuple(TagAction(tag) for tag in tags), SuspendAction()),
         )
-        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+        plan = build_execution_plan(
+            (evaluate_policy(collection, policy),),
+            collection,
+            collect_history=True,
+        )
 
         def fail(*_args: object) -> None:
             message = "injected suspension failure"
@@ -160,7 +224,11 @@ def test_completed_cleanup_reports_merge_undo_failure(
             conditions=AllCardsCondition(),
             actions=(TagAction("retired"),),
         )
-        plan = build_execution_plan((evaluate_policy(collection, policy),), collection)
+        plan = build_execution_plan(
+            (evaluate_policy(collection, policy),),
+            collection,
+            collect_history=True,
+        )
 
         def fail_merge(_undo_target: int) -> None:
             message = "injected merge failure"
@@ -172,6 +240,11 @@ def test_completed_cleanup_reports_merge_undo_failure(
 
         assert collection.get_note(note.id).has_tag("retired")
         assert "complete recovery cannot be guaranteed" in str(exc_info.value)
+        ledger = exc_info.value.execution_ledger
+        assert ledger.status == "partial"
+        assert [step.status for step in ledger.steps] == ["completed_undo_merge_failed"]
+        assert ledger.effects_complete
+        assert not ledger.unknown_effects_possible
     finally:
         collection.close()
 
@@ -567,6 +640,111 @@ def test_manual_execution_rejects_policy_changed_after_evaluation(tmp_path: Path
         collection.close()
 
 
+def test_approved_cleanup_writes_a_complete_local_history_event(tmp_path: Path) -> None:
+    collection = Collection(str(tmp_path / "recorded-cleanup.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+        policy = Policy(
+            id="recorded-cleanup",
+            name="Recorded cleanup",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+        save_policies(collection, policy)
+        preview = evaluate_policy(collection, policy)
+        session = prepare_history_session(
+            enabled=True,
+            profile={},
+            policies=(policy,),
+            invocation=Invocation("manual"),
+            activations=(PolicyActivation(policy.id, "manual"),),
+            anki_version="test",
+            root=tmp_path / "local-history",
+        )
+        assert session is not None
+
+        result = execute_approved_reports(
+            collection,
+            (preview,),
+            {policy.id: {card_id}},
+            "Recorded cleanup",
+            history=session,
+        )
+
+        assert result.affected_cards == 1
+        assert collection.get_note(note.id).has_tag("retired")
+        assert session.error_message is None
+        assert session.store is not None
+        page = session.store.read_recent()
+        assert len(page.records) == 1
+        event = page.records[0].event
+        assert event is not None
+        assert event.event_id == session.context.event_id
+        assert event.invocation == Invocation("manual")
+        assert event.outcome.status == "succeeded"
+        assert event.outcome.stage == "complete"
+        assert event.outcome.result == "changed"
+        assert event.outcome.effects_complete
+        assert event.policies[0].definition == policy_to_dict(policy)
+        assert event.policy_results[0].match_provenance.status == "complete"
+        assert event.execution.status == "complete"
+    finally:
+        collection.close()
+
+
+def test_preview_boundary_history_failure_does_not_change_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    collection = Collection(str(tmp_path / "boundary-history-failure.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "word"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+        policy = Policy(
+            id="boundary-history-failure",
+            name="Boundary history failure",
+            triggers=(),
+            scope=Scope((DeckSelector("Mining"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+        save_policies(collection, policy)
+        preview = evaluate_policy(collection, policy)
+
+        def fail(*_args: object, **_kwargs: object) -> object:
+            message = "injected boundary history failure"
+            raise RuntimeError(message)
+
+        monkeypatch.setattr(execution_module, "_history_boundary_dispositions", fail)
+        monkeypatch.setattr(execution_module, "exception", lambda *_args, **_kwargs: None)
+
+        result = execute_approved_reports(
+            collection,
+            (preview,),
+            {policy.id: {card_id}},
+            "Boundary history failure",
+            collect_history=True,
+        )
+
+        assert collection.get_note(note.id).has_tag("retired")
+        assert result.affected_cards == 1
+        assert result.semantics.status == "unavailable"
+        assert result.semantics.reason_code == "preview_boundary_trace_failed"
+        collection.undo()
+        assert not collection.get_note(note.id).has_tag("retired")
+    finally:
+        collection.close()
+
+
 def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path: Path) -> None:
     collection = Collection(str(tmp_path / "history.anki2"))
     try:
@@ -774,24 +952,62 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
         else:
             collection.set_deck([sibling], source)
             collection.set_deck([first], outside)
+        skipped_session = prepare_history_session(
+            enabled=True,
+            profile={},
+            policies=(policy,),
+            invocation=Invocation("manual"),
+            activations=(PolicyActivation(policy.id, "manual"),),
+            anki_version="test",
+            root=tmp_path / "skipped-history",
+        )
+        assert skipped_session is not None
         skipped = execute_approved_reports(
             collection,
             (report,),
             {policy.id: {sibling}},
             "Skip unapproved note",
+            history=skipped_session,
         )
         assert skipped.affected_cards == 0
+        assert {item.disposition for item in skipped.semantics.non_applied} == {
+            "preview_note_boundary"
+        }
+        expected_trigger = sibling if kind == "move_note" else first
+        assert all(
+            item.trigger_card_ids == (expected_trigger,) for item in skipped.semantics.non_applied
+        )
+        assert skipped_session.store is not None
+        skipped_event = skipped_session.store.read_recent().records[0].event
+        assert skipped_event is not None
+        assert len(skipped_event.non_applied) == 1
+        skipped_record = skipped_event.non_applied[0]
+        assert skipped_record.counts.cards == (1 if kind == "move_note" else 2)
+        assert skipped_record.counts.matching_trigger_cards == (0 if kind == "move_note" else 1)
+        assert skipped_record.counts.consequential_sibling_cards == 1
+        assert skipped_record.contributors[0].trigger_cards == 1
         collection.set_deck([first], source)
         collection.set_deck([sibling], outside)
         if kind == "suspend_note":
             collection.sched.suspend_cards([first])
         elif kind == "unsuspend_note":
             collection.sched.unsuspend_cards([first])
+        session = prepare_history_session(
+            enabled=True,
+            profile={},
+            policies=(policy,),
+            invocation=Invocation("manual"),
+            activations=(PolicyActivation(policy.id, "manual"),),
+            anki_version="test",
+            root=tmp_path / "local-history",
+        )
+        assert session is not None
         result = execute_approved_reports(
             collection,
             (report,),
             {policy.id: {sibling}},
             "Apply note action",
+            history=session,
         )
         assert result.affected_cards == 1
         changed = collection.get_card(sibling)
@@ -800,10 +1016,87 @@ def test_note_actions_expand_to_unsatisfied_siblings_and_can_be_undone(
             if kind == "move_note"
             else changed.queue == (-1 if kind == "suspend_note" else 0)
         )
+        assert session.error_message is None
+        assert session.store is not None
+        history_event = session.store.read_recent().records[0].event
+        assert history_event is not None
+        assert history_event.outcome.status == "succeeded"
+        assert history_event.outcome.result == "changed"
+        assert len(history_event.effects) == 1
+        assert history_event.effects[0].action.type == kind
+        assert history_event.effects[0].counts.cards == 1
+        assert history_event.effects[0].counts.matching_trigger_cards == 0
+        assert history_event.effects[0].counts.consequential_sibling_cards == 1
+        assert history_event.effects[0].contributors[0].trigger_cards == 1
         collection.undo()
         restored = collection.get_card(sibling)
         assert restored.did == outside
         assert restored.queue == (-1 if kind == "unsuspend_note" else 0)
+    finally:
+        collection.close()
+
+
+def test_note_wide_preview_candidate_retains_lost_trigger_provenance(
+    tmp_path: Path,
+) -> None:
+    collection = Collection(str(tmp_path / "lost-note-trigger.anki2"))
+    try:
+        source = collection.decks.add_normal_deck_with_name("Source").id
+        outside = collection.decks.add_normal_deck_with_name("Outside").id
+        model = collection.models.by_name("Basic (and reversed card)")
+        assert model is not None
+        note = collection.new_note(model)
+        note["Front"], note["Back"] = "front", "back"
+        collection.add_note(note, source)
+        trigger, sibling = map(int, collection.card_ids_of_note(note.id))
+        collection.set_deck([sibling], outside)
+        collection.sched.suspend_cards([trigger])
+        policy = Policy(
+            id="lost-note-trigger",
+            name="Lost note trigger",
+            triggers=(),
+            scope=Scope((DeckSelector("Source"),)),
+            conditions=TagCondition(("excluded",), "contains_none"),
+            actions=(SuspendAction("note"),),
+        )
+        save_policies(collection, policy)
+        preview = evaluate_policy(collection, policy)
+        assert [card.card_id for card in preview.qualifying] == [trigger]
+        assert [card.card_id for card in preview.actionable] == [sibling]
+        collection.tags.bulk_add([note.id], "excluded")
+        session = prepare_history_session(
+            enabled=True,
+            profile={},
+            policies=(policy,),
+            invocation=Invocation("manual"),
+            activations=(PolicyActivation(policy.id, "manual"),),
+            anki_version="test",
+            root=tmp_path / "local-history",
+        )
+        assert session is not None
+
+        result = execute_approved_reports(
+            collection,
+            (preview,),
+            {policy.id: {sibling}},
+            "Lost note trigger",
+            history=session,
+        )
+
+        assert result.affected_cards == 0
+        disposition = result.semantics.non_applied[0]
+        assert disposition.disposition == "preview_no_longer_matching"
+        assert disposition.target_card_id == sibling
+        assert disposition.trigger_card_ids == (trigger,)
+        assert session.store is not None
+        event = session.store.read_recent().records[0].event
+        assert event is not None
+        record = event.non_applied[0]
+        assert record.counts.cards == 1
+        assert record.counts.matching_trigger_cards == 0
+        assert record.counts.consequential_sibling_cards == 1
+        assert record.contributors[0].trigger_cards == 1
+        assert record.contributors[0].match_signatures == ()
     finally:
         collection.close()
 
@@ -865,6 +1158,106 @@ def test_policy_actions_only_affect_other_policy_matching_on_next_cleanup(tmp_pa
             "Second batch",
         )
         assert collection.get_card(card_id).queue == -1
+    finally:
+        collection.close()
+
+
+def test_fresh_execution_records_only_meaningful_preview_boundary_dispositions(
+    tmp_path: Path,
+) -> None:
+    collection = Collection(str(tmp_path / "history-boundary.anki2"))
+    try:
+        deck_id = collection.decks.id("Mining")
+        first_note = collection.new_note(collection.models.by_name("Basic"))
+        first_note["Front"] = "first"
+        collection.add_note(first_note, deck_id)
+        first_card = int(collection.card_ids_of_note(first_note.id)[0])
+        policy = parse_policy(
+            {
+                "id": "boundary",
+                "name": "Boundary",
+                "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
+                "match": "all",
+                "conditions": [
+                    {
+                        "type": "tags",
+                        "operator": "contains_none",
+                        "tags": ["excluded"],
+                    }
+                ],
+                "actions": [{"type": "suspend"}],
+            }
+        )
+        save_policies(collection, policy)
+        preview = evaluate_policy(collection, policy)
+        assert [card.card_id for card in preview.actionable] == [first_card]
+
+        collection.tags.bulk_add([first_note.id], "excluded")
+        second_note = collection.new_note(collection.models.by_name("Basic"))
+        second_note["Front"] = "second"
+        collection.add_note(second_note, deck_id)
+        second_card = int(collection.card_ids_of_note(second_note.id)[0])
+
+        result = execute_approved_reports(
+            collection,
+            (preview,),
+            {policy.id: {first_card}},
+            "Boundary test",
+            collect_history=True,
+        )
+
+        assert result.affected_cards == 0
+        assert collection.get_card(second_card).queue != -1
+        dispositions = {
+            (item.disposition, item.target_card_id) for item in result.semantics.non_applied
+        }
+        assert dispositions == {
+            ("preview_no_longer_matching", first_card),
+            ("preview_newly_matching", second_card),
+        }
+        assert result.semantics.effects == ()
+        assert result.execution_ledger.status == "complete"
+        assert result.execution_ledger.steps == ()
+    finally:
+        collection.close()
+
+
+def test_note_tag_effect_distinguishes_trigger_and_consequential_sibling(
+    tmp_path: Path,
+) -> None:
+    collection = Collection(str(tmp_path / "tag-sibling-history.anki2"))
+    try:
+        source = collection.decks.id("Source")
+        outside = collection.decks.id("Outside")
+        model = collection.models.by_name("Basic (and reversed card)")
+        assert model is not None
+        note = collection.new_note(model)
+        note["Front"], note["Back"] = "front", "back"
+        collection.add_note(note, source)
+        first, sibling = map(int, collection.card_ids_of_note(note.id))
+        collection.set_deck([sibling], outside)
+        policy = Policy(
+            id="tag-note",
+            name="Tag note",
+            triggers=(),
+            scope=Scope((DeckSelector("Source"),)),
+            conditions=AllCardsCondition(),
+            actions=(TagAction("retired"),),
+        )
+
+        report = evaluate_policy(collection, policy, collect_provenance=True)
+        plan = build_execution_plan(
+            (report,),
+            collection,
+            collect_history=True,
+        )
+
+        assert len(plan.semantics.effects) == 1
+        effect = plan.semantics.effects[0]
+        assert effect.affected_card_ids_complete
+        assert effect.affected_card_ids == tuple(sorted((first, sibling)))
+        assert effect.matching_trigger_card_ids == (first,)
+        assert effect.consequential_sibling_card_ids == (sibling,)
     finally:
         collection.close()
 

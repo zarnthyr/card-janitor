@@ -1,7 +1,10 @@
 # Copyright (C) 2026 Zarnthyr
 # License: GNU AGPL v3 or later
 
+from dataclasses import replace
+
 import pytest
+from card_janitor import engine
 from card_janitor.engine import (
     MILLIS_PER_DAY,
     CardFacts,
@@ -167,6 +170,184 @@ def test_one_level_condition_group_combines_and_with_or() -> None:
     assert matches_conditions(condition, facts(card_type=2, interval=30, queue=-1), 0)
     assert not matches_conditions(condition, facts(card_type=2, interval=30), 0)
     assert not matches_conditions(condition, facts(card_type=0, interval=180), 0)
+
+
+def test_match_provenance_captures_all_successful_any_alternatives() -> None:
+    condition = AllConditions(
+        (
+            CardStateCondition(("review",)),
+            AnyConditions(
+                (
+                    IntervalCondition(30, "gte"),
+                    SuspensionCondition("is_not_suspended"),
+                )
+            ),
+        )
+    )
+    report = evaluate_facts(
+        policy(condition),
+        [facts(interval=100, queue=2)],
+        {1},
+        (ResolvedAction(SuspendAction()),),
+        now_ms=0,
+        collect_provenance=True,
+    )
+
+    assert report.match_provenance.status == "complete"
+    assert report.match_provenance.cards[0].any_nodes == (
+        engine.AnyNodeMatch(
+            "/conditions/1",
+            (
+                "/conditions/1/conditions/0",
+                "/conditions/1/conditions/1",
+            ),
+        ),
+    )
+
+
+def test_match_provenance_omits_true_nodes_inside_failed_compound_branch() -> None:
+    condition = AnyConditions(
+        (
+            AllConditions(
+                (
+                    AnyConditions(
+                        (
+                            IntervalCondition(1, "gte"),
+                            SuspensionCondition("is_not_suspended"),
+                        )
+                    ),
+                    TagCondition(("missing",), "contains_any"),
+                )
+            ),
+            IntervalCondition(100, "gte"),
+            SuspensionCondition("is_not_suspended"),
+        )
+    )
+    report = evaluate_facts(
+        policy(condition),
+        [facts(interval=100, queue=2)],
+        {1},
+        (ResolvedAction(SuspendAction()),),
+        now_ms=0,
+        collect_provenance=True,
+    )
+
+    assert report.match_provenance.cards[0].any_nodes == (
+        engine.AnyNodeMatch("", ("/conditions/1", "/conditions/2")),
+    )
+
+
+def test_provenance_collection_does_not_change_authoritative_report() -> None:
+    configured = policy(
+        AnyConditions(
+            (
+                IntervalCondition(100, "gte"),
+                SuspensionCondition("is_suspended"),
+            )
+        )
+    )
+    cards = [facts(), facts(card_id=2, interval=1)]
+    action = (ResolvedAction(SuspendAction()),)
+    ordinary = evaluate_facts(configured, cards, {1}, action, now_ms=0)
+    traced = evaluate_facts(
+        configured,
+        cards,
+        {1},
+        action,
+        now_ms=0,
+        collect_provenance=True,
+    )
+
+    assert replace(traced, match_provenance=ordinary.match_provenance) == ordinary
+
+
+def test_provenance_failure_is_non_authoritative(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configured = policy(IntervalCondition(1, "gte"))
+    ordinary = evaluate_facts(
+        configured,
+        [facts()],
+        {1},
+        (ResolvedAction(SuspendAction()),),
+        now_ms=0,
+    )
+
+    def fail(*_args: object, **_kwargs: object) -> object:
+        message = "injected trace failure"
+        raise RuntimeError(message)
+
+    monkeypatch.setattr(engine, "_trace_conditions", fail)
+    traced = evaluate_facts(
+        configured,
+        [facts()],
+        {1},
+        (ResolvedAction(SuspendAction()),),
+        now_ms=0,
+        collect_provenance=True,
+    )
+
+    assert traced.match_provenance.status == "unavailable"
+    assert traced.match_provenance.reason_code == "trace_evaluation_failed"
+    assert replace(traced, match_provenance=ordinary.match_provenance) == ordinary
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        AllCardsCondition(),
+        AgeCondition(1, "created", "gte"),
+        IntervalCondition(100, "gte"),
+        CardStateCondition(("review",)),
+        CardFlagCondition(("purple",)),
+        AnswerCountCondition(10, "gte"),
+        CorrectAnswerCountCondition(8, "gte"),
+        LapseCountCondition(2, "gte"),
+        CorrectAnswerRateCondition(80, "gte"),
+        OverdueCondition(5, "gte"),
+        FsrsStabilityCondition(40, "gte"),
+        FsrsDifficultyCondition(60, "gte"),
+        FsrsRetrievabilityCondition(70, "gte"),
+        Sm2EaseCondition(250, "gte"),
+        ReviewHistoryCondition("exists"),
+        TagCondition(("foo",), "contains_any"),
+        SuspensionCondition("is_suspended"),
+        SiblingSuspensionCondition("any"),
+        SiblingReviewHistoryCondition("any"),
+    ],
+)
+def test_trace_leaf_evaluation_equals_authoritative_predicate(
+    condition: ConditionExpression,
+) -> None:
+    card = facts(
+        queue=-1,
+        interval=100,
+        flag=7,
+        answer_count=10,
+        correct_answer_count=8,
+        lapses=2,
+        overdue_days=5,
+        fsrs_stability=40,
+        fsrs_difficulty_percent=60,
+        fsrs_retrievability_percent=70,
+        sm2_ease_percent=250,
+        last_review_ms=2000,
+        tags=frozenset({"foo"}),
+    )
+    note = NoteFacts(card_count=2, suspended_count=1, studied_count=1)
+    now_ms = 1000 + 2 * MILLIS_PER_DAY
+
+    authoritative = matches_conditions(condition, card, now_ms, note=note)
+    traced, any_nodes = engine._trace_conditions(
+        condition,
+        card,
+        now_ms,
+        note=note,
+        path="/conditions/0",
+    )
+
+    assert traced is authoritative
+    assert any_nodes == ()
 
 
 def test_interval_condition_uses_current_interval_without_requiring_revlog() -> None:
