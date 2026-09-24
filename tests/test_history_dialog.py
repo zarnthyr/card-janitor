@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from anki.collection import OpChanges
-from aqt.qt import QApplication, QDialogButtonBox, QDir, QStyleOptionViewItem, Qt, QWidget
+from aqt.qt import QApplication, QDialog, QDialogButtonBox, QDir, QStyleOptionViewItem, Qt, QWidget
 from card_janitor import history_dialog
 from card_janitor.actions import ExecutionResult, build_execution_plan
 from card_janitor.engine import CardFacts, ResolvedAction, evaluate_facts
@@ -398,6 +398,32 @@ def test_simple_success_omits_schema_inspection_details(tmp_path: Path) -> None:
     assert changes.item(0, 0).textAlignment() & Qt.AlignmentFlag.AlignTop.value
     assert dialog.table.horizontalHeader().font() == changes.horizontalHeader().font()
     assert not changes.horizontalHeader().font().bold()
+    assert all(
+        not changes.horizontalHeaderItem(column).font().bold()
+        for column in range(changes.columnCount())
+    )
+    dialog.close()
+    parent.deleteLater()
+
+
+def test_selection_changes_are_deferred_and_coalesced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_id = str(uuid4())
+    store = HistoryStore(source_id, root=tmp_path)
+    store.append(cleanup_event(source_id, index=1))
+    store.append(cleanup_event(source_id, index=2))
+    parent = QWidget()
+    dialog = CleanupHistoryDialog({}, parent, store=store)
+    selected = []
+    monkeypatch.setattr(dialog.details, "set_record", selected.append)
+
+    dialog._selection_changed(1, 0, 0, 0)
+    dialog._selection_changed(0, 0, 1, 0)
+
+    assert selected == []
+    QApplication.processEvents()
+    assert selected == [dialog._records[0]]
     dialog.close()
     parent.deleteLater()
 
@@ -459,6 +485,25 @@ def test_wrapped_change_rows_use_width_aware_height_without_expanding_siblings(
 
     assert changes.rowHeight(0) >= hint.height()
     dialog.close()
+    parent.deleteLater()
+
+
+def test_closing_history_reactivates_parent_after_child_dialogs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_id = str(uuid4())
+    store = HistoryStore(source_id, root=tmp_path)
+    store.append(cleanup_event(source_id))
+    parent = QWidget()
+    dialog = CleanupHistoryDialog({}, parent, store=store)
+    focus_events = []
+    monkeypatch.setattr(parent, "raise_", lambda: focus_events.append("raised"))
+    monkeypatch.setattr(parent, "activateWindow", lambda: focus_events.append("activated"))
+
+    dialog.done(QDialog.DialogCode.Rejected)
+    QApplication.processEvents()
+
+    assert focus_events == ["raised", "activated"]
     parent.deleteLater()
 
 
@@ -957,6 +1002,7 @@ def test_dialog_exposes_corrupt_and_unsupported_records(tmp_path: Path) -> None:
     dialog.table.setCurrentCell(0, 0)
     assert "cannot interpret" in dialog.details.toPlainText()
     dialog.table.setCurrentCell(1, 0)
+    QApplication.processEvents()
     assert "could not be decoded" in dialog.details.toPlainText()
     dialog.close()
     parent.deleteLater()

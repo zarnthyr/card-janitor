@@ -16,6 +16,7 @@ from aqt.qt import (
     QDialogButtonBox,
     QDir,
     QFileDialog,
+    QFont,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -23,6 +24,7 @@ from aqt.qt import (
     QPalette,
     QPushButton,
     QScrollArea,
+    QSignalBlocker,
     QSize,
     QSizePolicy,
     QStyle,
@@ -761,10 +763,14 @@ def _table_item(text: str, tooltip_text: str = "") -> QTableWidgetItem:
     return item
 
 
-def _use_details_header_font(table: QTableWidget) -> None:
-    font = table.font()
+def _use_details_header_font(table: QTableWidget, reference: QFont | None = None) -> None:
+    font = QFont(reference) if reference is not None else table.font()
     font.setBold(False)
     table.horizontalHeader().setFont(font)
+    for column in range(table.columnCount()):
+        item = table.horizontalHeaderItem(column)
+        if item is not None:
+            item.setFont(font)
 
 
 class _WrappedTextDelegate(QStyledItemDelegate):
@@ -806,10 +812,15 @@ class _WrappedTextDelegate(QStyledItemDelegate):
 
 
 class _DetailsTable(QTableWidget):
-    def __init__(self, headers: tuple[str, ...], parent: QWidget) -> None:
+    def __init__(
+        self,
+        headers: tuple[str, ...],
+        parent: QWidget,
+        header_font: QFont | None = None,
+    ) -> None:
         super().__init__(0, len(headers), parent)
         self.setHorizontalHeaderLabels(headers)
-        _use_details_header_font(self)
+        _use_details_header_font(self, header_font)
         self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.setWordWrap(True)
@@ -922,8 +933,9 @@ class _DetailsTable(QTableWidget):
 class HistoryDetailsWidget(QScrollArea):
     """Human summary of a validated event, distinct from the complete JSONL audit."""
 
-    def __init__(self, parent: QWidget) -> None:
+    def __init__(self, parent: QWidget, header_font: QFont) -> None:
         super().__init__(parent)
+        self._header_font = QFont(header_font)
         self.setWidgetResizable(True)
         self.setMinimumHeight(280)
         self._plain_text = ""
@@ -980,7 +992,11 @@ class HistoryDetailsWidget(QScrollArea):
             heading = QLabel("<h2>Changes made</h2>", page)
             heading.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
             layout.addWidget(heading)
-            table = _DetailsTable(("Policy", "Change", "Affected", "Why"), page)
+            table = _DetailsTable(
+                ("Policy", "Change", "Affected", "Why"),
+                page,
+                self._header_font,
+            )
             table.setRowCount(sum(len(items) for items in effects.values()))
             row = 0
             for group_index, key in enumerate(_ordered_contributor_keys(set(effects), event)):
@@ -1014,7 +1030,11 @@ class HistoryDetailsWidget(QScrollArea):
             heading = QLabel("<h2>Policies evaluated</h2>", page)
             heading.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
             layout.addWidget(heading)
-            table = _DetailsTable(("Policy", "Why", "Intended action"), page)
+            table = _DetailsTable(
+                ("Policy", "Why", "Intended action"),
+                page,
+                self._header_font,
+            )
             table.setRowCount(len(event.policies))
             for row, snapshot in enumerate(event.policies):
                 key = ((snapshot.reference.id, snapshot.reference.definition_hash),)
@@ -1063,6 +1083,8 @@ class CleanupHistoryDialog(QDialog):
         self._on_cleared = on_cleared
         self._records: list[HistoryRecord] = []
         self._next_before_line: int | None = None
+        self._pending_selection_row: int | None = None
+        self._selection_update_scheduled = False
 
         self.setWindowTitle("Cleanup History")
         self.setModal(False)
@@ -1109,7 +1131,7 @@ class CleanupHistoryDialog(QDialog):
         qconnect(self.table.currentCellChanged, self._selection_changed)
         layout.addWidget(self.table)
 
-        self.details = HistoryDetailsWidget(self)
+        self.details = HistoryDetailsWidget(self, self.table.horizontalHeader().font())
         layout.addWidget(self.details, 1)
 
         self.footer_layout = QHBoxLayout()
@@ -1125,6 +1147,20 @@ class CleanupHistoryDialog(QDialog):
         layout.addLayout(self.footer_layout)
 
         self._load_initial()
+
+    def done(self, result: int) -> None:
+        parent = self.parentWidget()
+        super().done(result)
+        if parent is not None:
+            QTimer.singleShot(0, lambda: self._restore_parent(parent))
+
+    @staticmethod
+    def _restore_parent(parent: QWidget) -> None:
+        try:
+            parent.raise_()
+            parent.activateWindow()
+        except RuntimeError:
+            pass
 
     def _warn(self, message: str) -> None:
         try:
@@ -1142,7 +1178,10 @@ class CleanupHistoryDialog(QDialog):
             return
         self._append_page(None)
         if self._records:
+            blocker = QSignalBlocker(self.table)
             self.table.setCurrentCell(0, 0)
+            del blocker
+            self.details.set_record(self._records[0])
         else:
             self._show_empty()
         self._update_controls()
@@ -1182,7 +1221,17 @@ class CleanupHistoryDialog(QDialog):
     def _selection_changed(
         self, current_row: int, _current_column: int, _previous_row: int, _previous_column: int
     ) -> None:
-        if 0 <= current_row < len(self._records):
+        self._pending_selection_row = current_row
+        if self._selection_update_scheduled:
+            return
+        self._selection_update_scheduled = True
+        QTimer.singleShot(0, self._apply_pending_selection)
+
+    def _apply_pending_selection(self) -> None:
+        self._selection_update_scheduled = False
+        current_row = self._pending_selection_row
+        self._pending_selection_row = None
+        if current_row is not None and 0 <= current_row < len(self._records):
             self.details.set_record(self._records[current_row])
 
     def _show_empty(self) -> None:
