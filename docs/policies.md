@@ -207,6 +207,17 @@ All numeric thresholds are whole numbers. Day fields accept 0 through 100,000;
 answer and lapse counts accept 0 through 1,000,000; ordinary and FSRS
 percentage fields accept 0 through 100; and SM-2 ease accepts 0 through 1,000.
 
+### Review-derived data
+
+Review-derived conditions use scheduling-relevant answers: normal Learning,
+Review, and Relearning answers, along with early or filtered-deck answers that
+update the card's normal scheduling state. Answers in a filtered deck with
+rescheduling disabled (preview/cram) do not count. Manually setting a due date,
+resetting, or otherwise rescheduling a card without answering it does not count.
+
+Lapse count is the exception: it uses Anki's cumulative per-card lapse value
+instead of reconstructing lapses from review-log answer buttons.
+
 ### Age
 
     {"type": "age", "days": 365, "source": "first_review", "operator": "gte"}
@@ -219,9 +230,9 @@ Supported sources are:
 
 Age is measured in completed 24-hour periods.
 
-`first_review` uses the earliest genuine answer in Anki's review log.
-`last_review` uses the latest genuine answer. Cards without the required review
-history do not match those sources.
+`first_review` uses the earliest scheduling-relevant answer in Anki's review
+log. `last_review` uses the latest scheduling-relevant answer. Cards without the
+required review history do not match those sources.
 
 `card_created` uses the creation timestamp embedded in the card ID.
 
@@ -283,14 +294,14 @@ describes its current Anki state, not whether it has ever been reviewed.
 
     {"type": "answer_count", "count": 100, "operator": "gte"}
 
-Counts genuine review-log answers with ratings 1 through 4. Manual scheduling
-and rescheduling entries do not count.
+Counts scheduling-relevant review-log answers with ratings 1 through 4.
 
 ### Correct answer count
 
     {"type": "correct_answer_count", "count": 80, "operator": "gte"}
 
-A correct answer is any genuine answer other than Again: ratings 2 through 4.
+A correct answer is any scheduling-relevant answer other than Again: ratings 2
+through 4.
 
 ### Correct answer rate
 
@@ -298,9 +309,9 @@ A correct answer is any genuine answer other than Again: ratings 2 through 4.
 
 The rate is:
 
-    correct genuine answers / all genuine answers * 100
+    correct scheduling-relevant answers / all scheduling-relevant answers * 100
 
-Cards with no genuine answers do not match this condition.
+Cards with no scheduling-relevant answers do not match this condition.
 
 ### Lapse count
 
@@ -317,9 +328,9 @@ Supported operators are:
 - `exists`
 - `not_exists`
 
-Review history means that the card has at least one genuine answer in Anki's
-review log. A previously reviewed card that was later reset to New still has
-review history. Manual scheduling entries do not count.
+Review history means that the card has at least one scheduling-relevant answer
+in Anki's review log. A previously reviewed card that was later reset to New
+still has review history.
 
 ### Note tags
 
@@ -373,8 +384,9 @@ Supported operators are:
 - `any`
 - `none`
 
-This checks every card generated from the note for genuine review history,
-including the triggering card itself and siblings outside the policy's scope.
+This checks every card generated from the note for scheduling-relevant review
+history, including the triggering card itself and siblings outside the policy's
+scope.
 
 Scope still determines which cards can trigger the policy. Sibling conditions
 can inspect cards that are outside scope, suspended, buried, or in filtered
