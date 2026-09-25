@@ -66,10 +66,12 @@ CARD_STATES = (
 )
 CONDITION_HELP = {
     "age_first_review": (
-        "Elapsed whole days since the card's earliest genuine answer in Anki's review log"
+        "Elapsed whole days since the card's earliest scheduling-relevant answer in Anki's "
+        "review log"
     ),
     "age_last_review": (
-        "Elapsed whole days since the card's most recent genuine answer in Anki's review log"
+        "Elapsed whole days since the card's most recent scheduling-relevant answer in Anki's "
+        "review log"
     ),
     "age_card_created": (
         "Elapsed whole days since the original creation timestamp stored in the card ID. "
@@ -81,21 +83,22 @@ CONDITION_HELP = {
         "The card's current scheduling state. This does not indicate whether it has review history."
     ),
     "card_flag": "The card's current Anki flag colour, including no flag",
-    "answer_count": "Number of genuine answers in the card's review log (ratings 1-4)",
-    "correct_answer_count": "Number of non-Again answers in the card's review log",
+    "answer_count": "Number of scheduling-relevant answers in the card's review log",
+    "correct_answer_count": "Number of scheduling-relevant non-Again answers",
     "correct_answer_rate": (
-        "Percentage of genuine answers that were not Again. Cards with no answers do not match."
+        "Percentage of scheduling-relevant answers that were not Again. Cards with no such "
+        "answers do not match."
     ),
     "lapse_count": "The card's cumulative lapse count stored by Anki",
     "sm2_ease": "The card's SM-2 ease percentage",
     "fsrs_stability": "The card's current FSRS stability in days",
     "fsrs_difficulty": "The card's current FSRS difficulty, normalized to 0-100%",
     "fsrs_retrievability": "The card's current estimated FSRS retrievability percentage",
-    "review_history": "Whether Anki's review log contains a genuine answer for the card",
+    "review_history": "Whether Anki's review log contains a scheduling-relevant answer",
     "tags": "Tags on the card's note. Sibling cards share the same tags.",
     "suspension": "Whether the card is currently suspended from Anki's schedule",
     "sibling_suspension": "Suspension across every card of the note, including the matching card and siblings outside scope",
-    "sibling_review_history": "Genuine review history across every card of the note, including the matching card and siblings outside scope",
+    "sibling_review_history": "Scheduling-relevant review history across every card of the note, including the matching card and siblings outside scope",
 }
 
 

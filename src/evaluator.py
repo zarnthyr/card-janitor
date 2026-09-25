@@ -27,6 +27,9 @@ if TYPE_CHECKING:
     from anki.collection import Collection
 
 REVIEW_CARD_TYPE = 2
+# Mirrors Anki's RevlogEntry::has_rating_and_affects_scheduling(). Review kind 3
+# also represents legitimate early reviews, so only its zero-factor cram form is excluded.
+_SCHEDULING_REVIEW_SQL = "r.ease > 0 and not (r.type = 3 and r.factor = 0)"
 
 
 def _resolve_deck_ids(col: Collection, policy: Policy) -> tuple[set[int], list[str]]:
@@ -164,7 +167,7 @@ def _load_facts_where(
         else "0"
     )
     history_join = (
-        "left join revlog r on r.cid = c.id and r.ease between 1 and 4" if load_history else ""
+        f"left join revlog r on r.cid = c.id and {_SCHEDULING_REVIEW_SQL}" if load_history else ""
     )
     grouping = "group by c.id" if load_history else ""
     eligibility = "and c.odid = 0" if eligible_only else ""

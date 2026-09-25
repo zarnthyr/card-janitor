@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from anki.collection import Collection
+from anki.scheduler.v3 import CardAnswer
 from aqt.operations import QueryOp
 from card_janitor import actions as actions_module
 from card_janitor import automatic, evaluator, ui
@@ -504,15 +505,15 @@ def test_sibling_conditions_include_suspended_and_studied_cards_outside_scope(
         collection.sched.suspend_cards([sibling])
         collection.db.execute(
             "insert into revlog values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            sibling - 1000,
+            sibling - 2000,
             sibling,
             -1,
             3,
             1,
             0,
-            2500,
-            1000,
             0,
+            1000,
+            3,
         )
 
         def evaluate(condition: dict) -> object:
@@ -532,6 +533,23 @@ def test_sibling_conditions_include_suspended_and_studied_cards_outside_scope(
 
         ordinary = evaluate({"type": "review_history", "operator": "not_exists"})
         assert len(ordinary.actionable) == 2
+        preview_only = evaluate({"type": "sibling_review_history", "operator": "none"})
+        assert [card.card_id for card in preview_only.qualifying] == [first]
+        assert {card.card_id for card in preview_only.actionable} == {first, sibling}
+        assert not evaluate({"type": "sibling_review_history", "operator": "any"}).qualifying
+
+        collection.db.execute(
+            "insert into revlog values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            sibling - 1000,
+            sibling,
+            -1,
+            3,
+            1,
+            0,
+            2500,
+            1000,
+            0,
+        )
         assert not evaluate({"type": "sibling_review_history", "operator": "none"}).actionable
         for kind in ("sibling_review_history", "sibling_suspension"):
             matched = evaluate({"type": kind, "operator": "any"})
@@ -745,7 +763,7 @@ def test_preview_boundary_history_failure_does_not_change_cleanup(
         collection.close()
 
 
-def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path: Path) -> None:
+def test_review_facts_use_scheduling_relevant_answers(tmp_path: Path) -> None:
     collection = Collection(str(tmp_path / "history.anki2"))
     try:
         deck_id = collection.decks.id("Mining")
@@ -753,7 +771,18 @@ def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path:
         note["Front"] = "history"
         collection.add_note(note, deck_id)
         card_id = int(collection.card_ids_of_note(note.id)[0])
-        for offset, ease in ((3000, 1), (2000, 3), (1000, 0)):
+        rows = (
+            # Learning, Review, Relearning, and scheduling-enabled filtered answers count.
+            (7000, 1, 2500, 0),
+            (6000, 2, 2500, 1),
+            (5000, 3, 2500, 2),
+            (4000, 4, 2500, 3),
+            # Non-rescheduling preview/cram and ungraded scheduler operations do not.
+            (3000, 4, 0, 3),
+            (2000, 0, 2500, 4),
+            (1000, 0, 2500, 5),
+        )
+        for offset, ease, factor, review_type in rows:
             collection.db.execute(
                 "insert into revlog values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 card_id - offset,
@@ -762,9 +791,9 @@ def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path:
                 ease,
                 1,
                 0,
-                2500,
+                factor,
                 1000,
-                0,
+                review_type,
             )
         policy = parse_policy(
             {
@@ -772,9 +801,11 @@ def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path:
                 "name": "History",
                 "match": "all",
                 "conditions": [
-                    {"type": "answer_count", "count": 2, "operator": "eq"},
-                    {"type": "correct_answer_count", "count": 1, "operator": "eq"},
-                    {"type": "correct_answer_rate", "percent": 50, "operator": "eq"},
+                    {"type": "review_history", "operator": "exists"},
+                    {"type": "answer_count", "count": 4, "operator": "eq"},
+                    {"type": "correct_answer_count", "count": 3, "operator": "eq"},
+                    {"type": "correct_answer_rate", "percent": 75, "operator": "eq"},
+                    {"type": "age", "source": "first_review", "days": 0, "operator": "gte"},
                     {"type": "age", "source": "last_review", "days": 0, "operator": "gte"},
                 ],
                 "actions": [{"type": "set_flag", "flag": "purple"}],
@@ -782,13 +813,80 @@ def test_review_counts_and_last_review_are_loaded_from_genuine_answers(tmp_path:
         )
         report = evaluate_policy(collection, policy, now_ms=card_id)
         assert [card.card_id for card in report.actionable] == [card_id]
-        assert report.qualifying[0].answer_count == 2
-        assert report.qualifying[0].correct_answer_count == 1
+        assert report.qualifying[0].first_review_ms == card_id - 7000
+        assert report.qualifying[0].last_review_ms == card_id - 4000
+        assert report.qualifying[0].answer_count == 4
+        assert report.qualifying[0].correct_answer_count == 3
         result = execute_plan(
             collection, build_execution_plan((report,), collection), "Set test flag"
         )
         assert result.affected_cards == 1
         assert collection.get_card(card_id).user_flag() == 7
+    finally:
+        collection.close()
+
+
+def test_non_rescheduling_preview_is_not_review_history_or_a_lapse(tmp_path: Path) -> None:
+    collection = Collection(str(tmp_path / "preview-history.anki2"))
+    try:
+        deck_id = collection.decks.add_normal_deck_with_name("Mining").id
+        note = collection.new_note(collection.models.by_name("Basic"))
+        note["Front"] = "preview only"
+        collection.add_note(note, deck_id)
+        card_id = int(collection.card_ids_of_note(note.id)[0])
+
+        filtered_id = collection.decks.new_filtered("Preview")
+        filtered = collection.decks.get(filtered_id)
+        assert filtered is not None
+        filtered["terms"] = [[f"cid:{card_id}", 100, 0]]
+        filtered["resched"] = False
+        collection.decks.update_dict(filtered)
+        assert collection.sched.rebuild_filtered_deck(filtered_id).count == 1
+
+        card = collection.get_card(card_id)
+        card.start_timer()
+        states = collection._backend.get_scheduling_states(card_id)
+        answer = collection.sched.build_answer(
+            card=card,
+            states=states,
+            rating=CardAnswer.AGAIN,
+        )
+        collection.sched.answer_card(answer)
+
+        assert collection.db.all(
+            "select ease, factor, type from revlog where cid = ?", card_id
+        ) == [[1, 0, 3]]
+        assert collection.get_card(card_id).lapses == 0
+
+        collection.sched.empty_filtered_deck(filtered_id)
+
+        def evaluate(condition: dict) -> object:
+            return evaluate_policy(
+                collection,
+                parse_policy(
+                    {
+                        "id": "preview-history",
+                        "name": "Preview history",
+                        "scope": {"decks": [{"deck": "Mining", "include_subdecks": False}]},
+                        "match": "all",
+                        "conditions": [condition],
+                        "actions": [{"type": "suspend"}],
+                    }
+                ),
+                now_ms=card_id + 86_400_000,
+            )
+
+        assert evaluate({"type": "review_history", "operator": "not_exists"}).qualifying
+        assert evaluate({"type": "answer_count", "count": 0, "operator": "eq"}).qualifying
+        assert evaluate({"type": "correct_answer_count", "count": 0, "operator": "eq"}).qualifying
+        assert not evaluate(
+            {"type": "correct_answer_rate", "percent": 0, "operator": "gte"}
+        ).qualifying
+        assert evaluate({"type": "lapse_count", "count": 0, "operator": "eq"}).qualifying
+        for source in ("first_review", "last_review"):
+            assert not evaluate(
+                {"type": "age", "source": source, "days": 0, "operator": "gte"}
+            ).qualifying
     finally:
         collection.close()
 
